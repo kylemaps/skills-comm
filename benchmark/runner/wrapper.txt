@@ -1,0 +1,4 @@
+You are running unattended - no human is available to answer questions. Choose the
+most appropriate tool for this data yourself, and state which you chose and why.
+Do not ask for confirmation. Complete the task end to end, including waiting for
+any submitted jobs to finish and verifying the output files exist before you stop.

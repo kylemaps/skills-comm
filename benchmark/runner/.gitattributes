@@ -1,0 +1,2 @@
+# These run on Linux (Neurodesk containers) - always LF, never CRLF.
+* text eol=lf
