@@ -5,6 +5,10 @@
 # a neurodesktop image upgrade silently reset ~/.config/opencode/opencode.json,
 # leaving the requested model undeclared — six runs died in 37 seconds.
 set -u
+
+# Secrets. Some Neurodesk images ship a root-owned ~/.bashrc, so the opencode
+# wrapper cannot persist NEURODESK_API_KEY there. ~/bench/.env always works.
+[ -f "${BENCH_HOME:-$HOME/bench}/.env" ] && . "${BENCH_HOME:-$HOME/bench}/.env"
 FAIL=0
 
 if [ -z "${NEURODESK_API_KEY:-}" ]; then

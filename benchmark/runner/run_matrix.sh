@@ -13,6 +13,10 @@
 # arms cannot run concurrently without contaminating each other.
 set -u
 
+# Secrets. Some Neurodesk images ship a root-owned ~/.bashrc, so the opencode
+# wrapper cannot persist NEURODESK_API_KEY there. ~/bench/.env always works.
+[ -f "${BENCH_HOME:-$HOME/bench}/.env" ] && . "${BENCH_HOME:-$HOME/bench}/.env"
+
 if [ "$#" -lt 3 ] || [ "$1" = "--help" ]; then
   echo "usage: run_matrix.sh TASK REPEATS MODEL [MODEL...]"
   echo "example: run_matrix.sh structural-brain-extraction-7t 3 neurodesk/minimax-m2"

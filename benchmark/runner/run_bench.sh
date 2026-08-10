@@ -13,6 +13,10 @@
 #   - the ONLY difference between arms is whether skills are symlinked
 set -u
 
+# Secrets. Some Neurodesk images ship a root-owned ~/.bashrc, so the opencode
+# wrapper cannot persist NEURODESK_API_KEY there. ~/bench/.env always works.
+[ -f "${BENCH_HOME:-$HOME/bench}/.env" ] && . "${BENCH_HOME:-$HOME/bench}/.env"
+
 TASK="$1"; MODEL="$2"; COND="$3"; REP="$4"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

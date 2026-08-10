@@ -36,7 +36,12 @@ done
 if [ -n "${NEURODESK_API_KEY:-}" ]; then
   echo "  api key:  set"
 else
-  echo "  api key:  NOT SET  ->  run 'opencode' once (enter key, pick model, exit), then 'source ~/.bashrc'"
+  echo "  api key:  NOT SET"
+  echo "            run 'opencode' once (enter key, pick a model, exit), then persist it:"
+  echo "              export NEURODESK_API_KEY=\"<your key>\""
+  echo "              printf 'export NEURODESK_API_KEY=%q\n' \"\$NEURODESK_API_KEY\" > ~/bench/.env"
+  echo "            (~/.bashrc is root-owned on some images, so the wrapper cannot save it there;"
+  echo "             every runner script sources ~/bench/.env automatically)"
 fi
 
 echo
