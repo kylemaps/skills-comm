@@ -71,6 +71,7 @@ Three invariants make the arms comparable, and each was learned the hard way:
 | `rm -rf` leaves a run dir behind | git-annex marks its objects read-only | `chmod -R u+w` before `rm -rf`, then assert |
 | Whole matrix fails in seconds | an image upgrade reset `opencode.json`, so the requested model no longer resolves | [`preflight.sh`](preflight.sh) |
 | Arms contaminate each other | skills live in a container-global path | matrix runs arms sequentially |
+| Agent gives up after one step, `exit=0`, no output | opencode >=1.18 gates tool calls non-interactively and auto-rejects paths outside the working dir | `--auto` on the run call |
 
 ## Notes
 

@@ -55,10 +55,18 @@ printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "$(date -u +%FT%TZ)" > "$RUN/run.json"
 
+# Keep tool scratch inside the run dir so it is cleaned with everything else.
+export TMPDIR="$RUN/tmp"; mkdir -p "$TMPDIR"
+
 echo "[run] $TASK | $MODEL | $COND | r$REP"
 # < /dev/null is REQUIRED: backgrounded runs inherit a terminal stdin that goes
 # bad once disowned, and opencode dies with "EBADF: bad file descriptor".
-timeout "$TIMEOUT" /usr/bin/opencode run --dir "$RUN" -m "$MODEL" "$(cat "$RUN/prompt.txt")" \
+# --auto: opencode >=1.18 gates tool calls non-interactively and AUTO-REJECTS anything
+#   outside the working dir, which looks exactly like a model failure (the agent tries
+#   /tmp, is refused, and gives up). A benchmark agent must be able to run tools.
+#   Only safe because each run is a disposable sandbox -- do NOT carry this to shared
+#   infrastructure without an isolated runner pool.
+timeout "$TIMEOUT" /usr/bin/opencode run --dir "$RUN" -m "$MODEL" --auto "$(cat "$RUN/prompt.txt")" \
   < /dev/null > "$RUN/transcript.txt" 2>&1
 RC=$?
 echo "  exit=$RC out=$(ls "$RUN/submissions/$TASK/output.nii.gz" 2>/dev/null || echo MISSING)"
