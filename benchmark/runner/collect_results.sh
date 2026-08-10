@@ -23,7 +23,7 @@ done
 
 echo "=== RESULTS: $TASK ==="
 printf "%-22s %-11s %-4s %-19s %-7s %-7s %-22s %-6s %s\n" \
-  MODEL ARM REP VERDICT SCORE DICE TOOL SKILL "FALSE-MISSING"
+  MODEL ARM REP VERDICT SCORE DICE TOOL SKILL-LOADS "FALSE-MISS"
 
 for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   [ -d "$d" ] || continue
@@ -33,10 +33,17 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   REP=$(echo "$b"   | awk -F'__' '{print $4}')
   T="$d/transcript.txt"
 
-  TOOL=$(grep -ioE "synthstrip|hd-bet|hdbet|3dSkullStrip|antsBrainExtraction|fast|freesurfer|recon-all|bet " "$T" 2>/dev/null \
-          | tr 'A-Z' 'a-z' | sort -u | paste -sd, - | cut -c1-22)
-  SKILL=$(grep -qiE "SKILL\.md|brain-extraction/SKILL|using the .*skill" "$T" 2>/dev/null && echo yes || echo no)
-  FALSE=$(grep -icE "not (found|available|installed)|no such module|could not find .*module" "$T" 2>/dev/null)
+  # What was actually LOADED, not merely mentioned. Grepping tool names anywhere in
+  # the transcript counted a model that only *discussed* BET as having run it.
+  TOOL=$(grep -oE "module load +[A-Za-z0-9_.-]+/[A-Za-z0-9_.]+" "$T" 2>/dev/null \
+          | sed 's/module load *//' | sort -u | paste -sd, - | cut -c1-30)
+  [ -z "$TOOL" ] && TOOL=$(grep -oE "(mri_synthstrip|hd-bet|3dSkullStrip|antsBrainExtraction)" "$T" 2>/dev/null \
+          | sort -u | paste -sd, - | cut -c1-30)
+  [ -z "$TOOL" ] && TOOL="(none)"
+  # opencode marks a loaded skill in the transcript as:  -> Skill "brain-extraction"
+  SKILL=$(grep -c 'Skill "' "$T" 2>/dev/null)
+  # only count a tool the agent declared missing, not every "not found" in tool output
+  FALSE=$(grep -icE "(module|tool|command)[^.]{0,25}not (found|available|installed)" "$T" 2>/dev/null)
 
   if [ -f "$d/envelope.json" ]; then
     python - "$d/envelope.json" "$MODEL" "$ARM" "$REP" "$TOOL" "$SKILL" "$FALSE" <<'PY'
