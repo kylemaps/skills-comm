@@ -43,6 +43,7 @@ counted. Only broken *assignment* is excluded.
 """
 import argparse
 import csv
+import datetime as dt
 import glob
 import json
 import math
@@ -122,6 +123,16 @@ def fisher_exact(a, b, c, d):
     # error that would otherwise drop a table exactly as likely as the observed.
     return min(1.0, sum(prob(x) for x in range(lo, hi + 1)
                         if prob(x) <= observed * (1 + 1e-9)))
+
+
+def duration_s(start, end):
+    """Wall-clock seconds for a run, or None if it was killed before finalizing."""
+    try:
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        return int((dt.datetime.strptime(end, fmt)
+                    - dt.datetime.strptime(start, fmt)).total_seconds())
+    except Exception:
+        return None
 
 
 def mean_sd(xs):
@@ -217,6 +228,7 @@ def load_run(run_dir, task):
         except Exception:
             pass
     r["passed"] = r["score"] > 0 and str(r["verdict"]).lower() not in FAIL_VERDICTS
+    r["duration_s"] = duration_s(r["start"], r["end"])
 
     # --- validity (see module docstring) ---
     installed = r["skills_installed"] or ""
@@ -281,14 +293,15 @@ def report(runs, task):
 
     # -- per run ------------------------------------------------------------
     hr("RUNS")
-    print("  %-16s %-10s %-4s %-17s %7s %6s  %-22s %-3s %s"
-          % ("MODEL", "ARM", "REP", "VERDICT", "SCORE", "DICE", "METHOD", "OPN", "NF"))
+    print("  %-16s %-10s %-4s %-17s %7s %6s %6s  %-22s %-3s %s"
+          % ("MODEL", "ARM", "REP", "VERDICT", "SCORE", "DICE", "MIN", "METHOD", "OPN", "NF"))
     for r in sorted(runs, key=lambda r: (r["model"], r["arm"], int(re.sub(r"\D", "", r["rep"]) or 0))):
         flag = "" if r["valid"] else "  <-- EXCLUDED"
-        print("  %-16s %-10s %-4s %-17s %7s %6s  %-22s %-3s %s%s" % (
+        print("  %-16s %-10s %-4s %-17s %7s %6s %6s  %-22s %-3s %s%s" % (
             r["model"], r["arm"], r["rep"], r["verdict"],
             "%.2f" % r["score"],
             ("%.3f" % r["dice"]) if isinstance(r["dice"], (int, float)) else "-",
+            ("%.1f" % (r["duration_s"] / 60.0)) if r["duration_s"] is not None else "-",
             ",".join(r["methods"])[:22] or "(none)",
             r["skill_loads"], r["not_found_claims"], flag))
 
@@ -298,22 +311,41 @@ def report(runs, task):
         cells[(r["model"], r["arm"])].append(r)
 
     hr("CELLS (valid runs only)")
-    print("  %-16s %-10s %3s %8s %14s %8s %7s %6s"
-          % ("MODEL", "ARM", "N", "PASS", "MEAN+-SD", "MEDIAN", "UPTAKE", "NOTFND"))
+    print("  %-16s %-10s %3s %8s %14s %9s %8s %7s %6s"
+          % ("MODEL", "ARM", "N", "PASS", "MEAN+-SD", "MED-SCORE", "MED-MIN",
+             "UPTAKE", "NOTFND"))
     for (model, arm), rs in sorted(cells.items()):
         scores = [r["score"] for r in rs]
         m, sd = mean_sd(scores)
         k = sum(1 for r in rs if r["passed"])
         up = sum(1 for r in rs if r["uptake"])
         nf = sum(r["not_found_claims"] for r in rs)
+        mins = [r["duration_s"] / 60.0 for r in rs if r["duration_s"] is not None]
         note = "  bimodal" if bimodal(scores) else ""
-        print("  %-16s %-10s %3d %8s %14s %8s %7s %6d%s" % (
+        print("  %-16s %-10s %3d %8s %14s %9s %8s %7s %6d%s" % (
             model, arm, len(rs), "%d/%d" % (k, len(rs)),
             "%.1f+-%.1f" % (m, sd), "%.1f" % median(scores),
+            ("%.1f" % median(mins)) if mins else "-",
             "%d/%d" % (up, len(rs)), nf, note))
     if any(bimodal([r["score"] for r in rs]) for rs in cells.values()):
         print("\n  'bimodal' = every run scored near 0 or near 100, nothing between.")
         print("  For those cells the mean describes no run that happened. Quote PASS.")
+
+    # Duration separates "did the work badly" from "never did the work". A run that
+    # finishes in a fraction of the time a passing run takes did not fetch the data,
+    # submit a job and wait for it -- whatever it wrote is not a real attempt.
+    pmin = [r["duration_s"] / 60.0 for r in valid if r["passed"] and r["duration_s"]]
+    fmin = [r["duration_s"] / 60.0 for r in valid if not r["passed"] and r["duration_s"]]
+    if pmin:
+        print("\n  median runtime: %.1f min passing, %s failing (fastest pass %.1f min)"
+              % (median(pmin), ("%.1f min" % median(fmin)) if fmin else "n/a", min(pmin)))
+        suspect = [r for r in valid if r["duration_s"] and r["passed"]
+                   and r["duration_s"] / 60.0 < 0.25 * median(pmin)]
+        if suspect:
+            print("  !! %d passing run(s) finished in under a quarter of the median."
+                  % len(suspect))
+            print("     Check those transcripts before quoting them: %s"
+                  % ", ".join(os.path.basename(r["dir"]) for r in suspect[:4]))
 
     # -- skill effect -------------------------------------------------------
     hr("SKILL EFFECT (intent-to-treat, pass rate)")
@@ -386,6 +418,8 @@ def report(runs, task):
                 "sd": round(mean_sd([r["score"] for r in rs])[1], 2),
                 "median": round(median([r["score"] for r in rs]), 2),
                 "bimodal": bimodal([r["score"] for r in rs]),
+                "median_minutes": round(median([r["duration_s"] / 60.0 for r in rs
+                                                if r["duration_s"] is not None]), 1),
                 "uptake": sum(1 for r in rs if r["uptake"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
@@ -399,7 +433,7 @@ CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "dataset_pin", "not_found_claims", "exit_code",
             "output_present", "image_version", "opencode_version", "skills_sha",
-            "tasks_sha", "start", "end"]
+            "tasks_sha", "start", "end", "duration_s"]
 
 
 def main():
