@@ -9,6 +9,10 @@ agent chose. This reads them back out of the transcript once the run is over:
   tools_loaded   every `module load <tool>/<version>` the agent issued. Matters more
                  than it looks -- we have already seen one model load fsl/6.0.7.14
                  while another loaded fsl/6.0.7.22 in the same experiment.
+  methods_used   which brain-extraction method it actually RAN. Not the same thing as
+                 the module it loaded: an agent can `module load fsl` and then call
+                 `bet`, and one model loaded hd-bet and still fell back to BET.
+  not_found_claims  times the agent claimed a tool/module was unavailable
   dataset_pin    dataset version the agent pinned itself (e.g. `git checkout 1.1.0`)
   skill_loads    count of opencode's `Skill "<name>"` markers, i.e. did the skill
                  actually load (the ground truth for the with/without arm)
@@ -46,6 +50,17 @@ if os.path.exists(tr):
 
 rec["tools_loaded"] = sorted(set(
     re.findall(r"module load\s+([A-Za-z0-9_.\-]+/[A-Za-z0-9_.]+)", txt)))
+
+# Method detection lives in summarize.py so the two never drift apart. Guarded
+# because this runs in the hot path of every run: a missing sibling must not cost
+# us the rest of the provenance record.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from summarize import detect_methods, NOT_FOUND_RE
+    rec["methods_used"] = detect_methods(txt)
+    rec["not_found_claims"] = len(NOT_FOUND_RE.findall(txt))
+except Exception:
+    pass
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
 skills = re.findall(r'Skill "([^"]+)"', txt)
