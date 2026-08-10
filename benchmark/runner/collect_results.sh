@@ -33,16 +33,18 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   REP=$(echo "$b"   | awk -F'__' '{print $4}')
   T="$d/transcript.txt"
 
-  # What was actually LOADED, not merely mentioned. Grepping tool names anywhere in
-  # the transcript counted a model that only *discussed* BET as having run it.
-  TOOL=$(grep -oE "module load +[A-Za-z0-9_.-]+/[A-Za-z0-9_.]+" "$T" 2>/dev/null \
-          | sed 's/module load *//' | sort -u | paste -sd, - | cut -c1-30)
-  [ -z "$TOOL" ] && TOOL=$(grep -oE "(mri_synthstrip|hd-bet|3dSkullStrip|antsBrainExtraction)" "$T" 2>/dev/null \
-          | sort -u | paste -sd, - | cut -c1-30)
+  # Prefer the recorded provenance (finalize_run.py writes it); fall back to grep
+  # for runs made before that existed.
+  TOOL=$(python -c "
+import json,sys
+try:
+    d=json.load(open('$d/run.json'))
+    t=d.get('tools_loaded') or []
+    print(','.join(t)[:30] if t else '')
+except Exception: print('')" 2>/dev/null)
+  [ -z "$TOOL" ] && TOOL=$(grep -oE "module load +[A-Za-z0-9_.-]+/[A-Za-z0-9_.]+" "$T" 2>/dev/null           | sed 's/module load *//' | sort -u | paste -sd, - | cut -c1-30)
   [ -z "$TOOL" ] && TOOL="(none)"
-  # opencode marks a loaded skill in the transcript as:  -> Skill "brain-extraction"
   SKILL=$(grep -c 'Skill "' "$T" 2>/dev/null)
-  # only count a tool the agent declared missing, not every "not found" in tool output
   FALSE=$(grep -icE "(module|tool|command)[^.]{0,25}not (found|available|installed)" "$T" 2>/dev/null)
 
   if [ -f "$d/envelope.json" ]; then

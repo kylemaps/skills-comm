@@ -69,4 +69,7 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 timeout "$TIMEOUT" /usr/bin/opencode run --dir "$RUN" -m "$MODEL" --auto "$(cat "$RUN/prompt.txt")" \
   < /dev/null > "$RUN/transcript.txt" 2>&1
 RC=$?
+# run.json is written before the agent starts, so it cannot know which tools the
+# agent picked. Read them back out of the transcript now.
+python "$HERE/finalize_run.py" "$RUN" "$RC" 2>/dev/null
 echo "  exit=$RC out=$(ls "$RUN/submissions/$TASK/output.nii.gz" 2>/dev/null || echo MISSING)"
