@@ -5,7 +5,8 @@
 
 Reads every `<runs_dir>/<task>__*/run.json` (+ `envelope.json` if the run has been
 graded) and reports: provenance homogeneity, run validity, per-cell outcomes, the
-skill effect, and tool choice. Writes `summary.json` and `runs.csv` alongside.
+skill effect, tool choice, and the agent's own decision record. Writes
+`summary_<task>.json` and `runs_<task>.csv` alongside.
 
 Pure stdlib -- it must run on the Neurodesk image without installing anything.
 
@@ -205,6 +206,96 @@ def detect_methods(text):
                    if re.search(pat, text, re.I)})
 
 
+def normalize_tool(s):
+    """Map an ASTRA option key/label onto our method vocabulary.
+
+    Order matters: `hd-bet` and `deepbet` both contain "bet", and ASTRA keys look
+    like `fsl_bet_6_0_7_22` / `hdbet_2_0_1` / `synthstrip_7_4_1`, so the bare `bet`
+    test has to come last.
+    """
+    s = (s or "").lower()
+    if "synthstrip" in s:
+        return "synthstrip"
+    if re.search(r"hd[-_ ]?bet", s):
+        return "hd-bet"
+    if "deepbet" in s:
+        return "deepbet"
+    if "ants" in s:
+        return "ants"
+    if "3dskullstrip" in s or "afni" in s:
+        return "afni"
+    if "robex" in s:
+        return "robex"
+    if "recon-all" in s or "watershed" in s or "freesurfer" in s:
+        return "freesurfer"
+    if "bet" in s:
+        return "bet"
+    return None
+
+
+def parse_astra(run_dir):
+    """Read the agent's own decision record, if it wrote one.
+
+    This is a better measurement than grepping the transcript. The transcript tells
+    us which binaries were *invoked* -- a run that tried BET and then SynthStrip
+    counts in both, which is why the tool-choice rows sum past n. The ASTRA record
+    says which tool the agent *committed to*, what it considered and rejected, and
+    why. Decided and invoked are different questions and we want both.
+
+    Returns {} when there is no record, so runs predating ASTRA just report nothing.
+    """
+    p = os.path.join(run_dir, "astra.yaml")
+    if not os.path.exists(p):
+        return {}
+    try:
+        import yaml                     # ships with datalad; not worth vendoring
+    except ImportError:
+        return {"astra_error": "PyYAML not installed"}
+    try:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            doc = yaml.safe_load(fh) or {}
+    except Exception as exc:
+        return {"astra_error": "unparseable: %s" % type(exc).__name__}
+    if not isinstance(doc, dict):
+        return {"astra_error": "not a mapping"}
+
+    decided, considered = [], set()
+    for key, dec in (doc.get("decisions") or {}).items():
+        if not isinstance(dec, dict):
+            continue
+        opts = dec.get("options") or {}
+        for okey, opt in opts.items():
+            label = (opt or {}).get("label", "") if isinstance(opt, dict) else ""
+            t = normalize_tool("%s %s" % (okey, label))
+            if t:
+                considered.add(t)
+        default = dec.get("default")
+        if default is not None:
+            odef = opts.get(default) or {}
+            label = odef.get("label", "") if isinstance(odef, dict) else ""
+            t = normalize_tool("%s %s" % (default, label))
+            if t:
+                decided.append(t)
+
+    # Citations are the clearest signal that the agent grounded its choice in
+    # literature rather than asserting it.
+    dois = set()
+    for ins in (doc.get("prior_insights") or {}).values():
+        if not isinstance(ins, dict):
+            continue
+        for ev in ins.get("evidence") or []:
+            if isinstance(ev, dict) and ev.get("doi"):
+                dois.add(str(ev["doi"]))
+
+    return {
+        "decided_tools": sorted(set(decided)),
+        "considered_tools": sorted(considered),
+        "astra_citations": len(dois),
+        "astra_findings": len(doc.get("findings") or {}),
+        "astra_error": "",
+    }
+
+
 def load_run(run_dir, task):
     """One run -> a flat record. Never raises; a broken run becomes a failed run."""
     rec = {}
@@ -270,6 +361,13 @@ def load_run(run_dir, task):
             pass
     r["passed"] = r["score"] > 0 and str(r["verdict"]).lower() not in FAIL_VERDICTS
     r["duration_s"] = duration_s(r["start"], r["end"])
+
+    a = parse_astra(run_dir)
+    r["decided_tools"] = a.get("decided_tools") or []
+    r["considered_tools"] = a.get("considered_tools") or []
+    r["astra_citations"] = a.get("astra_citations", 0)
+    r["astra_findings"] = a.get("astra_findings", 0)
+    r["astra_error"] = a.get("astra_error", "no record")
 
     # --- validity (see module docstring) ---
     installed = r["skills_installed"] or ""
@@ -454,6 +552,45 @@ def report(runs, task):
         print("\n  Counts runs, not invocations; a run that tried two tools counts in both.")
         print("  Detected from command-form invocations in the transcript.")
 
+    # -- decided tool (ASTRA) ----------------------------------------------
+    with_astra = [r for r in valid if r["decided_tools"]]
+    if with_astra:
+        hr("DECIDED TOOL (from the agent's own ASTRA record)")
+        dnames = sorted({t for r in with_astra for t in r["decided_tools"]})
+        print("  %-16s %-10s %4s %s" % ("MODEL", "ARM", "REC",
+                                        "  ".join("%-10s" % n for n in dnames)))
+        for (model, arm), rs in sorted(cells.items()):
+            have = [r for r in rs if r["decided_tools"]]
+            c = Counter(t for r in have for t in r["decided_tools"])
+            print("  %-16s %-10s %4s %s" % (
+                model, arm, "%d/%d" % (len(have), len(rs)),
+                "  ".join("%-10s" % (c.get(n, 0) or "-") for n in dnames)))
+        print("\n  'Decided' is the option the agent committed to in its decision")
+        print("  record; the table above counts every tool it invoked. A run that")
+        print("  tried BET and then SynthStrip appears twice there but once here.")
+
+        # Committing to a tool and then running something else is a real failure
+        # mode, and it is invisible to either measurement on its own.
+        drift = [r for r in with_astra
+                 if r["methods"] and not set(r["decided_tools"]) & set(r["methods"])]
+        if drift:
+            print("\n  !! %d run(s) never invoked the tool they decided on:" % len(drift))
+            for r in drift[:6]:
+                print("     %-14s %-10s r%-3s decided %-12s ran %s" % (
+                    r["model"], r["arm"], r["rep"],
+                    ",".join(r["decided_tools"]), ",".join(r["methods"])))
+
+        cited = [r for r in with_astra if r["astra_citations"]]
+        if cited:
+            print("\n  %d/%d records cite literature for the choice (median %d DOIs)."
+                  % (len(cited), len(with_astra),
+                     median([r["astra_citations"] for r in cited])))
+    else:
+        missing = [r for r in valid if r["astra_error"] not in ("", "no record")]
+        if missing:
+            print("\n  (ASTRA records present but unread: %s)"
+                  % Counter(r["astra_error"] for r in missing).most_common(1)[0][0])
+
     return {
         "task": task,
         "n_runs": len(runs),
@@ -475,6 +612,11 @@ def report(runs, task):
                 "uptake": sum(1 for r in rs if r["uptake"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
+                "decided": dict(Counter(t for r in rs for t in r["decided_tools"])),
+                "astra_records": sum(1 for r in rs if r["decided_tools"]),
+                "decided_not_run": sum(
+                    1 for r in rs if r["decided_tools"] and r["methods"]
+                    and not set(r["decided_tools"]) & set(r["methods"])),
             } for (model, arm), rs in sorted(cells.items())
         },
         "skill_effect": effects,
@@ -484,6 +626,7 @@ def report(runs, task):
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "dataset_pin", "not_found_claims", "exit_code",
+            "decided_tools", "considered_tools", "astra_citations", "astra_findings",
             "output_present", "image_version", "opencode_version", "skills_sha",
             "tasks_sha", "start", "end", "duration_s"]
 
@@ -504,10 +647,14 @@ def main():
     runs = [load_run(d, a.task) for d in dirs]
     summary = report(runs, a.task)
 
+    # Task-scoped filenames. These used to be plain summary.json / runs.csv, so
+    # collecting a second task silently overwrote the first task's results -- the
+    # only copy of a 100-run sweep survived purely because it had been tarred up
+    # by hand an hour earlier.
     out = a.out_dir or a.runs_dir
     os.makedirs(out, exist_ok=True)
-    sp = os.path.join(out, "summary.json")
-    cp = os.path.join(out, "runs.csv")
+    sp = os.path.join(out, "summary_%s.json" % a.task)
+    cp = os.path.join(out, "runs_%s.csv" % a.task)
     with open(sp, "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2)
         fh.write("\n")
@@ -516,7 +663,8 @@ def main():
         w.writeheader()
         for r in runs:
             row = dict(r)
-            for k in ("methods", "tools_loaded", "dataset_pin"):
+            for k in ("methods", "tools_loaded", "dataset_pin",
+                      "decided_tools", "considered_tools"):
                 row[k] = ";".join(row.get(k) or [])
             w.writerow(row)
 
