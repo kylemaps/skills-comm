@@ -47,10 +47,18 @@ python "$HERE/mkprompt.py" "$TASKS" "$TASK" > "$RUN/prompt.txt"
 if [ ! -s "$RUN/prompt.txt" ]; then echo "FATAL: empty prompt for $TASK" >&2; exit 1; fi
 cat "$HERE/wrapper.txt" >> "$RUN/prompt.txt"
 
-printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","tasks_sha":"%s","skills_installed":"%s","start":"%s"}\n' \
+# skills_sha only means anything when SKILLS_SRC is inside our git checkout. When we
+# test a skill delivered some other way -- an unzipped drop from a collaborator, say --
+# the commit is unchanged while the skill content is completely different, so the two
+# experiments would be indistinguishable in the record. Hash the skill files as well.
+SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null \
+  | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+
+printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","tasks_sha":"%s","skills_installed":"%s","start":"%s"}\n' \
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
   "$(/usr/bin/opencode --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
+  "$SKILLSRC" "${SKILLS_HASH:-none}" \
   "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "$(date -u +%FT%TZ)" > "$RUN/run.json"
