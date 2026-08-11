@@ -34,12 +34,15 @@ Two decisions in here are methodological, not cosmetic.
                                           contamination. EXCLUDE.
    arm label disagrees with
    skills_installed                    -> the harness misassigned the cell. EXCLUDE.
+   gateway died and no output          -> the agent never got to attempt the task.
+                                          EXCLUDE (see INFRA_ERROR_RES).
    env+skill + skill never opened      -> non-uptake. KEEP.
 
-   Excluding on the second case only would be per-protocol analysis. See above.
+   Excluding on the last case would be per-protocol analysis. See above.
 
-A run that produced no output is a FAILED run, not a missing one: it scores 0 and is
-counted. Only broken *assignment* is excluded.
+A run that produced no output because the AGENT failed is a FAILED run, not a missing
+one: it scores 0 and is counted. Only our own failures are excluded, and they are
+always printed rather than quietly dropped.
 """
 import argparse
 import csv
@@ -79,6 +82,26 @@ METHOD_PATTERNS = [
 
 NOT_FOUND_RE = re.compile(
     r"(module|tool|command)[^.]{0,25}not (found|available|installed)", re.I)
+
+# Signatures of the HARNESS failing, not the agent. A run killed by the gateway never
+# got a chance to attempt the task, so scoring it 0 would blame the model for our
+# infrastructure -- the same mistake as the permission-gating bug, where blocked tool
+# calls read as "this model can't do 7T".
+#
+# We have actually seen `Model '' was not found`: the agent had already created its
+# directories and written both scripts when the request went out with an empty model
+# name. Nothing to do with the model's ability.
+#
+# Deliberately narrow. Anything ambiguous should stay in and be scored, because
+# discarding real failures inflates the pass rate.
+INFRA_ERROR_RES = [
+    (re.compile(r"Model '' was not found"), "gateway returned empty model name"),
+    (re.compile(r"\b429\b|rate.?limit", re.I), "gateway rate limit"),
+    (re.compile(r"\b5\d\d\b[^\n]{0,40}(Bad Gateway|Service Unavailable|Gateway Time)",
+                re.I), "gateway 5xx"),
+    (re.compile(r"(ECONNREFUSED|ENOTFOUND|EBADF: bad file descriptor)"),
+     "connection/descriptor failure"),
+]
 
 # skills_hash is here on purpose: a collaborator's skill drop leaves skills_sha
 # unchanged while the skill content is entirely different, so the commit alone would
@@ -209,16 +232,23 @@ def load_run(run_dir, task):
     # runs made before finalize_run.py learned to record it (i.e. the current sweep).
     r["methods"] = rec.get("methods_used") or []
     r["not_found_claims"] = rec.get("not_found_claims")
-    if not r["methods"] or r["not_found_claims"] is None:
-        tr = os.path.join(run_dir, "transcript.txt")
-        text = ""
-        if os.path.exists(tr):
-            with open(tr, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        if not r["methods"]:
-            r["methods"] = detect_methods(text)
-        if r["not_found_claims"] is None:
-            r["not_found_claims"] = len(NOT_FOUND_RE.findall(text))
+    tr = os.path.join(run_dir, "transcript.txt")
+    text = ""
+    if os.path.exists(tr):
+        with open(tr, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    if not r["methods"]:
+        r["methods"] = detect_methods(text)
+    if r["not_found_claims"] is None:
+        r["not_found_claims"] = len(NOT_FOUND_RE.findall(text))
+
+    # Only treat a harness error as fatal when the run produced nothing. If the agent
+    # recovered and still delivered a mask, the run is real and gets scored.
+    r["infra_error"] = ""
+    for rx, label in INFRA_ERROR_RES:
+        if rx.search(text):
+            r["infra_error"] = label
+            break
 
     # grading
     r["verdict"], r["score"], r["dice"] = "NO-OUTPUT", 0.0, None
@@ -248,6 +278,8 @@ def load_run(run_dir, task):
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
     elif r["arm"] == "env+skill" and not has_skill_installed:
         r["exclude_reason"] = "misassigned: skill absent in env+skill run"
+    elif r["infra_error"] and not r["output_present"]:
+        r["exclude_reason"] = "harness failure: %s" % r["infra_error"]
     r["valid"] = not r["exclude_reason"]
     return r
 
@@ -287,8 +319,17 @@ def report(runs, task):
     for reason, n in Counter(r["exclude_reason"] for r in excluded).most_common():
         print("      %-58s %d" % (reason, n))
     if excluded:
-        print("\n  Excluded runs are ASSIGNMENT failures (the harness put the wrong")
-        print("  skills in place), not agent failures. Re-run those cells.")
+        print("\n  Excluded runs are OUR failures -- wrong skills in place, or the")
+        print("  gateway dying mid-run -- not agent failures. Scoring them 0 would")
+        print("  blame the model for our infrastructure. Re-run those cells.")
+    infra = [r for r in runs if r["infra_error"]]
+    if infra:
+        by_cell = Counter("%s/%s" % (r["model"], r["arm"]) for r in infra)
+        print("\n  harness errors seen in %d run(s): %s" % (
+            len(infra), ", ".join("%s x%d" % (c, n) for c, n in by_cell.most_common())))
+        recovered = [r for r in infra if r["output_present"]]
+        if recovered:
+            print("  %d of those still produced output and ARE scored." % len(recovered))
     uptake_pool = [r for r in valid if r["arm"] == "env+skill"]
     if uptake_pool:
         u = sum(1 for r in uptake_pool if r["uptake"])
@@ -433,7 +474,7 @@ def report(runs, task):
     }
 
 
-CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "verdict",
+CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "dataset_pin", "not_found_claims", "exit_code",
             "output_present", "image_version", "opencode_version", "skills_sha",
