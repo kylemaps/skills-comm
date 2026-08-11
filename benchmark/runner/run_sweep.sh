@@ -1,7 +1,12 @@
 #!/bin/bash
-# run_sweep.sh TASK REPEATS MODEL [MODEL...]
+# run_sweep.sh TASK[,TASK2,...] REPEATS MODEL [MODEL...]
 #
-# One correct sweep: every model x both arms x N repeats.
+# One correct sweep: every task x every model x both arms x N repeats.
+#
+# Tasks run one at a time, each completing both arms before the next starts. That
+# ordering is deliberate: if the sweep dies overnight you have complete data for the
+# earlier tasks rather than half an experiment for all of them. List them in priority
+# order.
 #
 # The arms run STRICTLY SEQUENTIALLY (all env-only, then all env+skill) because
 # skills live in a container-global path -- two concurrent runs on different arms
@@ -32,7 +37,7 @@
 set -u
 
 if [ "$#" -lt 3 ] || [ "$1" = "--help" ]; then
-  echo "usage: run_sweep.sh TASK REPEATS MODEL [MODEL...]"
+  echo "usage: run_sweep.sh TASK[,TASK2,...] REPEATS MODEL [MODEL...]"
   echo "env: MAXPAR=8  SKIP_MISSING=1"
   exit 1
 fi
@@ -43,7 +48,7 @@ MAXPAR="${MAXPAR:-8}"
 SKIP_MISSING="${SKIP_MISSING:-1}"
 LOCK="$BENCH_HOME/.sweep.lock"
 
-TASK="$1"; shift
+IFS=',' read -r -a TASKS <<< "$1"; shift
 N="$1"; shift
 REQUESTED=("$@")
 
@@ -95,13 +100,26 @@ if [ "${#DROPPED[@]}" -gt 0 ]; then
   echo "!! Continuing with ${#MODELS[@]}: ${MODELS[*]}"
 fi
 
-TOTAL=$(( ${#MODELS[@]} * 2 * N ))
+# A typo'd task id would otherwise waste the whole sweep: every run would fail on an
+# empty prompt, one at a time, for hours. Resolve all of them up front instead.
+TASKS_JSON_PATH="${TASKS_JSON:-$HOME/grader-repo/benchmark/tasks.json}"
+for t in "${TASKS[@]}"; do
+  if ! python "$HERE/mkprompt.py" "$TASKS_JSON_PATH" "$t" 2>/dev/null | grep -q .; then
+    echo "ABORT: task '$t' has no prompt in $TASKS_JSON_PATH"
+    echo "       check the id against: $HOME/grader-repo/benchmark/harness/run_manifest.json"
+    exit 1
+  fi
+  echo "ok   task $t"
+done
+
+TOTAL=$(( ${#TASKS[@]} * ${#MODELS[@]} * 2 * N ))
 START=$(date -u +%FT%TZ)
 
 # The manifest is the answer to "what did last night actually attempt?" -- it
 # survives even if the log is truncated or the sweep is killed mid-flight.
 {
-  printf '{"task":"%s","repeats":%s,"maxpar":%s,"start":"%s",' "$TASK" "$N" "$MAXPAR" "$START"
+  printf '{"tasks":["%s"],' "$(printf '%s' "${TASKS[*]}" | sed 's/ /","/g')"
+  printf '"repeats":%s,"maxpar":%s,"start":"%s",' "$N" "$MAXPAR" "$START"
   printf '"requested":["%s"],' "$(printf '%s' "${REQUESTED[*]}" | sed 's/ /","/g')"
   printf '"models":["%s"],' "$(printf '%s' "${MODELS[*]}" | sed 's/ /","/g')"
   if [ "${#DROPPED[@]}" -gt 0 ]; then
@@ -113,7 +131,7 @@ START=$(date -u +%FT%TZ)
 } > "$BENCH_HOME/sweep_manifest.json"
 
 echo "=== SWEEP START $START — $TOTAL runs, MAXPAR=$MAXPAR ==="
-echo "    task:    $TASK"
+echo "    tasks:   ${TASKS[*]}"
 echo "    models:  ${MODELS[*]}"
 echo "    repeats: $N"
 
@@ -128,31 +146,41 @@ else
   echo "    note: bash ${BASH_VERSION} has no 'wait -n'; throttling in full batches"
 fi
 
-for COND in env-only env+skill; do
-  echo "=== ARM: $COND  ($(date -u +%FT%TZ)) ==="
-  running=0
-  for M in "${MODELS[@]}"; do
-    for r in $(seq 1 "$N"); do
-      "$HERE/run_bench.sh" "$TASK" "$M" "$COND" "$r" &
-      running=$((running + 1))
-      if [ "$running" -ge "$MAXPAR" ]; then
-        if [ "$HAVE_WAIT_N" = 1 ]; then
-          # `|| true` matters: wait -n returns the finished job's exit status, so a
-          # single failed run would otherwise fall through to a full barrier and
-          # quietly serialise the rest of the arm.
-          wait -n 2>/dev/null || true
-          running=$((running - 1))
-        else
-          wait; running=0
+for TASK in "${TASKS[@]}"; do
+  echo "=== TASK: $TASK  ($(date -u +%FT%TZ)) ==="
+  for COND in env-only env+skill; do
+    echo "=== ARM: $COND  ($(date -u +%FT%TZ)) ==="
+    running=0
+    for M in "${MODELS[@]}"; do
+      for r in $(seq 1 "$N"); do
+        "$HERE/run_bench.sh" "$TASK" "$M" "$COND" "$r" &
+        running=$((running + 1))
+        if [ "$running" -ge "$MAXPAR" ]; then
+          if [ "$HAVE_WAIT_N" = 1 ]; then
+            # `|| true` matters: wait -n returns the finished job's exit status, so a
+            # single failed run would otherwise fall through to a full barrier and
+            # quietly serialise the rest of the arm.
+            wait -n 2>/dev/null || true
+            running=$((running - 1))
+          else
+            wait; running=0
+          fi
         fi
-      fi
+      done
     done
+    wait                    # arm barrier: never overlap arms
+    echo "=== ARM $COND COMPLETE $(date -u +%FT%TZ) ==="
   done
-  wait                      # arm barrier: never overlap arms
-  echo "=== ARM $COND COMPLETE $(date -u +%FT%TZ) ==="
+  TDONE=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
+  echo "=== TASK $TASK COMPLETE $(date -u +%FT%TZ) — $TDONE run dirs ==="
 done
 
-DONE=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
+DONE=0
+for TASK in "${TASKS[@]}"; do
+  DONE=$(( DONE + $(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l) ))
+done
 echo "=== SWEEP DONE $(date -u +%FT%TZ) — $DONE/$TOTAL run dirs present ==="
 [ "${#DROPPED[@]}" -gt 0 ] && echo "    (dropped models: ${DROPPED[*]})"
-echo "next: $HERE/collect_results.sh $TASK"
+for TASK in "${TASKS[@]}"; do
+  echo "next: $HERE/collect_results.sh $TASK"
+done
