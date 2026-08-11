@@ -59,7 +59,14 @@ from collections import Counter, defaultdict
 # treated as a pass. Kept as a set rather than a ladder because the vocabulary is
 # owned by the grader pack, not by this script -- unknown verdicts pass through to the
 # report verbatim so a vocabulary change is visible rather than silently mis-scored.
-FAIL_VERDICTS = {"invalid", "unacceptable", "fail", "failed", "error", "no-output"}
+#
+# The grader pack's bands are: indistinguishable / acceptable >= 60, marginal >= 30,
+# invalid = 0. The published rule is "pass = valid and verdict >= acceptable", so
+# MARGINAL IS A FAIL. It is listed here because leaving it out silently counted it as
+# a pass -- no run has landed in that band yet, so nothing published was affected, but
+# our pass rate would have drifted from the grader's the first time one did.
+FAIL_VERDICTS = {"invalid", "unacceptable", "marginal", "fail", "failed", "error",
+                 "no-output"}
 
 SKILL_NAMES = ("brain-extraction", "brain-extraction-qc")
 
