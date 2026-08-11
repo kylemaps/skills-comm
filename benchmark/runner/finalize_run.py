@@ -76,7 +76,17 @@ if rc is not None:
         rec["exit_code"] = int(rc)
     except ValueError:
         pass
-rec["end"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+# The transcript is opencode's stdout redirect, so its last write is the moment the
+# agent stopped. Use that rather than "now": this script is re-run during collection
+# to backfill fields, and stamping now() there measured time-from-start-to-GRADING,
+# not run duration. That produced runs "lasting" 12 hours inside a 4.5 hour sweep,
+# and -- because the arms are graded in order -- a fake 25% speedup for the second
+# arm. Deriving it from the file makes the value idempotent and repairs old runs.
+if os.path.exists(tr):
+    rec["end"] = datetime.fromtimestamp(
+        os.path.getmtime(tr), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+else:
+    rec.setdefault("end", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 with open(rj, "w", encoding="utf-8") as fh:
     json.dump(rec, fh, indent=None)
