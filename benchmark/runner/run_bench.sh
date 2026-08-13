@@ -78,6 +78,22 @@ printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version
 # Keep tool scratch inside the run dir so it is cleaned with everything else.
 export TMPDIR="$RUN/tmp"; mkdir -p "$TMPDIR"
 
+# opencode keeps shared state under XDG_DATA_HOME -- one SQLite database and one
+# local server -- and every concurrent run upserts the same `project` row. At
+# MAXPAR=8 they collide and die in seconds with `Failed query: insert into
+# "project"`; at MAXPAR=4 they instead BLOCK on the lock and hang until the
+# timeout. Lowering concurrency does not fix that, it only makes the hangs rarer
+# and longer.
+#
+# OPENCODE_ISOLATE=1 gives each run its own data directory, so there is nothing to
+# contend over. Costs a little startup time per run. Off by default because it
+# changes where token accounting lives -- finalize_run.py looks for the run-local
+# database first and falls back to the shared one.
+if [ "${OPENCODE_ISOLATE:-0}" = 1 ]; then
+  export XDG_DATA_HOME="$RUN/.xdg-data"
+  mkdir -p "$XDG_DATA_HOME"
+fi
+
 echo "[run] $TASK | $MODEL | $COND | r$REP"
 # < /dev/null is REQUIRED: backgrounded runs inherit a terminal stdin that goes
 # bad once disowned, and opencode dies with "EBADF: bad file descriptor".

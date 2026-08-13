@@ -82,9 +82,16 @@ rec["transcript_lines"] = txt.count("\n")
 # `cost` is 0.0 on this gateway (self-hosted vLLM with no pricing configured), so
 # tokens are the currency, not dollars.
 def _session_row(run_dir):
-    db = os.environ.get(
-        "OPENCODE_DB", os.path.expanduser("~/.local/share/opencode/opencode.db"))
-    if not os.path.exists(db):
+    # With OPENCODE_ISOLATE=1 each run has its own database under the run
+    # directory; otherwise every run shares the one in $HOME. Prefer the local
+    # copy so isolated runs still get token accounting.
+    candidates = [
+        os.environ.get("OPENCODE_DB"),
+        os.path.join(run_dir, ".xdg-data", "opencode", "opencode.db"),
+        os.path.expanduser("~/.local/share/opencode/opencode.db"),
+    ]
+    db = next((c for c in candidates if c and os.path.exists(c)), None)
+    if db is None:
         return None
     try:
         import sqlite3
