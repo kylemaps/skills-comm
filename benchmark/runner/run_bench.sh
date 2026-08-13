@@ -29,12 +29,19 @@ TIMEOUT="${RUN_TIMEOUT:-2700}"
 RUN="$BENCH_HOME/runs/${TASK}__${MODEL//\//-}__${COND}__r${REP}"
 
 # --- condition: skills are a GLOBAL path, so set them explicitly every run ---
+# Any arm named env+skill* installs the skill; the suffix names WHICH skill, e.g.
+# `env+skill-michele`. Without that, two different skills produce identical run
+# directory names, the second overwrites the first, and a head-to-head between
+# two skills against one shared baseline is impossible to express.
+# Avoid ':' as the separator -- tar and rsync read `foo:bar` as a remote path.
 rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
-if [ "$COND" = "env+skill" ]; then
-  mkdir -p "$SKILLDST"
-  ln -sfn "$SKILLSRC/brain-extraction"    "$SKILLDST/brain-extraction"
-  ln -sfn "$SKILLSRC/brain-extraction-qc" "$SKILLDST/brain-extraction-qc"
-fi
+case "$COND" in
+  env+skill*)
+    mkdir -p "$SKILLDST"
+    ln -sfn "$SKILLSRC/brain-extraction"    "$SKILLDST/brain-extraction"
+    ln -sfn "$SKILLSRC/brain-extraction-qc" "$SKILLDST/brain-extraction-qc"
+    ;;
+esac
 
 # --- fresh working dir. git-annex marks its objects read-only, so chmod first
 #     or a leftover datalad clone survives rm -rf and silently contaminates. ---

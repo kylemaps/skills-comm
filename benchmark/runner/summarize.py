@@ -387,8 +387,8 @@ def load_run(run_dir, task):
         r["exclude_reason"] = "contaminated: env-only run loaded the skill"
     elif r["arm"] == "env-only" and has_skill_installed:
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
-    elif r["arm"] == "env+skill" and not has_skill_installed:
-        r["exclude_reason"] = "misassigned: skill absent in env+skill run"
+    elif r["arm"].startswith("env+skill") and not has_skill_installed:
+        r["exclude_reason"] = "misassigned: skill absent in %s run" % r["arm"]
     elif r["infra_error"] and not r["output_present"]:
         r["exclude_reason"] = "harness failure: %s" % r["infra_error"]
     r["valid"] = not r["exclude_reason"]
@@ -474,19 +474,19 @@ def report(runs, task):
         recovered = [r for r in infra if r["output_present"]]
         if recovered:
             print("  %d of those still produced output and ARE scored." % len(recovered))
-    uptake_pool = [r for r in valid if r["arm"] == "env+skill"]
+    uptake_pool = [r for r in valid if r["arm"].startswith("env+skill")]
     if uptake_pool:
         u = sum(1 for r in uptake_pool if r["uptake"])
-        print("\n  skill uptake (env+skill arm): %d/%d runs opened the skill" % (u, len(uptake_pool)))
+        print("\n  skill uptake (skill arms): %d/%d runs opened the skill" % (u, len(uptake_pool)))
         print("  Runs that did not open it are KEPT - non-uptake is an outcome, not a defect.")
 
     # -- per run ------------------------------------------------------------
     hr("RUNS")
-    print("  %-16s %-10s %-4s %-17s %7s %6s %6s  %-22s %-3s %s"
+    print("  %-14s %-18s %-4s %-17s %7s %6s %6s  %-22s %-3s %s"
           % ("MODEL", "ARM", "REP", "VERDICT", "SCORE", "DICE", "MIN", "METHOD", "OPN", "NF"))
     for r in sorted(runs, key=lambda r: (r["model"], r["arm"], int(re.sub(r"\D", "", r["rep"]) or 0))):
         flag = "" if r["valid"] else "  <-- EXCLUDED"
-        print("  %-16s %-10s %-4s %-17s %7s %6s %6s  %-22s %-3s %s%s" % (
+        print("  %-14s %-18s %-4s %-17s %7s %6s %6s  %-22s %-3s %s%s" % (
             r["model"], r["arm"], r["rep"], r["verdict"],
             "%.2f" % r["score"],
             ("%.3f" % r["dice"]) if isinstance(r["dice"], (int, float)) else "-",
@@ -500,7 +500,7 @@ def report(runs, task):
         cells[(r["model"], r["arm"])].append(r)
 
     hr("CELLS (valid runs only)")
-    print("  %-16s %-10s %3s %8s %14s %9s %8s %7s %6s"
+    print("  %-14s %-18s %3s %8s %14s %9s %8s %7s %6s"
           % ("MODEL", "ARM", "N", "PASS", "MEAN+-SD", "MED-SCORE", "MED-MIN",
              "UPTAKE", "NOTFND"))
     for (model, arm), rs in sorted(cells.items()):
@@ -511,7 +511,7 @@ def report(runs, task):
         nf = sum(r["not_found_claims"] for r in rs)
         mins = [r["duration_s"] / 60.0 for r in rs if r["duration_s"] is not None]
         note = "  bimodal" if bimodal(scores) else ""
-        print("  %-16s %-10s %3d %8s %14s %9s %8s %7s %6d%s" % (
+        print("  %-14s %-18s %3d %8s %14s %9s %8s %7s %6d%s" % (
             model, arm, len(rs), "%d/%d" % (k, len(rs)),
             "%.1f+-%.1f" % (m, sd), "%.1f" % median(scores),
             ("%.1f" % median(mins)) if mins else "-",
@@ -537,36 +537,71 @@ def report(runs, task):
                   % ", ".join(os.path.basename(r["dir"]) for r in suspect[:4]))
 
     # -- skill effect -------------------------------------------------------
+    # There may be more than one skill arm -- two skills measured against one
+    # shared baseline is the cheapest way to ask "do skills differ from each
+    # other", not just "does a skill help".
+    skill_arms = sorted({a for _m, a in cells if a.startswith("env+skill")})
     hr("SKILL EFFECT (intent-to-treat, pass rate)")
-    print("  %-16s %10s %10s %9s %-18s %8s"
-          % ("MODEL", "env-only", "env+skill", "DELTA", "95% CI (delta)", "FISHER p"))
+    print("  %-14s %-16s %9s %10s %8s %-18s %8s"
+          % ("MODEL", "SKILL ARM", "env-only", "with skill", "DELTA",
+             "95% CI (delta)", "FISHER p"))
     effects = {}
     for model in sorted({m for m, _ in cells}):
         a = cells.get((model, "env-only"), [])
-        b = cells.get((model, "env+skill"), [])
-        if not a or not b:
-            print("  %-16s %10s %10s   (one arm missing - not comparable)"
-                  % (model, "%d runs" % len(a), "%d runs" % len(b)))
-            continue
-        ka, kb = sum(1 for r in a if r["passed"]), sum(1 for r in b if r["passed"])
-        na, nb = len(a), len(b)
-        delta = (kb / nb - ka / na) * 100
-        lo, hi = newcombe(ka, na, kb, nb)
-        p = fisher_exact(ka, na - ka, kb, nb - kb)
-        print("  %-16s %10s %10s %+8.0fpp [%+6.0f, %+6.0f]pp %8.3f" % (
-            model, "%d/%d" % (ka, na), "%d/%d" % (kb, nb), delta,
-            lo * 100, hi * 100, p))
-        effects[model] = {"env_only_pass": ka, "env_only_n": na,
-                          "env_skill_pass": kb, "env_skill_n": nb,
-                          "delta_pp": round(delta, 1),
-                          "ci95_pp": [round(lo * 100, 1), round(hi * 100, 1)],
-                          "fisher_p": round(p, 4)}
+        for sa in skill_arms:
+            b = cells.get((model, sa), [])
+            if not a or not b:
+                print("  %-14s %-16s %9s %10s   (one arm missing - not comparable)"
+                      % (model, sa, "%d runs" % len(a), "%d runs" % len(b)))
+                continue
+            ka, kb = sum(1 for r in a if r["passed"]), sum(1 for r in b if r["passed"])
+            na, nb = len(a), len(b)
+            delta = (kb / nb - ka / na) * 100
+            lo, hi = newcombe(ka, na, kb, nb)
+            p = fisher_exact(ka, na - ka, kb, nb - kb)
+            print("  %-14s %-16s %9s %10s %+7.0fpp [%+6.0f, %+6.0f]pp %8.3f" % (
+                model, sa, "%d/%d" % (ka, na), "%d/%d" % (kb, nb), delta,
+                lo * 100, hi * 100, p))
+            effects["%s|%s" % (model, sa)] = {
+                "env_only_pass": ka, "env_only_n": na,
+                "env_skill_pass": kb, "env_skill_n": nb,
+                "delta_pp": round(delta, 1),
+                "ci95_pp": [round(lo * 100, 1), round(hi * 100, 1)],
+                "fisher_p": round(p, 4)}
+
+    # Skill-vs-skill, when more than one was measured. Comparing each to the
+    # baseline separately does not answer "is A better than B" -- that needs the
+    # two skill arms tested against each other directly.
+    if len(skill_arms) > 1:
+        print("\n  Head-to-head between skills (same baseline, same data):")
+        print("  %-14s %-16s %-16s %8s %-18s %8s"
+              % ("MODEL", "SKILL A", "SKILL B", "B - A", "95% CI", "FISHER p"))
+        for model in sorted({m for m, _ in cells}):
+            for i, sa in enumerate(skill_arms):
+                for sb in skill_arms[i + 1:]:
+                    A, B = cells.get((model, sa), []), cells.get((model, sb), [])
+                    if not A or not B:
+                        continue
+                    ka = sum(1 for r in A if r["passed"])
+                    kb = sum(1 for r in B if r["passed"])
+                    na, nb = len(A), len(B)
+                    lo, hi = newcombe(ka, na, kb, nb)
+                    p = fisher_exact(ka, na - ka, kb, nb - kb)
+                    print("  %-14s %-16s %-16s %+7.0fpp [%+6.0f, %+6.0f]pp %8.3f" % (
+                        model, sa, sb, (kb / nb - ka / na) * 100,
+                        lo * 100, hi * 100, p))
+                    effects["%s|%s_vs_%s" % (model, sa, sb)] = {
+                        "a_pass": ka, "a_n": na, "b_pass": kb, "b_n": nb,
+                        "delta_pp": round((kb / nb - ka / na) * 100, 1),
+                        "ci95_pp": [round(lo * 100, 1), round(hi * 100, 1)],
+                        "fisher_p": round(p, 4)}
     if effects:
         print("\n  CI crossing 0 = this experiment cannot tell the arms apart.")
         print("  At N=10/arm the test only detects large effects; a null is")
         print("  'underpowered', not 'no effect'.")
-        ceil = [m for m, e in effects.items()
-                if e["env_only_pass"] == e["env_only_n"]]
+        ceil = sorted({k.split("|")[0] for k, e in effects.items()
+                       if "env_only_n" in e
+                       and e["env_only_pass"] == e["env_only_n"]})
         if ceil:
             print("\n  CEILING: %s already pass every baseline run." % ", ".join(ceil))
             print("  No headroom exists, so no skill can show a gain here. This is a")
@@ -578,7 +613,7 @@ def report(runs, task):
     if not names:
         print("  no methods detected")
     else:
-        print("  %-16s %-10s %s" % ("MODEL", "ARM", "  ".join("%-10s" % n for n in names + ["(none)"])))
+        print("  %-14s %-18s %s" % ("MODEL", "ARM", "  ".join("%-10s" % n for n in names + ["(none)"])))
         for (model, arm), rs in sorted(cells.items()):
             counts = Counter()
             for r in rs:
@@ -586,7 +621,7 @@ def report(runs, task):
                     counts.update(r["methods"])
                 else:
                     counts["(none)"] += 1
-            print("  %-16s %-10s %s" % (model, arm, "  ".join(
+            print("  %-14s %-18s %s" % (model, arm, "  ".join(
                 "%-10s" % (counts.get(n, 0) or "-") for n in names + ["(none)"])))
         print("\n  Counts runs, not invocations; a run that tried two tools counts in both.")
         print("  Detected from command-form invocations in the transcript.")
@@ -599,7 +634,7 @@ def report(runs, task):
     with_tok = [r for r in valid if r.get("tokens_total")]
     if with_tok:
         hr("TOKEN COST (from opencode's session records)")
-        print("  %-16s %-10s %4s %10s %10s %10s %10s"
+        print("  %-14s %-18s %4s %10s %10s %10s %10s"
               % ("MODEL", "ARM", "REC", "IN", "OUT", "REASONING", "CACHE-RD"))
         for (model, arm), rs in sorted(cells.items()):
             have = [r for r in rs if r.get("tokens_total")]
@@ -608,7 +643,7 @@ def report(runs, task):
             def med(k):
                 v = [r[k] for r in have if r.get(k) is not None]
                 return int(median(v)) if v else 0
-            print("  %-16s %-10s %4s %10s %10s %10s %10s" % (
+            print("  %-14s %-18s %4s %10s %10s %10s %10s" % (
                 model, arm, "%d/%d" % (len(have), len(rs)),
                 "{:,}".format(med("tokens_input")),
                 "{:,}".format(med("tokens_output")),
@@ -618,33 +653,40 @@ def report(runs, task):
         print("  depending on the provider; IN + OUT is the honest headline number.")
 
         # The question the team actually asks: what does the skill cost?
-        models = sorted({m for m, _ in cells})
+        tok_arms = sorted({a for _m, a in cells if a.startswith("env+skill")})
         rows = []
-        for m in models:
+        for m in sorted({mm for mm, _ in cells}):
             a = [r for r in cells.get((m, "env-only"), []) if r.get("tokens_total")]
-            b = [r for r in cells.get((m, "env+skill"), []) if r.get("tokens_total")]
-            if a and b:
-                ta, tb = median([r["tokens_total"] for r in a]), median(
-                    [r["tokens_total"] for r in b])
-                rows.append((m, ta, tb, (tb / ta) if ta else float("nan")))
+            if not a:
+                continue
+            ta = median([r["tokens_total"] for r in a])
+            for sa in tok_arms:
+                b = [r for r in cells.get((m, sa), []) if r.get("tokens_total")]
+                if b:
+                    tb = median([r["tokens_total"] for r in b])
+                    rows.append((m, sa, ta, tb, (tb / ta) if ta else float("nan")))
         if rows:
             print("\n  Skill cost, median in+out tokens per run:")
-            print("  %-16s %12s %12s %8s" % ("MODEL", "env-only", "env+skill", "RATIO"))
-            for m, ta, tb, ratio in rows:
-                print("  %-16s %12s %12s %7.2fx" % (
-                    m, "{:,}".format(int(ta)), "{:,}".format(int(tb)), ratio))
+            print("  %-14s %-16s %12s %12s %8s"
+                  % ("MODEL", "SKILL ARM", "env-only", "with skill", "RATIO"))
+            for m, sa, ta, tb, ratio in rows:
+                print("  %-14s %-16s %12s %12s %7.2fx" % (
+                    m, sa, "{:,}".format(int(ta)), "{:,}".format(int(tb)), ratio))
+            print("\n  Ratios are within-model and trustworthy. Absolute counts are")
+            print("  NOT comparable across models -- some report reasoning and cache")
+            print("  tokens, others report zero for both. That is accounting, not work.")
 
     # -- decided tool (ASTRA) ----------------------------------------------
     with_astra = [r for r in valid if r["decided_tools"]]
     if with_astra:
         hr("DECIDED TOOL (from the agent's own ASTRA record)")
         dnames = sorted({t for r in with_astra for t in r["decided_tools"]})
-        print("  %-16s %-10s %4s %s" % ("MODEL", "ARM", "REC",
+        print("  %-14s %-18s %4s %s" % ("MODEL", "ARM", "REC",
                                         "  ".join("%-10s" % n for n in dnames)))
         for (model, arm), rs in sorted(cells.items()):
             have = [r for r in rs if r["decided_tools"]]
             c = Counter(t for r in have for t in r["decided_tools"])
-            print("  %-16s %-10s %4s %s" % (
+            print("  %-14s %-18s %4s %s" % (
                 model, arm, "%d/%d" % (len(have), len(rs)),
                 "  ".join("%-10s" % (c.get(n, 0) or "-") for n in dnames)))
         print("\n  'Decided' is the option the agent committed to in its decision")

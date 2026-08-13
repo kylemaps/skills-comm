@@ -59,10 +59,16 @@ SKIP_MISSING="${SKIP_MISSING:-1}"
 read -r -a ARM_LIST <<< "${ARMS:-env-only env+skill}"
 LOCK="$BENCH_HOME/.sweep.lock"
 
+# env+skill may carry a suffix naming which skill is under test, e.g.
+# `env+skill-michele`. That keeps run directories distinct so two skills can be
+# compared head-to-head against one shared baseline instead of overwriting each
+# other. Reject ':' -- tar and rsync treat `foo:bar` as a remote path.
 for a in "${ARM_LIST[@]}"; do
   case "$a" in
-    env-only|env+skill) ;;
-    *) echo "ABORT: unknown arm '$a' (want env-only and/or env+skill)"; exit 1 ;;
+    *:*) echo "ABORT: arm '$a' contains ':' -- breaks tar/rsync paths"; exit 1 ;;
+    env-only|env+skill|env+skill-*) ;;
+    *) echo "ABORT: unknown arm '$a' (want env-only, env+skill, or env+skill-<label>)"
+       exit 1 ;;
   esac
 done
 
