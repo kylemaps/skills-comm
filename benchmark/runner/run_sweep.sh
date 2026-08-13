@@ -97,7 +97,15 @@ fi
 
 echo $$ > "$LOCK"
 cleanup() { rm -f "$LOCK"; }
-trap cleanup EXIT INT TERM
+# A signal trap whose handler returns REPLACES the default terminate action, so
+# `trap cleanup INT TERM` made this script immune to Ctrl-C and pkill: it deleted
+# its lock and carried on spawning runs. One sweep survived thirty minutes of kill
+# attempts that way, respawning children faster than they could be killed, while
+# its missing lock file made a second sweep look safe to start. The handlers must
+# exit.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # --- preflight: environment fatal, missing models negotiable -----------------
 RESOLVED="$BENCH_HOME/.resolved_models"
