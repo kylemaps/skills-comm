@@ -360,7 +360,13 @@ def load_run(run_dir, task):
         except Exception:
             pass
     r["passed"] = r["score"] > 0 and str(r["verdict"]).lower() not in FAIL_VERDICTS
-    r["duration_s"] = duration_s(r["start"], r["end"])
+    # opencode's own millisecond session timestamps beat our transcript-mtime
+    # estimate, so prefer them and keep the estimate as the fallback.
+    r["duration_s"] = rec.get("session_duration_s") or duration_s(r["start"], r["end"])
+    for k in ("tokens_input", "tokens_output", "tokens_reasoning",
+              "tokens_cache_read", "tokens_cache_write", "tokens_total"):
+        r[k] = rec.get(k)
+    r["session_id"] = rec.get("session_id", "")
 
     a = parse_astra(run_dir)
     r["decided_tools"] = a.get("decided_tools") or []
@@ -585,6 +591,49 @@ def report(runs, task):
         print("\n  Counts runs, not invocations; a run that tried two tools counts in both.")
         print("  Detected from command-form invocations in the transcript.")
 
+    # -- token cost ---------------------------------------------------------
+    # Outcome alone cannot answer "is this skill worth using". A skill that adds
+    # 20pp of pass rate for 3x the tokens is a different proposition from one that
+    # adds 20pp for free, and on the motion task the skill multiplied runtime by 14
+    # by steering models to heavier tools. Cost belongs next to the effect.
+    with_tok = [r for r in valid if r.get("tokens_total")]
+    if with_tok:
+        hr("TOKEN COST (from opencode's session records)")
+        print("  %-16s %-10s %4s %10s %10s %10s %10s"
+              % ("MODEL", "ARM", "REC", "IN", "OUT", "REASONING", "CACHE-RD"))
+        for (model, arm), rs in sorted(cells.items()):
+            have = [r for r in rs if r.get("tokens_total")]
+            if not have:
+                continue
+            def med(k):
+                v = [r[k] for r in have if r.get(k) is not None]
+                return int(median(v)) if v else 0
+            print("  %-16s %-10s %4s %10s %10s %10s %10s" % (
+                model, arm, "%d/%d" % (len(have), len(rs)),
+                "{:,}".format(med("tokens_input")),
+                "{:,}".format(med("tokens_output")),
+                "{:,}".format(med("tokens_reasoning")),
+                "{:,}".format(med("tokens_cache_read"))))
+        print("\n  Median per run. Cache reads are billed differently or not at all")
+        print("  depending on the provider; IN + OUT is the honest headline number.")
+
+        # The question the team actually asks: what does the skill cost?
+        models = sorted({m for m, _ in cells})
+        rows = []
+        for m in models:
+            a = [r for r in cells.get((m, "env-only"), []) if r.get("tokens_total")]
+            b = [r for r in cells.get((m, "env+skill"), []) if r.get("tokens_total")]
+            if a and b:
+                ta, tb = median([r["tokens_total"] for r in a]), median(
+                    [r["tokens_total"] for r in b])
+                rows.append((m, ta, tb, (tb / ta) if ta else float("nan")))
+        if rows:
+            print("\n  Skill cost, median in+out tokens per run:")
+            print("  %-16s %12s %12s %8s" % ("MODEL", "env-only", "env+skill", "RATIO"))
+            for m, ta, tb, ratio in rows:
+                print("  %-16s %12s %12s %7.2fx" % (
+                    m, "{:,}".format(int(ta)), "{:,}".format(int(tb)), ratio))
+
     # -- decided tool (ASTRA) ----------------------------------------------
     with_astra = [r for r in valid if r["decided_tools"]]
     if with_astra:
@@ -642,6 +691,8 @@ def report(runs, task):
                 "bimodal": bimodal([r["score"] for r in rs]),
                 "median_minutes": round(median([r["duration_s"] / 60.0 for r in rs
                                                 if r["duration_s"] is not None]), 1),
+                "median_tokens_total": int(median([r["tokens_total"] for r in rs
+                                                   if r.get("tokens_total")]) or 0),
                 "uptake": sum(1 for r in rs if r["uptake"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
@@ -660,6 +711,8 @@ CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_err
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "dataset_pin", "not_found_claims", "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
+            "tokens_input", "tokens_output", "tokens_reasoning",
+            "tokens_cache_read", "tokens_total", "session_id",
             "output_present", "image_version", "opencode_version", "skills_sha",
             "tasks_sha", "start", "end", "duration_s"]
 
