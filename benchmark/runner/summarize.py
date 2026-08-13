@@ -115,7 +115,7 @@ INFRA_ERROR_RES = [
 # unchanged while the skill content is entirely different, so the commit alone would
 # silently pool two different experiments.
 PROVENANCE_KEYS = ["image_version", "opencode_version", "skills_sha", "skills_hash",
-                   "tasks_sha"]
+                   "prompt_hash", "tasks_sha"]
 
 
 # --------------------------------------------------------------------------- stats

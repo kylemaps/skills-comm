@@ -59,11 +59,11 @@ SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -nam
 # means a divergence shows up in the report instead of being assumed away.
 PROMPT_HASH=$(md5sum "$RUN/prompt.txt" 2>/dev/null | cut -c1-12)
 
-printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","tasks_sha":"%s","skills_installed":"%s","start":"%s"}\n' \
+printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","prompt_hash":"%s","tasks_sha":"%s","skills_installed":"%s","start":"%s"}\n' \
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
   "$(/usr/bin/opencode --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
-  "$SKILLSRC" "${SKILLS_HASH:-none}" \
+  "$SKILLSRC" "${SKILLS_HASH:-none}" "${PROMPT_HASH:-none}" \
   "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "$(date -u +%FT%TZ)" > "$RUN/run.json"
