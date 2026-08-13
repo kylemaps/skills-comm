@@ -335,7 +335,7 @@ def parse_astra(run_dir):
     }
 
 
-def load_run(run_dir, task):
+def load_run(run_dir, task, tokens_available=False):
     """One run -> a flat record. Never raises; a broken run becomes a failed run."""
     rec = {}
     rj = os.path.join(run_dir, "run.json")
@@ -430,6 +430,17 @@ def load_run(run_dir, task):
         r["exclude_reason"] = "misassigned: skill absent in %s run" % r["arm"]
     elif r["infra_error"] and not r["output_present"]:
         r["exclude_reason"] = "harness failure: %s" % r["infra_error"]
+    elif (not r["output_present"] and tokens_available
+          and not r.get("tokens_total")):
+        # An agent that spent no tokens never made a single model call, so it
+        # cannot have attempted anything. Chasing error strings one at a time kept
+        # missing new failure modes -- three separate ones so far, each producing a
+        # confident wrong number. This is the physical version of the same test and
+        # does not need to know how the runtime failed.
+        #
+        # Gated on tokens_available so that a missing or unreadable opencode
+        # database cannot silently void an entire experiment.
+        r["exclude_reason"] = "harness failure: no model call was ever made"
     r["valid"] = not r["exclude_reason"]
     return r
 
@@ -829,7 +840,12 @@ def main():
     if not dirs:
         sys.exit("no runs matching %s__* in %s" % (a.task, a.runs_dir))
 
-    runs = [load_run(d, a.task) for d in dirs]
+    # Two passes: establish whether token extraction works for this dataset at
+    # all, then classify. Without that check, an unreadable opencode database
+    # would mark every no-output run as a harness failure and void the experiment.
+    probe = [load_run(d, a.task) for d in dirs]
+    tokens_available = any(r.get("tokens_total") for r in probe)
+    runs = ([load_run(d, a.task, True) for d in dirs] if tokens_available else probe)
     summary = report(runs, a.task)
 
     # Task-scoped filenames. These used to be plain summary.json / runs.csv, so
