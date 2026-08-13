@@ -51,8 +51,13 @@ cat "$HERE/wrapper.txt" >> "$RUN/prompt.txt"
 # test a skill delivered some other way -- an unzipped drop from a collaborator, say --
 # the commit is unchanged while the skill content is completely different, so the two
 # experiments would be indistinguishable in the record. Hash the skill files as well.
-SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null \
-  | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -name '*.py' \
+  -o -name '*.sh' \) 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+
+# "The prompt is byte-identical across arms" is the central claim of the whole
+# comparison, and until now we asserted it rather than checked it. Hashing it
+# means a divergence shows up in the report instead of being assumed away.
+PROMPT_HASH=$(md5sum "$RUN/prompt.txt" 2>/dev/null | cut -c1-12)
 
 printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","tasks_sha":"%s","skills_installed":"%s","start":"%s"}\n' \
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
