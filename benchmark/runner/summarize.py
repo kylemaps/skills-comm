@@ -597,6 +597,10 @@ def report(runs, task):
                 continue
             ka, kb = sum(1 for r in a if r["passed"]), sum(1 for r in b if r["passed"])
             na, nb = len(a), len(b)
+            if min(na, nb) < MIN_N_FOR_STATS:
+                print("  %-14s %-16s %9s %10s   n too small to compare (lost runs)"
+                      % (model, sa, "%d/%d" % (ka, na), "%d/%d" % (kb, nb)))
+                continue
             delta = (kb / nb - ka / na) * 100
             lo, hi = newcombe(ka, na, kb, nb)
             p = fisher_exact(ka, na - ka, kb, nb - kb)
@@ -626,6 +630,10 @@ def report(runs, task):
                     ka = sum(1 for r in A if r["passed"])
                     kb = sum(1 for r in B if r["passed"])
                     na, nb = len(A), len(B)
+                    if min(na, nb) < MIN_N_FOR_STATS:
+                        print("  %-14s %-16s %-16s  %s vs %s -- n too small" % (
+                            model, sa, sb, "%d/%d" % (ka, na), "%d/%d" % (kb, nb)))
+                        continue
                     lo, hi = newcombe(ka, na, kb, nb)
                     p = fisher_exact(ka, na - ka, kb, nb - kb)
                     print("  %-14s %-16s %-16s %+7.0fpp [%+6.0f, %+6.0f]pp %8.3f" % (
