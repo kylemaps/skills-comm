@@ -117,6 +117,11 @@ INFRA_ERROR_RES = [
 PROVENANCE_KEYS = ["image_version", "opencode_version", "skills_sha", "skills_hash",
                    "prompt_hash", "tasks_sha"]
 
+# Values meaning "we did not record this", as opposed to a real differing value.
+# Runs predating a field carry these, and treating them as a difference would flag
+# every newly-added field as a divergence across historical runs.
+UNRECORDED = {"", "unknown", "none", None}
+
 
 # --------------------------------------------------------------------------- stats
 
@@ -429,8 +434,17 @@ def report(runs, task):
     hr("PROVENANCE")
     heterogeneous = []
     for k in PROVENANCE_KEYS:
-        c = Counter(r[k] for r in runs)
-        shown = ", ".join("%s (%d)" % (v, n) for v, n in c.most_common())
+        vals = [r[k] for r in runs]
+        known = [v for v in vals if v not in UNRECORDED]
+        n_missing = len(vals) - len(known)
+        c = Counter(known)
+        shown = ", ".join("%s (%d)" % (v, n) for v, n in c.most_common()) or "-"
+        # "Not recorded" is not a value that differs -- it is a measurement we did
+        # not take. Counting it as a difference makes every field we add later look
+        # like a divergence across older runs, which trains people to ignore the
+        # warning that matters.
+        if n_missing:
+            shown += "%snot recorded (%d)" % (", " if known else "", n_missing)
         print("  %-17s %s" % (k, shown))
         if len(c) > 1:
             heterogeneous.append(k)
@@ -442,7 +456,8 @@ def report(runs, task):
         arms = sorted({r["arm"] for r in runs})
         across_arms, within_arm = [], []
         for k in heterogeneous:
-            per_arm = {a: {r[k] for r in runs if r["arm"] == a} for a in arms}
+            per_arm = {a: {r[k] for r in runs
+                           if r["arm"] == a and r[k] not in UNRECORDED} for a in arms}
             (across_arms if all(len(v) == 1 for v in per_arm.values())
              else within_arm).append(k)
 
