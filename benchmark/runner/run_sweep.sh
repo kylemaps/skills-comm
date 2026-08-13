@@ -25,6 +25,16 @@
 #
 # env:
 #   MAXPAR=8        concurrent runs within an arm
+#   ARMS="env-only env+skill"
+#                   which arms to run. Set to a single arm to reuse an existing
+#                   baseline instead of re-measuring it -- a changed skill does not
+#                   change the no-skill arm, and when gateway credit is scarce that
+#                   halves the cost.
+#
+#                   The reused baseline is then a HISTORICAL control: different day,
+#                   possibly different gateway state and runner version. The report
+#                   compares provenance across arms and will say so. Do not silence
+#                   that -- it is the whole reason the comparison needs care.
 #   SKIP_MISSING=1  (default) drop models the gateway no longer serves and run the
 #                   rest. Set 0 to abort instead.
 #
@@ -46,7 +56,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 MAXPAR="${MAXPAR:-8}"
 SKIP_MISSING="${SKIP_MISSING:-1}"
+read -r -a ARM_LIST <<< "${ARMS:-env-only env+skill}"
 LOCK="$BENCH_HOME/.sweep.lock"
+
+for a in "${ARM_LIST[@]}"; do
+  case "$a" in
+    env-only|env+skill) ;;
+    *) echo "ABORT: unknown arm '$a' (want env-only and/or env+skill)"; exit 1 ;;
+  esac
+done
 
 IFS=',' read -r -a TASKS <<< "$1"; shift
 N="$1"; shift
@@ -112,14 +130,14 @@ for t in "${TASKS[@]}"; do
   echo "ok   task $t"
 done
 
-TOTAL=$(( ${#TASKS[@]} * ${#MODELS[@]} * 2 * N ))
+TOTAL=$(( ${#TASKS[@]} * ${#MODELS[@]} * ${#ARM_LIST[@]} * N ))
 START=$(date -u +%FT%TZ)
 
 # The manifest is the answer to "what did last night actually attempt?" -- it
 # survives even if the log is truncated or the sweep is killed mid-flight.
 {
   printf '{"tasks":["%s"],' "$(printf '%s' "${TASKS[*]}" | sed 's/ /","/g')"
-  printf '"repeats":%s,"maxpar":%s,"start":"%s",' "$N" "$MAXPAR" "$START"
+  printf '"repeats":%s,"maxpar":%s,"arms":["%s"],"start":"%s",' "$N" "$MAXPAR" "$(printf '%s' "${ARM_LIST[*]}" | sed 's/ /","/g')" "$START"
   printf '"requested":["%s"],' "$(printf '%s' "${REQUESTED[*]}" | sed 's/ /","/g')"
   printf '"models":["%s"],' "$(printf '%s' "${MODELS[*]}" | sed 's/ /","/g')"
   if [ "${#DROPPED[@]}" -gt 0 ]; then
@@ -134,6 +152,11 @@ echo "=== SWEEP START $START — $TOTAL runs, MAXPAR=$MAXPAR ==="
 echo "    tasks:   ${TASKS[*]}"
 echo "    models:  ${MODELS[*]}"
 echo "    repeats: $N"
+echo "    arms:    ${ARM_LIST[*]}"
+if [ "${#ARM_LIST[@]}" -lt 2 ]; then
+  echo "    NOTE: single arm. The other arm must come from earlier runs, which makes"
+  echo "          it a historical control -- check the provenance block in the report."
+fi
 
 # `wait -n` needs bash >= 4.3. Without it we must fall back to a full barrier;
 # blindly assuming it exists would decrement the counter without waiting and let
@@ -148,7 +171,7 @@ fi
 
 for TASK in "${TASKS[@]}"; do
   echo "=== TASK: $TASK  ($(date -u +%FT%TZ)) ==="
-  for COND in env-only env+skill; do
+  for COND in "${ARM_LIST[@]}"; do
     echo "=== ARM: $COND  ($(date -u +%FT%TZ)) ==="
     running=0
     for M in "${MODELS[@]}"; do

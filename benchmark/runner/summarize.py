@@ -409,10 +409,43 @@ def report(runs, task):
         if len(c) > 1:
             heterogeneous.append(k)
     if heterogeneous:
-        print("\n  !! NOT POOLABLE: %s differ across runs." % ", ".join(heterogeneous))
-        print("     Runs made under different %s are different experiments."
-              % heterogeneous[0])
-        print("     Split the report by that field before quoting any mean.")
+        # Two very different situations look identical if you only check "did this
+        # field vary". Reusing an older baseline against a new skill arm is a
+        # deliberate, defensible design; a single arm built from runs made under two
+        # different images is a broken experiment. Separate them.
+        arms = sorted({r["arm"] for r in runs})
+        across_arms, within_arm = [], []
+        for k in heterogeneous:
+            per_arm = {a: {r[k] for r in runs if r["arm"] == a} for a in arms}
+            (across_arms if all(len(v) == 1 for v in per_arm.values())
+             else within_arm).append(k)
+
+        if within_arm:
+            print("\n  !! NOT POOLABLE: %s vary WITHIN an arm."
+                  % ", ".join(within_arm))
+            print("     A single arm built from runs made under different conditions")
+            print("     is not one experiment. Split or re-run before quoting anything.")
+
+        if across_arms:
+            # Changing the skill is the point of the experiment, so skill provenance
+            # is expected to differ between arms. The environment is not.
+            skill_keys = [k for k in across_arms if k.startswith("skills_")]
+            env_keys = [k for k in across_arms if not k.startswith("skills_")]
+            print("\n  Arms differ in: %s (each arm internally consistent)."
+                  % ", ".join(across_arms))
+            for k in across_arms:
+                for a in arms:
+                    vals = {r[k] for r in runs if r["arm"] == a}
+                    print("      %-17s %-10s %s" % (k, a, ", ".join(sorted(vals))))
+            if skill_keys and not env_keys:
+                print("\n  Only the skill differs between arms -- that is the")
+                print("  experiment. Valid, but the baseline is a HISTORICAL control:")
+                print("  it was measured at a different time. Say so when reporting.")
+            if env_keys:
+                print("\n  !! %s differ between arms." % ", ".join(env_keys))
+                print("     The environment is supposed to be the controlled variable.")
+                print("     Any difference between arms may be the environment, not")
+                print("     the skill. This comparison does not stand on its own.")
     else:
         print("\n  OK - every run shares one provenance fingerprint. Poolable.")
 
