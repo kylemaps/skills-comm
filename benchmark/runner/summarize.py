@@ -109,6 +109,14 @@ INFRA_ERROR_RES = [
                 re.I), "gateway 5xx"),
     (re.compile(r"(ECONNREFUSED|ENOTFOUND|EBADF: bad file descriptor)"),
      "connection/descriptor failure"),
+    # opencode keeps shared state -- one SQLite database and one local server -- and
+    # every concurrent run touches the same `project` row. At MAXPAR=8 they collide:
+    # runs die in 6-9 seconds having loaded no skill and spent no tokens. Scored as
+    # written, five such runs turned a collaborator's skill from 5/5 into "5/10,
+    # -50pp, p=0.033". It was never 5/10; five of those runs never started.
+    (re.compile(r'Failed query:\s*(insert|update|delete)'), "opencode database contention"),
+    (re.compile(r"Error: Session not found"), "opencode session lost"),
+    (re.compile(r"Unexpected server error\. Check server logs"), "opencode server error"),
 ]
 
 # skills_hash is here on purpose: a collaborator's skill drop leaves skills_sha
