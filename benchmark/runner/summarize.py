@@ -122,6 +122,12 @@ PROVENANCE_KEYS = ["image_version", "opencode_version", "skills_sha", "skills_ha
 # every newly-added field as a divergence across historical runs.
 UNRECORDED = {"", "unknown", "none", None}
 
+# Below this many valid runs in either arm, report the counts but not a delta, CI or
+# p-value. A cell that lost nine of ten runs to a gateway outage once produced
+# "-100pp, p=0.091" from a single surviving run -- a number that looks like a finding
+# and is nothing of the sort. The honest output there is "n too small".
+MIN_N_FOR_STATS = 5
+
 
 # --------------------------------------------------------------------------- stats
 
