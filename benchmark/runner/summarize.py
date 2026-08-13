@@ -201,9 +201,29 @@ def bimodal(xs, lo=20.0, hi=80.0):
 
 # ----------------------------------------------------------------------- load runs
 
+# Lines that MENTION a tool in order to find out whether it exists, rather than to
+# run it. A skill that opens with broad capability discovery -- `command -v bet`,
+# `module spider afni`, `pip list | grep ants` -- would otherwise register as having
+# run every tool it looked for, in every run. That silently destroys the tool-choice
+# measurement, which is our headline mechanism, and it destroys it only for the arms
+# that discover carefully. Caught when a pilot run showed a model "using" all five
+# extraction tools.
+DISCOVERY_RE = re.compile(
+    r"command\s+-v\b|\bwhich\s+|\btype\s+-[pP]\b|module\s+(spider|avail|-t\s+avail)"
+    r"|conda\s+env\s+list|pip\s+list|--help\b|\bls\s+", re.I)
+
+
 def detect_methods(text):
+    """Which extraction methods were actually invoked, per the transcript.
+
+    Discovery lines are dropped first (see DISCOVERY_RE); what remains is scanned
+    for command-form invocations. Still a heuristic -- the agent's own ASTRA record
+    is the stronger signal where one exists.
+    """
+    lines = [ln for ln in text.splitlines() if not DISCOVERY_RE.search(ln)]
+    body = "\n".join(lines)
     return sorted({name for name, pat in METHOD_PATTERNS
-                   if re.search(pat, text, re.I)})
+                   if re.search(pat, body, re.I)})
 
 
 def normalize_tool(s):
