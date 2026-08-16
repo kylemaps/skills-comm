@@ -35,6 +35,10 @@
 #                   possibly different gateway state and runner version. The report
 #                   compares provenance across arms and will say so. Do not silence
 #                   that -- it is the whole reason the comparison needs care.
+#   RETRY_INFRA=2   after each arm, re-run any run lost to a harness failure
+#                   (gateway outage, agent-runtime contention, a run that never
+#                   made a model call). Set 0 to disable. Retries run serially,
+#                   because concurrency is what causes most of these failures.
 #   SKIP_MISSING=1  (default) drop models the gateway no longer serves and run the
 #                   rest. Set 0 to abort instead.
 #
@@ -56,6 +60,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 MAXPAR="${MAXPAR:-8}"
 SKIP_MISSING="${SKIP_MISSING:-1}"
+RETRY_INFRA="${RETRY_INFRA:-2}"
 read -r -a ARM_LIST <<< "${ARMS:-env-only env+skill}"
 LOCK="$BENCH_HOME/.sweep.lock"
 
@@ -206,6 +211,31 @@ for TASK in "${TASKS[@]}"; do
       done
     done
     wait                    # arm barrier: never overlap arms
+
+    # Retry runs that failed for OUR reasons -- gateway outage, agent-runtime
+    # contention, runs that never made a model call. Excluding them keeps the
+    # numbers honest but leaves the cell short, and unequal denominators are not
+    # something to caption around: if our harness broke the run, run it again.
+    #
+    # Retries are serial. Concurrency is what causes most of these failures, so
+    # retrying in parallel would reproduce the conditions that lost the runs.
+    for attempt in $(seq 1 "$RETRY_INFRA"); do
+      mapfile -t FAILED < <(python "$HERE/find_failed.py" "$BENCH_HOME/runs" "$TASK" \
+                              --arm "$COND" 2>/dev/null)
+      [ "${#FAILED[@]}" -eq 0 ] && break
+      echo "=== RETRY $attempt/$RETRY_INFRA: ${#FAILED[@]} run(s) lost to harness failure ==="
+      for d in "${FAILED[@]}"; do
+        b=$(basename "$d")
+        M="neurodesk/$(echo "$b" | awk -F'__' '{print $2}' | sed 's/^neurodesk-//')"
+        r=$(echo "$b" | awk -F'__' '{print $4}' | tr -d 'r')
+        echo "    retry $b"
+        "$HERE/run_bench.sh" "$TASK" "$M" "$COND" "$r"
+      done
+    done
+    STILL=$(python "$HERE/find_failed.py" "$BENCH_HOME/runs" "$TASK" --arm "$COND" \
+              2>/dev/null | wc -l)
+    [ "$STILL" -gt 0 ] && echo "!! $STILL run(s) still failing after $RETRY_INFRA retries"
+
     echo "=== ARM $COND COMPLETE $(date -u +%FT%TZ) ==="
   done
   TDONE=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
