@@ -13,15 +13,22 @@
 # parallel would recreate the conditions that lost the runs.
 set -u
 
-TASK="${1:?usage: retry_failed.sh TASK [PASSES]   (ARM=<arm> to restrict)}"
+TASK="${1:?usage: retry_failed.sh TASK [PASSES]   (ARM=<arm> MODEL=<m> to restrict)}"
 PASSES="${2:-3}"
 ARM="${ARM:-}"
+MODEL="${MODEL:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 SKILLSRC="${SKILLS_SRC:-$HOME/skills-comm/plugins/brain-extraction}"
 
+# MODEL matters because per-run cost varies ~20x across the panel. On 7t-nodura
+# the failed set is 34 runs, but ten of them are qwen3.5 at ~1.2 M tokens each --
+# 12 M of a 16 M retry, for one model on a finding the cheap models already
+# carry. Without a model filter the only options are "retry all of it" or "do it
+# by hand", and by hand is how cells end up uneven.
 FILTER=()
-[ -n "$ARM" ] && FILTER=(--arm "$ARM")
+[ -n "$ARM" ]   && FILTER+=(--arm "$ARM")
+[ -n "$MODEL" ] && FILTER+=(--model "$MODEL")
 
 # SKILLS_SRC is a single value applied to every retry, but which skill an arm is
 # supposed to install is encoded in the arm NAME. Retrying `env+skill` and
@@ -43,7 +50,7 @@ if [ "${#SKILL_ARMS[@]}" -gt 1 ]; then
   exit 2
 fi
 
-echo "=== retry $TASK | arm=${ARM:-<all>} | skills_src=$SKILLSRC | passes=$PASSES ==="
+echo "=== retry $TASK | arm=${ARM:-<all>} | model=${MODEL:-<all>} | skills_src=$SKILLSRC | passes=$PASSES ==="
 
 for pass in $(seq 1 "$PASSES"); do
   mapfile -t FAILED < <(python "$HERE/find_failed.py" "$BENCH_HOME/runs" "$TASK" "${FILTER[@]}")
