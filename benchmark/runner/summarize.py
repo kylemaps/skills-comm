@@ -387,10 +387,17 @@ def load_run(run_dir, task, tokens_available=False):
             r["infra_error"] = label
             break
 
-    # grading
-    r["verdict"], r["score"], r["dice"] = "NO-OUTPUT", 0.0, None
+    # grading. envelope.json is the grader's output, so its ABSENCE means "nobody
+    # has scored this run yet" -- which is not the same thing as "the agent
+    # produced nothing", even though both used to default to NO-OUTPUT. That
+    # conflation reported a task with 50 finished brain masks on disk as 0/70
+    # pass, because no-output is in FAIL_VERDICTS. An ungraded run is not a
+    # failed run; it is an unfinished measurement, and it is excluded below.
+    r["graded"] = os.path.exists(os.path.join(run_dir, "envelope.json"))
+    r["verdict"], r["score"], r["dice"] = "NOT-GRADED", 0.0, None
     ej = os.path.join(run_dir, "envelope.json")
-    if os.path.exists(ej):
+    if r["graded"]:
+        r["verdict"] = "NO-OUTPUT"
         try:
             e = json.load(open(ej, encoding="utf-8"))
             r["verdict"] = e.get("verdict") or "NO-OUTPUT"
@@ -441,6 +448,11 @@ def load_run(run_dir, task, tokens_available=False):
         # Gated on tokens_available so that a missing or unreadable opencode
         # database cannot silently void an entire experiment.
         r["exclude_reason"] = "harness failure: no model call was ever made"
+    elif not r["graded"]:
+        # Last: a run that is broken for a known reason should be reported as
+        # broken, not merely as unscored. What lands here is a run we simply
+        # have not measured yet.
+        r["exclude_reason"] = "not graded yet -- run the grader on this task"
     r["valid"] = not r["exclude_reason"]
     return r
 
@@ -522,7 +534,15 @@ def report(runs, task):
     print("  excluded     %4d" % len(excluded))
     for reason, n in Counter(r["exclude_reason"] for r in excluded).most_common():
         print("      %-58s %d" % (reason, n))
-    if excluded:
+    ungraded = [r for r in runs if not r.get("graded")]
+    if ungraded:
+        print("\n  !! %d of %d run(s) have no envelope.json -- THE GRADER HAS NOT RUN."
+              % (len(ungraded), len(runs)))
+        with_output = sum(1 for r in ungraded if r["output_present"])
+        print("     %d of them have a finished output.nii.gz on disk waiting to be"
+              % with_output)
+        print("     scored. Nothing below is a result yet: run collect_results.sh.")
+    if [r for r in excluded if not r["exclude_reason"].startswith("not graded")]:
         print("\n  Excluded runs are OUR failures -- wrong skills in place, or the")
         print("  gateway dying mid-run -- not agent failures. Scoring them 0 would")
         print("  blame the model for our infrastructure. Re-run those cells.")
