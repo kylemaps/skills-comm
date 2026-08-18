@@ -48,7 +48,12 @@ for T in "$@"; do
 done
 [ "$FAIL" -eq 0 ] || { echo "ABORT: pack not built."; exit 1; }
 
+# Three views, not one. Pass rate answers "did it work"; runtime and tokens
+# answer "what did it cost", which is the question a reader asks next and which
+# earlier packs simply did not contain even though every run records it.
 python "$HERE/matrix.py" "$RUNS" > "$PACK/matrix.txt" 2>/dev/null
+python "$HERE/matrix.py" "$RUNS" --metric minutes >> "$PACK/matrix.txt" 2>/dev/null
+python "$HERE/matrix.py" "$RUNS" --metric tokens  >> "$PACK/matrix.txt" 2>/dev/null
 python "$HERE/matrix.py" "$RUNS" --csv > "$PACK/matrix.csv" 2>/dev/null
 python "$HERE/pack_manifest.py" "$PACK" "$RUNS" "$@"
 

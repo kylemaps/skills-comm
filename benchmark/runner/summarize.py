@@ -772,6 +772,33 @@ def report(runs, task):
             print("  NOT comparable across models -- some report reasoning and cache")
             print("  tokens, others report zero for both. That is accounting, not work.")
 
+        # Cost per RUN is the wrong denominator for "is the skill worth it". A skill
+        # that doubles tokens per attempt but takes a model from 2/10 to 10/10 has made
+        # correct output far cheaper, and cost-per-run reports that as a 2x regression.
+        # Cost per PASSING run is what a user pays for a result they can actually use.
+        eff = []
+        for m in sorted({mm for mm, _ in cells}):
+            for sa in ["env-only"] + tok_arms:
+                rs = [r for r in cells.get((m, sa), []) if r.get("tokens_total")]
+                if not rs:
+                    continue
+                spent = sum(r["tokens_total"] for r in rs)
+                passes = sum(1 for r in rs if r["passed"])
+                eff.append((m, sa, len(rs), passes,
+                            (spent / passes) if passes else None))
+        if eff:
+            print()
+            print("  Tokens per PASSING run -- what a usable result actually costs:")
+            print("  %-14s %-18s %5s %7s %16s"
+                  % ("MODEL", "ARM", "RUNS", "PASSES", "TOKENS/PASS"))
+            for m, sa, n, k, per in eff:
+                print("  %-14s %-18s %5d %7d %16s"
+                      % (m, sa, n, k,
+                         "{:,}".format(int(per)) if per else "no passes"))
+            print()
+            print("  A cell with no passes has no finite cost per result, however few")
+            print("  tokens it spent. That is the honest reading of a 0/10 cell.")
+
     # -- decided tool (ASTRA) ----------------------------------------------
     with_astra = [r for r in valid if r["decided_tools"]]
     if with_astra:

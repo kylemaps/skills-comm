@@ -81,19 +81,32 @@ def main():
 
     add("## Runs")
     add("")
-    add("| task | runs | valid | excluded |")
-    add("|---|---|---|---|")
+    add("Arm columns count valid runs, so they sum to `valid` rather than to `runs`.")
+    add("")
+    add("| task | no skill | skill A | skill B | valid | excluded | runs |")
+    add("|---|---|---|---|---|---|---|")
     total = totvalid = 0
+    arm_tot = {"env-only": 0, "env+skill": 0, "env+skill-michele": 0}
     exclusions, uneven = {}, []
     for t in tasks:
         p = os.path.join(runs_dir, "summary_%s.json" % t)
         if not os.path.exists(p):
-            add("| %s | **MISSING** | | |" % t)
+            add("| %s | **MISSING** | | | | | |" % t)
             continue
         with open(p, encoding="utf-8") as fh:
             d = json.load(fh)
-        add("| `%s` | %d | %d | %d |"
-            % (t, d.get("n_runs", 0), d.get("n_valid", 0), d.get("n_excluded", 0)))
+        per_arm = {}
+        for cell, c in (d.get("cells") or {}).items():
+            arm = cell.split("|", 1)[1] if "|" in cell else "?"
+            per_arm[arm] = per_arm.get(arm, 0) + c.get("n", 0)
+        for a in arm_tot:
+            arm_tot[a] += per_arm.get(a, 0)
+        add("| `%s` | %s | %s | %s | %d | %d | %d |"
+            % (t,
+               per_arm.get("env-only") or "—",
+               per_arm.get("env+skill") or "—",
+               per_arm.get("env+skill-michele") or "—",
+               d.get("n_valid", 0), d.get("n_excluded", 0), d.get("n_runs", 0)))
         total += d.get("n_runs", 0)
         totvalid += d.get("n_valid", 0)
         for reason, k in (d.get("exclusions") or {}).items():
@@ -102,7 +115,9 @@ def main():
         for cell, c in (d.get("cells") or {}).items():
             if c.get("n") != 10:
                 uneven.append("`%s` %s — n=%d" % (t, cell.replace("|", " "), c.get("n")))
-    add("| **total** | **%d** | **%d** | |" % (total, totvalid))
+    add("| **total** | **%d** | **%d** | **%d** | **%d** | | **%d** |"
+        % (arm_tot["env-only"], arm_tot["env+skill"],
+           arm_tot["env+skill-michele"], totvalid, total))
     add("")
 
     if exclusions:
