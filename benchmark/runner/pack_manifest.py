@@ -28,6 +28,12 @@ from collections import defaultdict
 PROV = ["image_version", "opencode_version", "skills_sha", "skills_hash",
         "prompt_hash", "tasks_sha"]
 UNRECORDED = {"", "unknown", "none", None}
+
+# skills_sha is our own repo HEAD. It moves every time we commit a harness fix, so
+# it differs between a cell's original runs and its retries for reasons that have
+# nothing to do with the skill under test. Displayed, never alarmed on -- the
+# content hash next to it is what proves which skill ran.
+NO_ALARM = {"skills_sha"}
 ARM_ORDER = {"env-only": 0, "env+skill": 1}
 
 
@@ -129,7 +135,7 @@ def main():
     add("`skills_hash` is the hash of the skill files and is the one that carries")
     add("meaning. `prompt_hash` is per task by construction.")
     add("")
-    alarms = []
+    alarms, unverified = [], []
     for t in tasks:
         prov = read_provenance(runs_dir, t)
         if not prov:
@@ -147,9 +153,20 @@ def main():
                     cells.append("—")
                 elif len(vals) == 1:
                     cells.append("`%s`" % vals[0])
+                elif k in NO_ALARM:
+                    cells.append(", ".join("`%s`" % v for v in vals))
                 else:
                     cells.append("⚠ %s" % ", ".join("`%s`" % v for v in vals))
                     alarms.append("%s / %s / %s: %s" % (t, a, k, ", ".join(vals)))
+            # Recorded in one arm and absent in another means we cannot verify the
+            # arms match on that key -- weaker than a mismatch, but not nothing, and
+            # it is exactly the case for prompt_hash on runs that predate the field.
+            present = [a for a in arms if prov[a].get(k)]
+            if present and len(present) < len(arms):
+                unverified.append(
+                    "%s / `%s`: recorded for %s, not for %s"
+                    % (t, k, ", ".join(present),
+                       ", ".join(a for a in arms if a not in present)))
             add("| `%s` | " % k + " | ".join(cells) + " |")
         add("")
     if alarms:
@@ -160,7 +177,17 @@ def main():
             add("> - %s" % x)
         add("")
     else:
-        add("No key differs within any arm. Every cell is internally comparable.")
+        add("No meaningful key differs within any arm. Every cell is internally")
+        add("comparable.")
+        add("")
+    if unverified:
+        add("Some keys predate their runs and are recorded for only part of a task.")
+        add("Where `prompt_hash` is missing the prompt cannot be *proved* identical")
+        add("across arms — though `tasks_sha` is constant everywhere and the prompt is")
+        add("generated deterministically from it, so it almost certainly was:")
+        add("")
+        for u in unverified:
+            add("- %s" % u)
         add("")
 
     add("## Reading these numbers")
