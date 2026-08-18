@@ -852,6 +852,11 @@ CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_err
             "tokens_input", "tokens_output", "tokens_reasoning",
             "tokens_cache_read", "tokens_total", "session_id",
             "output_present", "image_version", "opencode_version", "skills_sha",
+            # skills_hash and prompt_hash are the ones that carry meaning. skills_sha
+            # is just our repo HEAD and moves with unrelated harness commits; the
+            # content hashes are what prove which skill was tested and that the prompt
+            # was byte-identical across arms.
+            "skills_hash", "prompt_hash",
             "tasks_sha", "start", "end", "duration_s"]
 
 
