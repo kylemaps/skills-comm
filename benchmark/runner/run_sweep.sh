@@ -70,6 +70,23 @@ RETRY_MAX_TOKENS="${RETRY_MAX_TOKENS:-5000000}"
 read -r -a ARM_LIST <<< "${ARMS:-env-only env+skill}"
 LOCK="$BENCH_HOME/.sweep.lock"
 
+# SKILLS_SRC is one path for the whole sweep, but which skill an arm should install
+# is encoded in the arm NAME. Two env+skill* arms in one sweep would therefore get
+# the SAME skill under two different labels -- the directory says one thing and the
+# content is another, and the head-to-head it was meant to produce is meaningless.
+# retry_failed.sh has refused this since the day it nearly happened; this path did
+# not, and a three-arm sweep is the obvious way to trip it.
+SKILL_ARM_COUNT=0
+for a in "${ARM_LIST[@]}"; do
+  case "$a" in env+skill*) SKILL_ARM_COUNT=$((SKILL_ARM_COUNT + 1)) ;; esac
+done
+if [ "$SKILL_ARM_COUNT" -gt 1 ]; then
+  echo "ABORT: ${SKILL_ARM_COUNT} skill arms in one sweep, but SKILLS_SRC is one path."
+  echo "       They would all install the same skill under different labels."
+  echo "       Run one sweep per skill arm, each with its own SKILLS_SRC."
+  exit 1
+fi
+
 # env+skill may carry a suffix naming which skill is under test, e.g.
 # `env+skill-michele`. That keeps run directories distinct so two skills can be
 # compared head-to-head against one shared baseline instead of overwriting each
