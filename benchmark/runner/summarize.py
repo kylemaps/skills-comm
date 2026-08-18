@@ -421,7 +421,7 @@ def load_run(run_dir, task, tokens_available=False):
     # supposed to be fixing.
     ej = os.path.join(run_dir, "envelope.json")
     r["graded"] = os.path.exists(ej)
-    r["score"], r["dice"] = 0.0, None
+    r["score"], r["dice"], r["metrics"] = 0.0, None, {}
     r["verdict"] = ("NO-OUTPUT" if r["graded"] or not r["output_present"]
                     else "NOT-GRADED")
     if r["graded"]:
@@ -430,6 +430,11 @@ def load_run(run_dir, task, tokens_available=False):
             r["verdict"] = e.get("verdict") or "NO-OUTPUT"
             r["score"] = float(e.get("score") or 0.0)
             r["dice"] = (e.get("detail", {}).get("metrics", {}) or {}).get("dice")
+            # Keep the whole metric blob. The grader computes HD95, ASSD, NSD,
+            # volume error and core recall on every run and we surfaced only Dice,
+            # so a cell could be failing on boundary distance while its Dice looked
+            # healthy and nothing said so.
+            r["metrics"] = (e.get("detail", {}).get("metrics", {}) or {})
         except Exception:
             pass
     r["passed"] = r["score"] > 0 and str(r["verdict"]).lower() not in FAIL_VERDICTS
@@ -816,6 +821,24 @@ def report(runs, task):
             print()
             print("  A cell with no passes has no finite cost per result, however few")
             print("  tokens it spent. That is the honest reading of a 0/10 cell.")
+
+            # The wall-clock twin, and the bill for the runs that produced nothing.
+            # "Tokens burned on failure" is the number a user feels and no report
+            # has ever shown: it is what you pay and throw away.
+            print()
+            print("  Minutes per passing run, and tokens spent on runs that failed:")
+            print("  %-14s %-18s %14s %18s"
+                  % ("MODEL", "ARM", "MIN/PASS", "TOKENS WASTED"))
+            for m, sa, n, k, _ in eff:
+                rs = cells.get((m, sa), [])
+                mins = [r["duration_s"] / 60.0 for r in rs
+                        if r["duration_s"] is not None]
+                wasted = sum(r.get("tokens_total") or 0
+                             for r in rs if not r["passed"])
+                print("  %-14s %-18s %14s %18s"
+                      % (m, sa,
+                         ("%.1f" % (sum(mins) / k)) if (k and mins) else "-",
+                         "{:,}".format(int(wasted))))
 
     # -- decided tool (ASTRA) ----------------------------------------------
     with_astra = [r for r in valid if r["decided_tools"]]
