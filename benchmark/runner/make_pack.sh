@@ -22,7 +22,15 @@ RUNS="$BENCH_HOME/runs"
 
 STAMP=$(date -u +%Y-%m-%d)
 PACK="$BENCH_HOME/pack_$STAMP"
+# NOTES.md is written by hand and everything else is regenerated, so a rebuild
+# must not eat it. Without this, "build pack -> write notes -> rebuild to
+# re-tar" silently discards the notes on the third step.
+KEEP=""
+if [ -s "$PACK/NOTES.md" ] && ! grep -q "replace this placeholder" "$PACK/NOTES.md" 2>/dev/null; then
+  KEEP=$(mktemp); cp "$PACK/NOTES.md" "$KEEP"; echo "   (keeping your NOTES.md)"
+fi
 rm -rf "$PACK"; mkdir -p "$PACK"
+[ -n "$KEEP" ] && mv "$KEEP" "$PACK/NOTES.md"
 
 FAIL=0
 for T in "$@"; do
