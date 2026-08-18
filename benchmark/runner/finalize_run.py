@@ -63,8 +63,49 @@ try:
     from summarize import detect_methods, NOT_FOUND_RE
     rec["methods_used"] = detect_methods(txt)
     rec["not_found_claims"] = len(NOT_FOUND_RE.findall(txt))
+    # Ordered by first appearance, and counted. The set tells you WHICH tools a
+    # run touched; the order tells you what it fell back FROM, and the count is a
+    # proxy for how many times it re-extracted after a failed QC. A run that went
+    # BET -> SynthStrip is a different story from one that only ever ran
+    # SynthStrip, and the set cannot tell them apart.
+    from summarize import METHOD_PATTERNS
+    seen = []
+    total = 0
+    for name, pat in METHOD_PATTERNS:
+        hits = list(re.finditer(pat, txt, re.I))
+        total += len(hits)
+        if hits:
+            seen.append((hits[0].start(), name))
+    rec["method_sequence"] = [n for _, n in sorted(seen)]
+    rec["method_invocations"] = total
 except Exception:
     pass
+# --- effort and behaviour, read back out of the transcript -------------------
+# Deliberately format-agnostic. These match on CONTENT (paths, error text, tool
+# names) rather than on how opencode frames a tool call, so they survive an agent
+# runtime upgrade. Where a signal is a heuristic it is named as one: error_lines
+# counts lines that look like failures, which is not the same as counting commands
+# that returned non-zero, and pretending otherwise would put a wrong number in a
+# table nobody could check.
+rec["error_lines"] = len(re.findall(
+    "command not found|No such file or directory|Permission denied|Traceback"
+    "|is not recognized|cannot access|Segmentation fault", txt, re.I))
+
+# Progressive disclosure is the central design claim of a skill: a lean SKILL.md
+# that pulls detail from references/ on demand. Nothing measured whether agents
+# ever open those files.
+rec["references_opened"] = sorted(set(
+    re.findall("references/([a-z0-9_-]+[.]md)", txt, re.I)))
+
+# Every kimi run touched the scheduler, in every arm including no-skill, in a
+# container where slurmd cannot start. That is effort spent on a dead end and it
+# should be a column, not something we grep for by hand each time we wonder.
+rec["scheduler_mentions"] = len(re.findall("slurm|sbatch|squeue|scontrol", txt, re.I))
+
+# Did the agent QC its own output, as both skills instruct?
+rec["qc_ran"] = bool(re.search(
+    "qc_metrics|afni_outline_qc|qc_mosaic|ai_eval|brain-extraction-qc", txt, re.I))
+
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
 skills = re.findall(r'Skill "([^"]+)"', txt)
@@ -135,6 +176,20 @@ if srow is not None:
 task = rec.get("task_id", "")
 out = os.path.join(run_dir, "submissions", task, "output.nii.gz")
 rec["output_present"] = os.path.exists(out)
+
+# Time to a usable result, which is not the same as run duration. A run that
+# produced its mask in 5 minutes and then spent 40 more trying to repair a batch
+# scheduler took 45 minutes and was useful after 5. Total runtime reports that as
+# slow; this reports it as fast-then-distracted, which is what actually happened
+# and what a user would feel.
+rec["seconds_to_output"] = None
+if rec["output_present"] and rec.get("start"):
+    try:
+        t0 = datetime.strptime(rec["start"], "%Y-%m-%dT%H:%M:%SZ")
+        t0 = t0.replace(tzinfo=timezone.utc).timestamp()
+        rec["seconds_to_output"] = max(0, int(os.path.getmtime(out) - t0))
+    except Exception:
+        pass
 if rc is not None:
     try:
         rec["exit_code"] = int(rc)

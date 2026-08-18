@@ -232,6 +232,23 @@ DISCOVERY_RE = re.compile(
     r"|conda\s+env\s+list|pip\s+list|--help\b|\bls\s+", re.I)
 
 
+# A markdown filename is documentation, never a command. Our own reference files
+# are named after the tools they describe -- references/synthstrip.md,
+# references/hd-bet.md, references/afni-3dskullstrip.md -- so an agent that merely
+# READ about a tool was being counted as having RUN it.
+#
+# That error is arm-asymmetric, which is what makes it dangerous rather than
+# merely wrong: only the skill arms have a references/ directory to open, so it
+# inflates tool counts in exactly the arm where we claim tool use rose. The
+# mechanism behind the headline -- "SynthStrip use rose 15/50 to 41/50 with the
+# skill" -- runs through this function.
+DOC_PATH_RE = re.compile(r"[A-Za-z0-9_./-]*[.]md")
+
+
+def strip_docs(text):
+    """Remove markdown filenames so reading about a tool is not running it."""
+    return DOC_PATH_RE.sub(" ", text)
+
 def detect_methods(text):
     """Which extraction methods were actually invoked, per the transcript.
 
@@ -239,7 +256,8 @@ def detect_methods(text):
     for command-form invocations. Still a heuristic -- the agent's own ASTRA record
     is the stronger signal where one exists.
     """
-    lines = [ln for ln in text.splitlines() if not DISCOVERY_RE.search(ln)]
+    body = strip_docs(text)
+    lines = [ln for ln in body.splitlines() if not DISCOVERY_RE.search(ln)]
     body = "\n".join(lines)
     return sorted({name for name, pat in METHOD_PATTERNS
                    if re.search(pat, body, re.I)})
