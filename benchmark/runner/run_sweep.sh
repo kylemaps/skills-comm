@@ -220,8 +220,14 @@ for TASK in "${TASKS[@]}"; do
     # Retries are serial. Concurrency is what causes most of these failures, so
     # retrying in parallel would reproduce the conditions that lost the runs.
     for attempt in $(seq 1 "$RETRY_INFRA"); do
+      # Filter to THIS sweep's models. find_failed.py reports every failed run in
+      # the arm, and the retry loop reads the model back out of the directory name,
+      # so a sweep of cheap models would cheerfully re-run an expensive model's
+      # failures that we had deliberately chosen not to repeat. On motion that was
+      # qwen3.5 x10 at ~1.5 M tokens each -- ~15 M per pass, and there are two passes.
+      MRE=$(IFS='|'; echo "${MODELS[*]}" | sed 's|/|-|g; s|[.]|[.]|g')
       mapfile -t FAILED < <(python "$HERE/find_failed.py" "$BENCH_HOME/runs" "$TASK" \
-                              --arm "$COND" 2>/dev/null)
+                              --arm "$COND" 2>/dev/null | grep -E "__(${MRE})__")
       [ "${#FAILED[@]}" -eq 0 ] && break
       echo "=== RETRY $attempt/$RETRY_INFRA: ${#FAILED[@]} run(s) lost to harness failure ==="
       for d in "${FAILED[@]}"; do
