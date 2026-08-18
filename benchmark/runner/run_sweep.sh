@@ -39,6 +39,11 @@
 #                   (gateway outage, agent-runtime contention, a run that never
 #                   made a model call). Set 0 to disable. Retries run serially,
 #                   because concurrency is what causes most of these failures.
+#   RETRY_MAX_TOKENS=5000000
+#                   ceiling on what one retry pass may spend. The retry picks its
+#                   own workload at runtime, so it is the only path here that can
+#                   spend without anyone deciding to. Over the ceiling it prints
+#                   the estimate and skips, leaving a deliberate re-run to you.
 #   SKIP_MISSING=1  (default) drop models the gateway no longer serves and run the
 #                   rest. Set 0 to abort instead.
 #
@@ -61,6 +66,7 @@ BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 MAXPAR="${MAXPAR:-8}"
 SKIP_MISSING="${SKIP_MISSING:-1}"
 RETRY_INFRA="${RETRY_INFRA:-2}"
+RETRY_MAX_TOKENS="${RETRY_MAX_TOKENS:-5000000}"
 read -r -a ARM_LIST <<< "${ARMS:-env-only env+skill}"
 LOCK="$BENCH_HOME/.sweep.lock"
 
@@ -229,7 +235,16 @@ for TASK in "${TASKS[@]}"; do
       mapfile -t FAILED < <(python "$HERE/find_failed.py" "$BENCH_HOME/runs" "$TASK" \
                               --arm "$COND" 2>/dev/null | grep -E "__(${MRE})__")
       [ "${#FAILED[@]}" -eq 0 ] && break
-      echo "=== RETRY $attempt/$RETRY_INFRA: ${#FAILED[@]} run(s) lost to harness failure ==="
+      EST=$(python "$HERE/price_runs.py" "$BENCH_HOME/runs" "$TASK" "${FAILED[@]}")
+      echo "=== RETRY $attempt/$RETRY_INFRA: ${#FAILED[@]} run(s) lost to harness failure, est. ${EST} tokens ==="
+      # The retry chooses its own workload at runtime, so it is the one path that
+      # can spend without anyone deciding to. Make it announce the bill, and stop
+      # if the bill is large -- a deliberate re-run is one command away.
+      if [ "${EST:-0}" -gt "$RETRY_MAX_TOKENS" ]; then
+        echo "!! RETRY SKIPPED: est. $EST tokens exceeds RETRY_MAX_TOKENS=$RETRY_MAX_TOKENS"
+        echo "   Re-run on purpose:  ARM=$COND MODEL=<model> $HERE/retry_failed.sh $TASK"
+        break
+      fi
       for d in "${FAILED[@]}"; do
         b=$(basename "$d")
         M="neurodesk/$(echo "$b" | awk -F'__' '{print $2}' | sed 's/^neurodesk-//')"
