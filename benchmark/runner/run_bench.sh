@@ -85,11 +85,18 @@ export TMPDIR="$RUN/tmp"; mkdir -p "$TMPDIR"
 # timeout. Lowering concurrency does not fix that, it only makes the hangs rarer
 # and longer.
 #
-# OPENCODE_ISOLATE=1 gives each run its own data directory, so there is nothing to
-# contend over. Costs a little startup time per run. Off by default because it
-# changes where token accounting lives -- finalize_run.py looks for the run-local
-# database first and falls back to the shared one.
-if [ "${OPENCODE_ISOLATE:-0}" = 1 ]; then
+# OPENCODE_ISOLATE gives each run its own data directory, so there is nothing to
+# contend over. Costs a little startup time per run, and finalize_run.py already
+# prefers the run-local database over the shared one for token accounting.
+#
+# ON BY DEFAULT since 2026-08-19. The shared database is not just a contention
+# risk, it is a growing one: 344 runs took it to ~1 GB, and Neurodesk compacts it
+# at every login. Compacting a file that size took ~7 minutes against a 2 minute
+# startup limit, so the server was killed mid-start and could not be spawned at
+# all. A day of the deadline went to diagnosing it as a memory fault, then as a
+# rogue MCP server, before an admin found it. Set OPENCODE_ISOLATE=0 to go back to
+# the shared database, but know that it is a per-run cost paid by the whole box.
+if [ "${OPENCODE_ISOLATE:-1}" = 1 ]; then
   export XDG_DATA_HOME="$RUN/.xdg-data"
   mkdir -p "$XDG_DATA_HOME"
 fi
