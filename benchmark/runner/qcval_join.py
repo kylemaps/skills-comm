@@ -239,8 +239,10 @@ def main():
                 if s not in subs:
                     subs.append(s)
     rows_out = []
+    submetric_vals = {}
     for s in subs:
         rated = []
+        per_run = []
         vals_good, vals_bad = [], []
         fg = fb = 0
         sfx = None
@@ -260,6 +262,7 @@ def main():
                 else:
                     fb += 1
             (vals_good if r["passed"] else vals_bad).append(val)
+            per_run.append((val, r["passed"], tuple(r["gates"])))
         if not rated:
             continue
         hiw = direction_from_ratings(rated, sfx)
@@ -269,12 +272,25 @@ def main():
         cut = "-"
         auc = "-"
         if sep:
-            auc = "%.2f" % sep[0]
-            cut = "%.4g  %.0f%%/%.0f%%" % (sep[1], 100 * sep[2], 100 * sep[3])
+            # AUC below 0.5 does not mean "no signal", it means the comparison
+            # points the wrong way: the metric separates good from bad, and the
+            # criterion is reading it backwards. Flipping and re-reporting turns
+            # "useless" into "reversed", which is a one-line fix rather than a
+            # metric to discard.
+            if sep[0] < 0.5:
+                sep = separation(vals_good, vals_bad, not hiw)
+                auc = "%.2f inv" % sep[0]
+            else:
+                auc = "%.2f" % sep[0]
+            if sep[2] >= 0.999 and sep[3] >= 0.999:
+                cut = "none"      # threshold at the minimum: catches all, flags all
+            else:
+                cut = "%.4g  %.0f%%/%.0f%%" % (sep[1], 100 * sep[2], 100 * sep[3])
         print("  %-30s%9s%9s%14s%7s%17s"
               % (s[:30], "%d/%d" % (fg, len(good)), "%d/%d" % (fb, len(bad)),
                  bound, auc, cut))
         rows_out.append(s)
+        submetric_vals[s] = (vals_good, vals_bad, hiw, per_run)
 
     # A sub-metric whose numeric value cannot be found is silently useless: it
     # still prints a fire rate but the threshold and AUC columns are blank,
@@ -292,6 +308,78 @@ def main():
     print("  sub-metric called FAIL. AUC 0.50 means the metric does not separate")
     print("  good from bad at any threshold. 'best cut' is the value maximising")
     print("  tpr minus fpr, with the rates it buys.")
+
+    # --- where the always-firing bounds actually sit ---------------------
+    # A sub-metric that rates FAIL on all 128 masks never flips, so the recovered
+    # bound is blank. What can still be said is that the bound lies outside the
+    # whole observed range, and by how far. That is the concrete number to send:
+    # not "this fires too often" but "every good mask here sits at X, and your
+    # bound demands Y".
+    always = [s for s in rows_out
+              if all(any(c.get("metrics", {}).get(s) == "FAIL"
+                         for c in r["criteria"]) for r in runs)]
+    if always:
+        print()
+        print("--- sub-metrics that rated FAIL on all %d masks ---" % len(runs))
+        print("  %-30s%22s%22s" % ("SUB-METRIC", "good masks (min-max)",
+                                   "bad masks (min-max)"))
+        for s in always:
+            vg, vb, hiw, pr = submetric_vals[s]
+            print("  %-30s%22s%22s"
+                  % (s[:30],
+                     "-" if not vg else "%.4g to %.4g" % (min(vg), max(vg)),
+                     "-" if not vb else "%.4g to %.4g" % (min(vb), max(vb))))
+        print()
+        print("  The bound lies outside both ranges, so no mask in this benchmark")
+        print("  could ever satisfy it.")
+
+    # --- is a perfect predictor actually circular? -----------------------
+    # Every mask here is the same subject, so head volume is constant and
+    # brain_to_head_ratio is brain volume rescaled. The grader's dominant gate is
+    # volume_plausible, a brain-volume threshold. A volume metric perfectly
+    # predicting a volume gate would be close to tautological, and quoting it as
+    # "her QC could catch every failure" would be wrong.
+    #
+    # The test: throw away every bad mask that tripped a volume gate and ask
+    # whether the metric still separates what is left. If it does, the signal is
+    # real. If there is nothing left, say so -- "this sample cannot answer it" is
+    # a result, and it is not the same as "it works".
+    VOLUME_GATES = {"volume_plausible", "no_catastrophic_core_loss",
+                    "no_focal_core_loss"}
+    gate_counts = Counter()
+    for r in bad:
+        gate_counts.update(r["gates"] or ["(none recorded)"])
+    print()
+    print("--- why the 47 failed, per the grader ---")
+    for g, n in gate_counts.most_common():
+        print("  %-34s %d" % (g, n))
+
+    residual = [r for r in bad if not (set(r["gates"]) & VOLUME_GATES)]
+    print()
+    print("--- circularity check: drop volume-gate failures, retest ---")
+    print("  %d of %d failures tripped a volume gate; %d did not"
+          % (len(bad) - len(residual), len(bad), len(residual)))
+    if len(residual) < 3:
+        print("  NOT ENOUGH LEFT TO TEST. Any metric that is a function of brain")
+        print("  volume cannot be shown here to predict anything beyond the volume")
+        print("  gate itself. Report those AUCs as confounded, not as validated.")
+    else:
+        keep = {r["run"] for r in residual}
+        print("  %-30s%12s%12s" % ("SUB-METRIC", "AUC all", "AUC resid"))
+        for s in rows_out:
+            vg, vb, hiw, pr = submetric_vals[s]
+            full = separation(vg, vb, hiw)
+            sub_bad = [v for (v, ok, gts) in pr
+                       if not ok and not (set(gts) & VOLUME_GATES)]
+            res = separation(vg, sub_bad, hiw)
+            if full is None:
+                continue
+            print("  %-30s%12s%12s"
+                  % (s[:30], "%.2f" % full[0],
+                     "-" if res is None else "%.2f" % res[0]))
+        print()
+        print("  A metric holding its AUC on the residual set is measuring")
+        print("  something the volume gate does not already capture.")
 
     # --- does the verdict track mask quality at all? ---------------------
     print("\n--- grader Dice by battery verdict ---")
