@@ -350,7 +350,7 @@ def main():
     for r in bad:
         gate_counts.update(r["gates"] or ["(none recorded)"])
     print()
-    print("--- why the 47 failed, per the grader ---")
+    print("--- why the %d failed, per the grader ---" % len(bad))
     for g, n in gate_counts.most_common():
         print("  %-34s %d" % (g, n))
 
