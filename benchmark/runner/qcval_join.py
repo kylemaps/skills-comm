@@ -304,8 +304,7 @@ def main():
                 w.writerow([r["run"], r["model"], r["arm"], r["qc"],
                             int(r["passed"]), r["dice"] if r["dice"] is not None else "",
                             ";".join(r["gates"])] + vals)
-        print("
-  wrote %s (%d rows)" % (a.csv, len(runs)))
+        print(chr(10) + "  wrote %s (%d rows)" % (a.csv, len(runs)))
 
 if __name__ == "__main__":
     main()
