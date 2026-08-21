@@ -14,13 +14,25 @@ the JSONs already on disk, exactly, with no re-run and no re-derivation.
 
 IT DEPENDS ON A MODEL OF HER LOGIC, SO THE MODEL IS TESTED FIRST
 ---------------------------------------------------------------
-The recomputation assumes each criterion is a strict AND over its sub-metrics
-and the verdict a strict AND over criteria. That is inferred from reading her
-output, not from her source, so `verify()` checks it against all 210 observed
-(sub-metric ratings -> criterion rating) pairs before anything is simulated. If
-a single mask disagrees the script says so and stops: a simulated operating
-point built on the wrong logic is worse than no operating point, because it
-would look like a measurement.
+The recomputation needs to know how sub-metric ratings combine. `verify()`
+checks the assumed rule against every observed (sub-metric ratings -> criterion
+rating) pair before anything is simulated, and stops if one mask disagrees: a
+simulated operating point built on the wrong logic is worse than no operating
+point, because it would look like a measurement.
+
+That check earned its place immediately. The first model tried was a strict AND
+over two values, and it was rejected on 84 of 640 criterion ratings -- her scale
+is three-valued, and a criterion whose worst sub-metric is BORDERLINE is rated
+BORDERLINE rather than FAIL. The rule that survives verification is
+worst-rating-wins: PASS < BORDERLINE < FAIL, criterion = worst sub-metric,
+verdict = worst criterion.
+
+Overrides here are binary by construction, since we are proposing a hard bound
+and have no way to recover the width of her borderline band. So a swept
+sub-metric contributes only PASS or FAIL, while every other sub-metric keeps its
+recorded three-valued rating. Outcomes are reported as PASS / BORDERLINE / FAIL
+rather than collapsed, because whether BORDERLINE counts as acceptance is her
+call and not ours.
 
 WHAT THE SWEEP IS AND IS NOT
 ----------------------------
@@ -73,8 +85,20 @@ def load(qcval_dir, runs_dir):
     return out
 
 
+# Her scale is ordered, not boolean. UNVERIFIED is not on it -- the dura
+# criterion reports UNVERIFIED because the script genuinely cannot measure it,
+# which is an absence of evidence and must not be folded in as a rating.
+RANK = {"PASS": 0, "BORDERLINE": 1, "FAIL": 2}
+UNRANK = {v: k for k, v in RANK.items()}
+
+
+def worst(ratings):
+    vals = [RANK[r] for r in ratings if r in RANK]
+    return UNRANK[max(vals)] if vals else None
+
+
 def verify(recs):
-    """Is a criterion the AND of its sub-metrics, and the verdict the AND of those?
+    """Does worst-rating-wins reproduce every criterion rating and every verdict?
 
     Returns (n_checked, [disagreements]). Anything non-empty invalidates the
     simulation below, so the caller must stop.
@@ -82,27 +106,22 @@ def verify(recs):
     bad = []
     n = 0
     for r in recs:
-        crits = r["q"].get("criteria") or []
         verdict_parts = []
-        for c in crits:
+        for c in r["q"].get("criteria") or []:
             subs = (c.get("metrics") or {})
             if not subs:
                 continue
             n += 1
-            expect = "PASS" if all(v == "PASS" for v in subs.values()) else "FAIL"
-            got = c.get("rating")
+            expect, got = worst(subs.values()), c.get("rating")
             if got != expect:
                 bad.append((r["run"], c.get("criterion"), got, expect, dict(subs)))
             verdict_parts.append(got)
-        # UNVERIFIED criteria carry no sub-metrics and are excluded above; the
-        # verdict is checked only against the rated ones.
         if verdict_parts:
-            ev = "PASS" if all(v == "PASS" for v in verdict_parts) else "FAIL"
-            gv = str(r["q"].get("numeric_verdict") or "").upper()
-            if gv not in ("PASS", "FAIL") and ev == "FAIL":
-                pass          # BORDERLINE is a softening of FAIL, not a conflict
-            elif gv != ev:
-                bad.append((r["run"], "(verdict)", gv, ev, {}))
+            n += 1
+            expect = worst(verdict_parts)
+            got = str(r["q"].get("numeric_verdict") or "").upper()
+            if got != expect:
+                bad.append((r["run"], "(verdict)", got, expect, {}))
     return n, bad
 
 
@@ -117,30 +136,34 @@ def simulate(recs, overrides):
     """Recompute each verdict with {sub_metric: (direction, bound)} applied.
 
     direction 'high' means FAIL when value > bound; 'low' means FAIL when
-    value < bound. Sub-metrics not overridden keep their recorded rating.
+    value < bound. Sub-metrics not overridden keep their recorded rating,
+    BORDERLINE included, so the only thing the sweep changes is the bound.
     """
     res = []
     for r in recs:
-        ok = True
+        crit_ratings = []
         for c in r["q"].get("criteria") or []:
-            for sub, rating in (c.get("metrics") or {}).items():
+            subs = (c.get("metrics") or {})
+            if not subs:
+                continue
+            ratings = []
+            for sub, rating in subs.items():
                 if sub in overrides:
                     d, bound = overrides[sub]
                     v = sub_value(sub, r["q"].get("metrics") or {})
-                    if v is None:
-                        continue
-                    rating = "FAIL" if ((v > bound) if d == "high"
-                                        else (v < bound)) else "PASS"
-                if rating != "PASS":
-                    ok = False
-        res.append((r["run"], ok, r["passed"]))
+                    if v is not None:
+                        rating = "FAIL" if ((v > bound) if d == "high"
+                                            else (v < bound)) else "PASS"
+                ratings.append(rating)
+            crit_ratings.append(worst(ratings))
+        res.append((r["run"], worst(crit_ratings), r["passed"]))
     return res
 
 
 def confusion(res):
     t = defaultdict(int)
-    for _run, qc_ok, g_ok in res:
-        t[(qc_ok, g_ok)] += 1
+    for _run, verdict, g_ok in res:
+        t[(verdict, g_ok)] += 1
     return t
 
 
@@ -182,17 +205,21 @@ def main():
         cands += [(vals[i] + vals[i + 1]) / 2.0 for i in range(len(vals) - 1)]
         cands += [vals[-1] + abs(vals[-1] or 1) * 0.1]
         print("\n--- sweeping %s (%s), %d distinct values ---" % (sub, d, len(vals)))
-        print("  %12s%10s%10s%10s%10s%12s"
-              % ("bound", "qcPASS", "agree", "false+", "false-", "accuracy"))
+        print("  %12s%22s%22s%14s" % ("bound", "verdict on GOOD masks",
+                                      "verdict on BAD masks", "would accept"))
+        print("  %12s%22s%22s%14s" % ("", "P / B / F", "P / B / F", "P+B of good"))
         for b in cands:
             t = confusion(simulate(recs, {sub: (d, b)}))
-            tp, tn = t[(True, True)], t[(False, False)]
-            fp, fn = t[(True, False)], t[(False, True)]
-            tot = tp + tn + fp + fn
-            print("  %12.4g%10d%10d%10d%10d%11.0f%%"
-                  % (b, tp + fp, tp + tn, fp, fn, 100.0 * (tp + tn) / tot))
-        print("  qcPASS = masks the battery would accept. false+ = accepted but the")
-        print("  grader rejected. false- = rejected but the grader accepted.")
+            g = [t[(v, True)] for v in ("PASS", "BORDERLINE", "FAIL")]
+            bd = [t[(v, False)] for v in ("PASS", "BORDERLINE", "FAIL")]
+            ng = sum(g) or 1
+            print("  %12.4g%22s%22s%13.0f%%"
+                  % (b, "%d / %d / %d" % tuple(g), "%d / %d / %d" % tuple(bd),
+                     100.0 * (g[0] + g[1]) / ng))
+        print("  Columns are the battery's verdict, split by what the grader said.")
+        print("  A bound is useful when the GOOD column moves toward P while the")
+        print("  BAD column stays at F. Whether BORDERLINE counts as acceptance is")
+        print("  hers to decide, so it is reported and never folded in.")
 
 
 if __name__ == "__main__":
