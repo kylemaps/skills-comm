@@ -276,6 +276,18 @@ def main():
                  bound, auc, cut))
         rows_out.append(s)
 
+    # A sub-metric whose numeric value cannot be found is silently useless: it
+    # still prints a fire rate but the threshold and AUC columns are blank,
+    # which reads as "no signal" rather than "not measured". Say which, and
+    # show the available keys, so a naming mismatch gets fixed not misread.
+    unmapped = [s for s in subs
+                if not any(metric_for(s, r["metrics"])[1] is not None for r in runs)]
+    if unmapped:
+        print()
+        print("  !! no numeric value found for: %s" % ", ".join(unmapped))
+        print("     metric keys present: %s"
+              % ", ".join(sorted(runs[0]["metrics"])))
+
     print("\n  onGOOD is the false alarm rate: masks the grader accepted that this")
     print("  sub-metric called FAIL. AUC 0.50 means the metric does not separate")
     print("  good from bad at any threshold. 'best cut' is the value maximising")
