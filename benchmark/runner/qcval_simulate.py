@@ -38,11 +38,19 @@ WHAT THE SWEEP IS AND IS NOT
 ----------------------------
 It reports, for each candidate bound, how the battery's verdict would line up
 with the grader. That is an upper bound on achievable agreement, chosen with
-full sight of the answers, on masks that are far fewer than the run count
-suggests -- the 81 good 7T masks are 6 distinct masks. Treat the output as
-"here is where the bound would have to sit to be reachable at all", not as a
-calibration. The honest use is to hand her the shape of the curve and let her
-pick, against her own definition of a good mask.
+full sight of the answers, over far fewer independent masks than the run count
+suggests: md5 of the mask files puts the 81 accepted 7T runs at 13 distinct
+masks, with one of them accounting for 51 runs. Deterministic tools on one input
+converge, so runs replicate outputs even though each run is an independent
+trajectory.
+
+Treat the output as "here is where the bound would have to sit to be reachable
+at all", not as a calibration. The honest use is to hand her the shape of the
+curve and let her pick against her own definition of a good mask.
+
+Count distinct masks by hashing the files, not by comparing printed metrics.
+Rounded metric values collapse masks that genuinely differ, which understated
+the count here as 6 before the hashes were checked.
 """
 import argparse
 import glob
