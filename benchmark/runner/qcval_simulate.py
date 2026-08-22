@@ -54,6 +54,7 @@ the count here as 6 before the hashes were checked.
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 from collections import defaultdict
@@ -63,6 +64,7 @@ FAIL_VERDICTS = {"invalid", "unacceptable", "marginal", "fail", "failed", "error
 
 
 def grader_passed(run_dir):
+    """(passed, gate_failures) or None if the run was never graded."""
     ej = os.path.join(run_dir, "envelope.json")
     if not os.path.exists(ej):
         return None
@@ -71,8 +73,27 @@ def grader_passed(run_dir):
             e = json.load(fh)
     except Exception:
         return None
-    return (bool(e.get("valid")) and float(e.get("score") or 0) > 0
-            and str(e.get("verdict") or "").lower() not in FAIL_VERDICTS)
+    ok = (bool(e.get("valid")) and float(e.get("score") or 0) > 0
+          and str(e.get("verdict") or "").lower() not in FAIL_VERDICTS)
+    return ok, list(e.get("gate_failures") or [])
+
+
+def mask_md5(run_dir):
+    """Hash the mask so replicated outputs can be counted once.
+
+    Deterministic tools on one input converge, so 81 accepted runs can be far
+    fewer distinct masks -- 13 here. Counting distinct outputs off printed metric
+    values instead of the files understates it, because rounding merges masks
+    that differ.
+    """
+    m = glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+    if not m:
+        return None
+    h = hashlib.md5()
+    with open(m[0], "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def load(qcval_dir, runs_dir):
@@ -86,10 +107,12 @@ def load(qcval_dir, runs_dir):
                 q = json.load(fh)
         except Exception:
             continue
-        ok = grader_passed(os.path.join(runs_dir, name))
-        if ok is None:
+        rd = os.path.join(runs_dir, name)
+        g = grader_passed(rd)
+        if g is None:
             continue
-        out.append({"run": name, "q": q, "passed": ok})
+        out.append({"run": name, "q": q, "passed": g[0], "gates": g[1],
+                    "md5": mask_md5(rd)})
     return out
 
 
@@ -232,12 +255,50 @@ def main():
 
     relax = {s: ("pass", None) for s in a.relax}
     if relax:
-        t = confusion(simulate(recs, relax))
+        res = simulate(recs, relax)
+        t = confusion(res)
         print("")
         print("--- with %s forced to PASS ---" % ", ".join(a.relax))
         print("  %-12s%14s%14s" % ("verdict", "grader PASS", "grader FAIL"))
         for v in ("PASS", "BORDERLINE", "FAIL"):
             print("  %-12s%14d%14d" % (v, t[(v, True)], t[(v, False)]))
+
+        # The same table over DISTINCT masks. Runs replicate outputs, so a
+        # run-level count reports 51 independent successes where there is one
+        # mask seen 51 times. Both are true and only one of them is a sample
+        # size.
+        by = {r["run"]: r for r in recs}
+        seen = {}
+        for run, verdict, g_ok in res:
+            h = by[run]["md5"] or run
+            seen[h] = (verdict, g_ok)
+        dt = defaultdict(int)
+        for v, g in seen.values():
+            dt[(v, g)] += 1
+        print("")
+        print("  over DISTINCT masks (%d of %d runs):" % (len(seen), len(res)))
+        print("  %-12s%14s%14s" % ("verdict", "grader PASS", "grader FAIL"))
+        for v in ("PASS", "BORDERLINE", "FAIL"):
+            print("  %-12s%14d%14d" % (v, dt[(v, True)], dt[(v, False)]))
+
+        # A mask the battery would accept and the grader rejected is the only
+        # error that matters for an unattended agent -- it stops there. Which
+        # gate caught it says whether the battery is missing something it
+        # measures or something it openly cannot.
+        fa = [by[run] for run, verdict, g_ok in res
+              if verdict == "PASS" and not g_ok]
+        if fa:
+            gc = defaultdict(int)
+            for r in fa:
+                for g in (r["gates"] or ["(none recorded)"]):
+                    gc[g] += 1
+            print("")
+            print("  %d run(s) the battery would ACCEPT but the grader rejected;"
+                  % len(fa))
+            print("  %d distinct mask(s). Gates they tripped:"
+                  % len({r["md5"] or r["run"] for r in fa}))
+            for g in sorted(gc, key=lambda k: -gc[k]):
+                print("    %-34s %d" % (g, gc[g]))
 
     for spec in a.sweep:
         sub, _, d = spec.partition(":")
