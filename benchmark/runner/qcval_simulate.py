@@ -150,10 +150,13 @@ def simulate(recs, overrides):
             for sub, rating in subs.items():
                 if sub in overrides:
                     d, bound = overrides[sub]
-                    v = sub_value(sub, r["q"].get("metrics") or {})
-                    if v is not None:
-                        rating = "FAIL" if ((v > bound) if d == "high"
-                                            else (v < bound)) else "PASS"
+                    if d == "pass":
+                        rating = "PASS"
+                    else:
+                        v = sub_value(sub, r["q"].get("metrics") or {})
+                        if v is not None:
+                            rating = "FAIL" if ((v > bound) if d == "high"
+                                                else (v < bound)) else "PASS"
                 ratings.append(rating)
             crit_ratings.append(worst(ratings))
         res.append((r["run"], worst(crit_ratings), r["passed"]))
@@ -175,6 +178,10 @@ def main():
     ap.add_argument("--sweep", action="append", default=[],
                     metavar="SUB:DIR", help="sub-metric and direction to sweep, "
                                             "e.g. brain_to_head_ratio_low:low")
+    ap.add_argument("--relax", action="append", default=[], metavar="SUB",
+                    help="force this sub-metric to PASS; repeatable. Use to ask "
+                         "what the battery would say if a bound were fixed, "
+                         "without asserting where the new bound goes")
     a = ap.parse_args()
 
     recs = load(a.qcval_dir, a.runs_dir)
@@ -190,6 +197,39 @@ def main():
             print("    MISMATCH %s / %s: recorded %s, model says %s %s" % row)
         raise SystemExit("model rejected -- simulation would be fiction, stopping")
     print("    model holds, simulation below is exact")
+
+    # --- which sub-metrics reject the masks the grader accepted? ---------
+    # Sweeping one bound while another still rejects everything produces a table
+    # of zeroes that looks like "no bound helps", when it means "you moved the
+    # wrong one". Find the blockers from the data instead of by eye: the first
+    # attempt at this swept two bounds and missed a third that also fired on
+    # every accepted mask.
+    good = [r for r in recs if r["passed"]]
+    blockers = defaultdict(int)
+    for r in good:
+        for c in r["q"].get("criteria") or []:
+            for sub, rating in (c.get("metrics") or {}).items():
+                if rating != "PASS":
+                    blockers[sub] += 1
+    print("")
+    print("--- sub-metrics that reject masks the grader ACCEPTED (n=%d) ---"
+          % len(good))
+    if not blockers:
+        print("  none")
+    for sub in sorted(blockers, key=lambda s: -blockers[s]):
+        flag = "  <-- rejects every one" if blockers[sub] == len(good) else ""
+        print("  %-30s %3d/%d%s" % (sub, blockers[sub], len(good), flag))
+    print("  Any sub-metric rejecting all of them is a hard blocker: while it")
+    print("  stands, no change to any other bound can make a mask pass.")
+
+    relax = {s: ("pass", None) for s in a.relax}
+    if relax:
+        t = confusion(simulate(recs, relax))
+        print("")
+        print("--- with %s forced to PASS ---" % ", ".join(a.relax))
+        print("  %-12s%14s%14s" % ("verdict", "grader PASS", "grader FAIL"))
+        for v in ("PASS", "BORDERLINE", "FAIL"):
+            print("  %-12s%14d%14d" % (v, t[(v, True)], t[(v, False)]))
 
     for spec in a.sweep:
         sub, _, d = spec.partition(":")
@@ -209,7 +249,9 @@ def main():
                                       "verdict on BAD masks", "would accept"))
         print("  %12s%22s%22s%14s" % ("", "P / B / F", "P / B / F", "P+B of good"))
         for b in cands:
-            t = confusion(simulate(recs, {sub: (d, b)}))
+            ov = dict(relax)
+            ov[sub] = (d, b)
+            t = confusion(simulate(recs, ov))
             g = [t[(v, True)] for v in ("PASS", "BORDERLINE", "FAIL")]
             bd = [t[(v, False)] for v in ("PASS", "BORDERLINE", "FAIL")]
             ng = sum(g) or 1
