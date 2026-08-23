@@ -111,7 +111,11 @@ def main():
         for t in set(tools(r)):
             per_tool[t][0] += 1
             per_tool[t][1] += 1 if passed(r) else 0
-    for t in sorted(per_tool, key=lambda t: -per_tool[t][0]):
+    # Tie-break on the name. per_tool is populated by iterating a set of tool
+    # names, and Python randomises string hashing per process, so a count-only
+    # key put two 6-run tools in a different order on consecutive runs of
+    # identical data -- which is indistinguishable from a real change in a diff.
+    for t in sorted(per_tool, key=lambda t: (-per_tool[t][0], t)):
         n, k = per_tool[t]
         print("  %-14s %s" % (t, rate(k, n)))
     notool = [r for r in rows if not tools(r)]

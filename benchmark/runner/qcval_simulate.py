@@ -247,7 +247,7 @@ def main():
           % len(good))
     if not blockers:
         print("  none")
-    for sub in sorted(blockers, key=lambda s: -blockers[s]):
+    for sub in sorted(blockers, key=lambda s: (-blockers[s], s)):
         flag = "  <-- rejects every one" if blockers[sub] == len(good) else ""
         print("  %-30s %3d/%d%s" % (sub, blockers[sub], len(good), flag))
     print("  Any sub-metric rejecting all of them is a hard blocker: while it")
@@ -297,7 +297,7 @@ def main():
                   % len(fa))
             print("  %d distinct mask(s). Gates they tripped:"
                   % len({r["md5"] or r["run"] for r in fa}))
-            for g in sorted(gc, key=lambda k: -gc[k]):
+            for g in sorted(gc, key=lambda k: (-gc[k], k)):
                 print("    %-34s %d" % (g, gc[g]))
 
     for spec in a.sweep:

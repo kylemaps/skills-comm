@@ -75,7 +75,7 @@ def table(title, rows, width=42):
     if not rows:
         return
     print("\n=== %s %s" % (title, "=" * max(0, 60 - len(title))))
-    for k in sorted(rows, key=lambda k: -(rows[k][1] + rows[k][2])):
+    for k in sorted(rows, key=lambda k: (-(rows[k][1] + rows[k][2]), k)):
         n, ti, to, miss = rows[k]
         tot = ti + to
         scored = n - miss
@@ -100,8 +100,8 @@ def full_table(per_model):
     print("  %-16s %5s %11s %11s %10s %11s %12s"
           % ("MODEL", "RUNS", "IN", "CACHE-RD", "OUT", "BILLED", "PROCESSED"))
     cached, uncached = [], []
-    for m in sorted(per_model, key=lambda k: -statistics.median(
-            [r[0] + r[1] + r[2] for r in per_model[k]])):
+    for m in sorted(per_model, key=lambda k: (-statistics.median(
+            [r[0] + r[1] + r[2] for r in per_model[k]]), k)):
         rows = per_model[m]
         med = lambda i: statistics.median([r[i] for r in rows])  # noqa: E731
         i_, o_, rz, ca = med(0), med(1), med(2), med(3)
