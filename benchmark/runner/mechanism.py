@@ -15,20 +15,35 @@ down the rows (does the tool decide the outcome?) and across the columns (does
 the skill change which tool is reached?).
 
 On structural-brain-extraction-7t the answer was unambiguous: runs that reached
-SynthStrip or HD-BET passed 81 of 107, runs that used only FSL BET passed 0 of
-20, and the skill lifted robust-tool use from 67% to 94% (p=0.002) while moving
-the pass rate GIVEN a robust tool not at all (75% to 80%, p=0.77). The measured
-effect of the skill is tool selection.
+a panel tool passed 81 of 122, runs that used only FSL BET passed 0 of 25, and
+the skill lifted panel-tool use from 62% to 94% (p=0.0002) while moving the pass
+rate GIVEN a panel tool not at all (68% to 74%, p=0.61). The measured effect of
+the skill on 7T is tool selection.
+
+It is not uniform across tasks, and saying so was the first draft's mistake.
+Motion moves selection 32% to 74% (p=0.0000) AND execution 56% to 86%
+(p=0.029), though that second one is soft after many tests and is confounded by
+`methods` recording an invocation: an agent that called SynthStrip, hit an error
+and fell back to BET still counts as having reached it. Stroke is underpowered
+to decompose -- neither mediator separates, and neither did its ITT effect.
+
+And BET is not a bad tool. BET-only passes 0/25 on 7T, 0/25 on stroke, and 29/44
+on motion. What the skill supplies is knowing when the default will not work.
 
 WHY --robust IS NOT FITTED FROM THE DATA
 ----------------------------------------
 Picking the "robust" set by which tools happen to pass would make the mediation
-circular. For 7T the split is external and predates our runs: the grader pack's
-own PROVENANCE.md documents FSL BET as a catastrophic outlier at 7T (546 cm3,
-about half a brain) that is kept as a scored candidate specifically to validate
-the grader. So --robust encodes the task's published design, not our results.
-With no --robust the script only reports per-tool pass rates and draws no
-mediation at all.
+circular. The split is external and predates our runs: each grader pack's
+PROVENANCE.md curates a reference panel by mutual coherence and records what it
+dropped. All four packs keep HD-BET, AFNI and SynthStrip; the 7T pack documents
+FSL BET as a catastrophic outlier (546 cm3, about half a brain) kept as a scored
+candidate specifically to validate the grader.
+
+The result is also insensitive to where that boundary is drawn -- adding or
+removing AFNI changes 7T and stroke not at all and motion by one run -- because
+essentially every run outside the panel used BET alone.
+
+With no --robust the script reports per-tool pass rates and claims no mechanism.
 
 WHAT THIS IS NOT
 ----------------
