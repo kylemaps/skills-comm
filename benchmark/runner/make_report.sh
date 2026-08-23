@@ -129,6 +129,19 @@ for pair in "out:7t" "out_nodura:nodura"; do
   echo "--- qcval $lbl"
 done
 
+# --- normalise paths so a diff shows only numbers ----------------------
+# Several tools echo where they wrote to, which lands inside the captured
+# output. Two reports of identical data then differ on every one of those lines
+# and the diff drowns the thing it exists to surface. Replace the two paths that
+# vary with tokens. The manifest is excluded on purpose: recording the real
+# paths is its job.
+for f in "$OUT"/*.txt; do
+  case "$(basename "$f")" in
+    00_MANIFEST.txt) continue ;;
+  esac
+  sed -i "s|$OUT|<OUT>|g; s|$RUNS|<RUNS>|g" "$f"
+done
+
 # --- did anything fail? -----------------------------------------------
 # Each analysis captured stderr into its own file, so a crash lands as a
 # traceback inside an otherwise plausible-looking report. Surface it here
