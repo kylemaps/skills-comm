@@ -371,7 +371,14 @@ def load_run(run_dir, task, tokens_available=False):
         "arm": rec.get("condition", base[2] if len(base) > 2 else "?"),
         "rep": str(rec.get("repeat", base[3].lstrip("r") if len(base) > 3 else "?")),
         "exit_code": rec.get("exit_code"),
-        "output_present": bool(rec.get("output_present")),
+        # Trust run.json, but fall back to looking. This flag decides whether a
+        # run with no envelope reads as NOT-GRADED (an unfinished measurement,
+        # excluded) or NO-OUTPUT (a genuine failure, scored 0) -- so a missing
+        # or stale field silently converts a finished mask into a failure. That
+        # is the same family as the bug that reported 7t-nodura as 0/70 with 50
+        # masks on disk, and the disk is the ground truth here.
+        "output_present": bool(rec.get("output_present")) or bool(
+            glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))),
         "skill_loads": rec.get("skill_loads", 0),
         "skills_seen": rec.get("skills_seen") or [],
         "skills_installed": rec.get("skills_installed", ""),
