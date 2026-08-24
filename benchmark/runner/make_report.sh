@@ -156,6 +156,17 @@ else
   echo "=== OK: $(ls -1 "$OUT" | wc -l) files, no tracebacks"
 fi
 echo "=== $OUT"
+
+# Print the actual previous report rather than telling the reader to work it
+# out. The default output directory is named for the UTC date, so a session that
+# straddles midnight leaves yesterday's report where today's is looked for --
+# which has now sent someone chasing a missing directory twice, once here and
+# once in make_pack.
+PREV=$(ls -1d "$(dirname "$OUT")"/*/ 2>/dev/null | grep -v "^$OUT/\?$" | sort | tail -1)
 echo
-echo "To audit against the previous report:"
-echo "  diff -r <previous_report_dir> $OUT"
+if [ -n "$PREV" ] && [ "$(readlink -f "$PREV")" != "$(readlink -f "$OUT")" ]; then
+  echo "To audit against the previous report:"
+  echo "  diff -r ${PREV%/} $OUT"
+else
+  echo "No earlier report to diff against; this is the baseline."
+fi
