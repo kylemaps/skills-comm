@@ -148,18 +148,35 @@ def main():
             t = sum(billed(r) for r in rs)
             if not k or not bk:
                 continue
+            bp = sum(processed(r) for r in b)
+            tpz = sum(processed(r) for r in rs)
             per_run = (t / len(rs)) / (bt / len(b)) if bt else 0
             per_pass = (t / k) / (bt / bk) if bt else 0
+            proc_pass = (tpz / k) / (bp / bk) if bp else 0
             print("")
             print("  %s vs %s:" % (x, a.baseline))
-            print("    an attempt costs      %.2fx" % per_run)
-            print("    a usable result costs %.2fx" % per_pass)
-            if per_pass < 1 <= per_run:
-                print("    -> more expensive per attempt, CHEAPER per result")
+            print("    an attempt costs           %.2fx" % per_run)
+            print("    a usable result costs      %.2fx  (billed)" % per_pass)
+            print("    a usable result costs      %.2fx  (processed)" % proc_pass)
+
+            # The two accountings can point opposite ways, and on this data four
+            # of six comparisons do. Cache reads are usually discounted but not
+            # free, and this gateway publishes no prices, so there is no way to
+            # pick between them from here. When they disagree, "the skill is
+            # cheaper" and "the skill is dearer" are both defensible from the
+            # same runs -- which means neither is a finding, and saying so is
+            # the only honest output.
+            if (per_pass < 1) != (proc_pass < 1):
+                print("    -> ACCOUNTING-DEPENDENT: billed and processed disagree")
+                print("       on the sign. Do not report a direction for this one")
+                print("       without per-model pricing from the gateway.")
+            elif per_pass < 1 <= per_run:
+                print("    -> more expensive per attempt, CHEAPER per result,")
+                print("       under both accountings")
             elif per_pass < 1:
-                print("    -> cheaper both ways")
-            elif per_run < 1 <= per_pass:
-                print("    -> cheaper per attempt, more expensive per result")
+                print("    -> cheaper both ways, under both accountings")
+            else:
+                print("    -> more expensive per result under both accountings")
 
     if a.by_model:
         models = sorted({r["model"] for r in rows})
