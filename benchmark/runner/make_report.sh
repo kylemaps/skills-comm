@@ -99,6 +99,8 @@ for t in "${TASKS[@]}"; do
       > "$OUT/20_gates_$t.txt" 2>&1
   python "$HERE/mechanism.py" "$OUT/runs_$t.csv" --robust "$ROBUST" --by-model \
       > "$OUT/30_mechanism_$t.txt" 2>&1
+  python "$HERE/economics.py" "$OUT/runs_$t.csv" --by-model \
+      > "$OUT/31_economics_$t.txt" 2>&1
   echo "--- $t"
 done
 

@@ -132,6 +132,39 @@ section 5.
 
 ---
 
+## 3b. Cost per usable result
+
+Source: `31_economics_<task>.txt`
+
+Only two comparisons survive both token accountings, and only those two are
+quotable.
+
+| claim | billed | processed |
+|---|---|---|
+| 7T skill A: a usable mask costs **half** as much | 0.50x | 0.63x |
+| motion skill A | 0.68x | 0.79x |
+
+An attempt costs 0.84x on 7T and 0.98x on motion, so on these two tasks the
+skill is cheaper per attempt *and* markedly cheaper per result.
+
+**Four of six comparisons flip sign between the two accountings and must not be
+given a direction at all:** 7T skill B (0.92x / 1.08x), stroke skill A
+(1.24x / 0.76x), stroke skill B (0.88x / 1.09x), nodura skill A (1.30x / 0.89x).
+Cache reads are usually discounted but not free, and the gateway publishes no
+prices, so both readings are defensible from the same runs. `economics.py`
+refuses to state a direction for these rather than printing whichever was
+computed first.
+
+**This is the strongest practical argument for asking Steffen to configure
+per-model pricing in LiteLLM.** The gateway currently returns `cost: 0.0`. With
+prices, four ambiguous comparisons resolve and the cost story covers all four
+tasks instead of two.
+
+`min/PASS` is in the same files but is inflated wherever runs hit the 45-minute
+timeout, worst in `nodura / kimi / skill A`. Tokens are the reliable half.
+
+---
+
 ## 4. Integrity checks
 
 Source: recorded in `_local/SUCCESS.md`; re-runnable from the runs directory.
