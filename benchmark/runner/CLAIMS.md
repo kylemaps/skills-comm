@@ -165,6 +165,55 @@ timeout, worst in `nodura / kimi / skill A`. Tokens are the reliable half.
 
 ---
 
+## 3c. Do skills help weak models most? No.
+
+Source: `capability.py runs_<task>.csv --outcome pass|tool`
+
+The claim is attractive and it is **not supported**. It does not fail by being
+noisy, it fails by reversing sign between tasks.
+
+| task, outcome | absolute favours | RFR favours | verdict |
+|---|---|---|---|
+| 7T, pass | stronger (+37 vs +15 pp) | stronger (100% vs 17%) | **stronger models gain more** |
+| motion, pass | weaker (+55 vs +7 pp) | weaker (85% vs 29%) | **weaker models gain more** |
+| 7T, tool | weaker | stronger | ceiling, undecidable |
+| motion, tool | weaker | stronger | ceiling, undecidable |
+
+On 7T the two weakest models are the two that barely improve: minimax 0/10 to
+2/10 and qwen3.5 2/10 to 3/10, against RFR 100% for all three stronger models.
+
+**Report both metrics or neither.** Absolute improvement is bounded by headroom,
+so ranking models by it ranks them by how much room they had. Relative failure
+reduction is scale-free. Where they disagree, the ceiling is doing the talking.
+
+**Structural limit:** only one model has a low baseline on any given task, so
+"weak models" is close to n=1 wearing a group label. More weak models in the
+panel is a run-budget question, not an analysis one.
+
+## 3d. The skill can make things worse, and did
+
+Source: `31_economics_...`, `capability.py runs_...-motion.csv`
+
+```
+minimax-m2 on motion   pass rate   10/10 -> 7/10   (-30 pp, p=0.21)
+minimax-m2 on motion   tool choice  1/10 -> 9/10   (+80 pp, p=0.001)
+```
+
+The skill routed minimax off BET onto panel tools almost perfectly, and its pass
+rate fell. BET works on motion (BET-only passes 29/44 there, against 0/25 on 7T
+and 0/25 on stroke), so on this task the routing moved a model that was already
+at 10/10 to something that served it worse.
+
+This is the falsification the mechanism claim needed and we did not have to
+build it -- it was already in the runs. It says the mechanism is real *and* has
+a cost: a skill that routes on "which tool is generally robust" will sometimes
+route away from a tool that was working.
+
+Not significant on its own (p=0.21, one model, one task). Quote it as the
+direction to check next, not as an established harm.
+
+---
+
 ## 4. Integrity checks
 
 Source: recorded in `_local/SUCCESS.md`; re-runnable from the runs directory.

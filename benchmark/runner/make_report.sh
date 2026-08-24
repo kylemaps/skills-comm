@@ -101,6 +101,10 @@ for t in "${TASKS[@]}"; do
       > "$OUT/30_mechanism_$t.txt" 2>&1
   python "$HERE/economics.py" "$OUT/runs_$t.csv" --by-model \
       > "$OUT/31_economics_$t.txt" 2>&1
+  python "$HERE/capability.py" "$OUT/runs_$t.csv" --outcome pass \
+      > "$OUT/32_capability_pass_$t.txt" 2>&1
+  python "$HERE/capability.py" "$OUT/runs_$t.csv" --outcome tool \
+      > "$OUT/32_capability_tool_$t.txt" 2>&1
   echo "--- $t"
 done
 

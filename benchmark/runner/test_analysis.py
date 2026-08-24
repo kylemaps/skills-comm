@@ -279,6 +279,62 @@ class TestQcvalSimulate(unittest.TestCase):
         self.assertIn("over DISTINCT masks", out)
 
 
+class TestCapability(unittest.TestCase):
+    """The ceiling effect must be surfaced, not silently resolved."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def write(self, spec):
+        p = os.path.join(self.d, "runs_t.csv")
+        cols = ["task", "model", "arm", "rep", "valid", "passed", "methods"]
+        with open(p, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            for model, arm, k, n in spec:
+                for i in range(n):
+                    w.writerow({"task": "t", "model": model, "arm": arm,
+                                "rep": str(i), "valid": "1",
+                                "passed": "1" if i < k else "0",
+                                "methods": "synthstrip"})
+        return p
+
+    def test_flags_when_the_two_metrics_disagree(self):
+        # Weak model gains more in percentage points; strong model removes a
+        # larger share of its failures. Ranking on either alone is an artefact
+        # of the other, so the script must refuse the claim.
+        p = self.write([("weak", "env-only", 1, 10), ("weak", "env+skill", 7, 10),
+                        ("strong", "env-only", 8, 10), ("strong", "env+skill", 10, 10)])
+        out = run("capability.py", p)
+        self.assertIn("THE TWO METRICS DISAGREE", out)
+
+    def test_no_flag_when_both_metrics_agree(self):
+        # Both point the same way, so there is nothing to warn about and a
+        # warning here would train the reader to ignore it.
+        p = self.write([("weak", "env-only", 1, 10), ("weak", "env+skill", 2, 10),
+                        ("strong", "env-only", 5, 10), ("strong", "env+skill", 10, 10)])
+        out = run("capability.py", p)
+        self.assertNotIn("THE TWO METRICS DISAGREE", out)
+
+    def test_rfr_undefined_at_a_perfect_baseline(self):
+        # No failures to remove. Must print "-" rather than divide by zero or
+        # invent a number that would then get averaged.
+        c = load("capability")
+        self.assertIsNone(c.rfr(10, 10, 10, 10))
+        self.assertEqual(c.rfr(0, 10, 10, 10), 100.0)
+        self.assertEqual(c.rfr(5, 10, 5, 10), 0.0)
+
+    def test_skill_making_things_worse_is_reported_as_negative(self):
+        # minimax on motion went 10/10 to 7/10. A harm must not be clipped to
+        # zero or dropped, because it is the only falsification we have.
+        p = self.write([("m", "env-only", 10, 10), ("m", "env+skill", 7, 10)])
+        out = run("capability.py", p)
+        self.assertIn("-30pp", out.replace(" ", ""))
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 
