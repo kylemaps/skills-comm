@@ -62,15 +62,20 @@ AVAIL_K=$(df --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
 AVAIL_G=$(( ${AVAIL_K:-0} / 1024 / 1024 ))
 
 echo
-echo "=== where it went ==="
+echo "=== where it went (a few minutes: ~1.8M inodes on network storage) ==="
+# du in kilobytes once, format for humans afterwards. Walking the runs tree is
+# the expensive part here, and doing it twice doubled the wait for nothing.
+TOT_K=0
 for d in "$RUNS" "$BENCH/parked" "$BENCH/qcval" "$BENCH/report" \
          "$HOME/.local/share/opencode" "$HOME/grader-repo" "$HOME/skills-comm"; do
-  [ -e "$d" ] && du -sh "$d" 2>/dev/null | sed 's/^/  /'
+  [ -e "$d" ] || continue
+  k=$(du -sk "$d" 2>/dev/null | cut -f1)
+  [ "$d" = "$RUNS" ] && TOT_K=${k:-0}
+  printf '  %6s MB  %s\n' "$(( ${k:-0} / 1024 ))" "$d"
 done
 
 N_RUNS=$(ls -1d "$RUNS"/*__* 2>/dev/null | wc -l)
-if [ "$N_RUNS" -gt 0 ]; then
-  TOT_K=$(du -sk "$RUNS" 2>/dev/null | cut -f1)
+if [ "$N_RUNS" -gt 0 ] && [ "$TOT_K" -gt 0 ]; then
   PER_M=$(( TOT_K / N_RUNS / 1024 ))
   echo
   echo "=== per-run cost ==="
@@ -93,21 +98,30 @@ fi
 # --- what is reclaimable ----------------------------------------------
 echo
 echo "=== reclaimable: data/ and tmp/ in runs that are already graded ==="
+# One du call over every candidate at once. Calling du per directory took
+# minutes on the Longhorn volume: 1.8 M inodes across a few hundred datalad
+# trees, and network-backed storage makes every stat a round trip. A check that
+# takes ten minutes is a check people skip.
 GRADED=0
 RECLAIM_K=0
 CANDIDATES=""
+CAND_LIST=$(mktemp)
 for d in "$RUNS"/*__*; do
   [ -d "$d" ] || continue
   [ -f "$d/envelope.json" ] || continue          # ungraded: leave alone
   for sub in data tmp; do
-    if [ -d "$d/$sub" ]; then
-      k=$(du -sk "$d/$sub" 2>/dev/null | cut -f1)
-      RECLAIM_K=$(( RECLAIM_K + ${k:-0} ))
-      CANDIDATES="$CANDIDATES$d/$sub"$'\n'
-      GRADED=$(( GRADED + 1 ))
-    fi
+    [ -d "$d/$sub" ] && echo "$d/$sub" >> "$CAND_LIST"
   done
 done
+if [ -s "$CAND_LIST" ]; then
+  GRADED=$(wc -l < "$CAND_LIST")
+  # Default whitespace splitting is fine: run directory names are
+  # task__model__arm__rep and never contain spaces.
+  RECLAIM_K=$(xargs -a "$CAND_LIST" du -sk 2>/dev/null \
+              | awk '{s+=$1} END {print s+0}')
+  CANDIDATES=$(cat "$CAND_LIST")
+fi
+rm -f "$CAND_LIST"
 RECLAIM_G=$(( RECLAIM_K / 1024 / 1024 ))
 echo "  $GRADED director(ies), ~${RECLAIM_G} GB"
 
