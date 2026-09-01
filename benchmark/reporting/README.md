@@ -46,7 +46,42 @@ python build_index.py \
   --out index.html
 ```
 
+Or point it at a harness report directory and let it find the tasks:
+
+```bash
+python build_index.py --report-dir ~/bench/report --out index.html
+```
+
+It picks up every `summary_<task>.json` in the directory and links each task to
+`report_<task>.html` when that file is sitting alongside. One command, so a finished sweep lands
+in the leaderboard without anyone editing an argument list. It also prints any cell that came in
+short of the task's repeat count, which is what you want to know before quoting a number off the
+page.
+
 Only `numpy`-free stdlib is used (`json`, `csv`, `base64`, `html`) — no dependencies.
+
+## Reading the index
+
+**The unit is a cell**: one task, one model, one arm, repeated N times. Two consequences are
+rendered rather than left implicit.
+
+- **`k/n` sits next to every rate.** 8/10 and 80/100 are both "80%". A rate on its own lets a
+  topped-up cell sit in the grid looking like a comparison while the denominators have quietly
+  diverged. A cell short of the task's repeat count is marked, and that count is inferred from the
+  task's own cells, so a 5-repeat pilot is not flagged against a 10-repeat constant.
+- **Each rate carries its 95% Wilson interval**, drawn as a track under the badge; hover for the
+  bounds. Wilson rather than the normal approximation, because these cells land on 0/10 and 10/10
+  routinely and the normal approximation returns impossible bounds at both ends. It is the same
+  function `summarize.py` uses, and a test pins the two together.
+
+**"Does the skill help?"** ranks every skill-versus-baseline comparison by effect size, with the
+difference drawn on an axis centred at zero and the 95% CI as a whisker. Rows whose interval
+straddles zero are greyed: for those the experiment cannot tell the arms apart, and that is the
+part which gets read past when a result is quoted. The numbers come out of `skill_effect` in
+`summary.json` rather than being recomputed here, so the page cannot drift from what the analysis
+scripts publish. A third arm keeps its own label.
+
+Run the tests with `python test_build_index.py` (stdlib, no dependencies).
 
 ## Expected input schema
 
@@ -61,7 +96,10 @@ Only `numpy`-free stdlib is used (`json`, `csv`, `base64`, `html`) — no depend
   "poolable": true,
   "cells": { "<model>|<arm>": { "n": 10, "passes": 8, "mean": 79.7, "sd": 42.0,
                                 "uptake": 0, "not_found_claims": 9, "methods": {"synthstrip": 8} } },
-  "skill_effect": { "<model>": { "delta_pp": 20, "ci95_pp": [-11, 51], "fisher_p": 0.47 } }
+  // keyed "<model>" for a single skill arm, "<model>|<arm>" once there is more than one
+  "skill_effect": { "<model>": { "env_only_pass": 8, "env_only_n": 10,
+                                 "env_skill_pass": 10, "env_skill_n": 10,
+                                 "delta_pp": 20, "ci95_pp": [-11, 51], "fisher_p": 0.47 } }
 }
 ```
 
