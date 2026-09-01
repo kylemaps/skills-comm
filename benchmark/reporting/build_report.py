@@ -244,10 +244,20 @@ def main():
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
 
-    summary = json.load(open(a.summary))
-    runs = list(csv.DictReader(open(a.runs)))
-    rubric = json.load(open(a.rubric)) if a.rubric else None
-    a.out.write_text(build(summary, runs, rubric, a.figure, a.thumbs, a.title))
+    # Encoding is explicit on every one of these. Without it Python uses the platform
+    # locale, so a rubric prompt containing a single ≥ crashes the build on Windows
+    # (cp1252) and under a C locale on Linux, after truncating the output file to zero
+    # bytes. That leaves a report the index will happily link to.
+    with open(a.summary, encoding="utf-8") as fh:
+        summary = json.load(fh)
+    with open(a.runs, encoding="utf-8", newline="") as fh:
+        runs = list(csv.DictReader(fh))
+    rubric = None
+    if a.rubric:
+        with open(a.rubric, encoding="utf-8") as fh:
+            rubric = json.load(fh)
+    a.out.write_text(build(summary, runs, rubric, a.figure, a.thumbs, a.title),
+                     encoding="utf-8")
     print(f"wrote {a.out} ({a.out.stat().st_size // 1024} KB)")
 
 

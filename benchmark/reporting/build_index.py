@@ -328,9 +328,14 @@ def discover(report_dir):
     entries = []
     for sj in sorted(glob.glob(os.path.join(report_dir, "summary_*.json"))):
         task = re.sub(r"^summary_|\.json$", "", os.path.basename(sj))
-        s = json.load(open(sj))
+        with open(sj, encoding="utf-8") as fh:
+            s = json.load(fh)
         href = f"report_{task}.html"
-        if not os.path.exists(os.path.join(report_dir, href)):
+        # Zero bytes counts as absent. build_report truncates its output before it
+        # writes, so a crash leaves an empty file, and linking that gives a task row
+        # that looks clickable and opens nothing.
+        full = os.path.join(report_dir, href)
+        if not (os.path.exists(full) and os.path.getsize(full) > 0):
             href = ""
         entries.append((s.get("task") or task, s, href))
     return entries
@@ -347,7 +352,10 @@ def main():
     if not a.entry and not a.report_dir:
         ap.error("give --report-dir, or at least one --entry")
 
-    entries = [(name, json.load(open(sj)), href) for name, sj, href in (a.entry or [])]
+    entries = []
+    for name, sj, href in (a.entry or []):
+        with open(sj, encoding="utf-8") as fh:
+            entries.append((name, json.load(fh), href))
     if a.report_dir:
         entries += discover(a.report_dir)
     if not entries:

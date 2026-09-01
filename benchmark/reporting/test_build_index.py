@@ -219,10 +219,20 @@ class Discover(unittest.TestCase):
             for t in ("alpha", "beta"):
                 with open(os.path.join(d, "summary_%s.json" % t), "w") as fh:
                     json.dump(summary({"m|env-only": {"n": 10, "passes": 1}}, task=t), fh)
-            open(os.path.join(d, "report_alpha.html"), "w").close()
+            with open(os.path.join(d, "report_alpha.html"), "w", encoding="utf-8") as fh:
+                fh.write("<html></html>")
             got = bi.discover(d)
             self.assertEqual([n for n, _, _ in got], ["alpha", "beta"])
             self.assertEqual([h for _, _, h in got], ["report_alpha.html", ""])
+
+    def test_empty_report_is_not_linked(self):
+        """build_report truncates before it writes, so a crash leaves 0 bytes behind.
+        Linking that gives a row that looks clickable and opens nothing."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "summary_x.json"), "w", encoding="utf-8") as fh:
+                json.dump(summary({}, task="x"), fh)
+            open(os.path.join(d, "report_x.html"), "w").close()
+            self.assertEqual(bi.discover(d)[0][2], "")
 
     def test_absent_report_gives_no_dead_link(self):
         with tempfile.TemporaryDirectory() as d:
