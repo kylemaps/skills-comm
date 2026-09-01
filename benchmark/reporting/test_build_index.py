@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Tests for build_index.py. Stdlib only; run with `python test_build_index.py`.
 
-Every test here pins something that would otherwise be checked by squinting at a rendered
-page, which is how a dashboard ends up disagreeing with the numbers it is supposed to
-display. The Wilson test in particular pins agreement with summarize.py: the two
-implementations must return the same interval, because the dashboard and the analysis
-scripts both quote it.
+Each one pins something that would otherwise be checked by squinting at a rendered page,
+which is how a dashboard ends up disagreeing with the numbers it displays. The Wilson test
+pins agreement with summarize.py: the dashboard and the analysis scripts quote the same
+interval, so the two implementations must not drift.
 """
 import json
 import os
@@ -22,6 +21,10 @@ import build_index as bi  # noqa: E402
 
 def summary(cells, effects=None, task="t"):
     return {"task": task, "cells": cells, "skill_effect": effects or {}}
+
+
+def effects_html(entries):
+    return bi.build_effects(entries)[0]
 
 
 class Wilson(unittest.TestCase):
@@ -56,26 +59,42 @@ class Wilson(unittest.TestCase):
         self.assertLess(b[1] - b[0], a[1] - a[0])
 
 
-class Badge(unittest.TestCase):
+class RateCell(unittest.TestCase):
     def test_shows_the_denominator(self):
-        h = bi.pct_badge(8, 10)
+        h = bi.rate_cell(8, 10)
         self.assertIn("8/10", h)
         self.assertIn("80%", h)
 
     def test_same_rate_different_n_renders_differently(self):
-        self.assertNotEqual(bi.pct_badge(8, 10), bi.pct_badge(80, 100))
+        self.assertNotEqual(bi.rate_cell(8, 10), bi.rate_cell(80, 100))
 
     def test_short_cell_is_marked(self):
-        self.assertIn("short", bi.pct_badge(2, 3, expect=10))
-        self.assertNotIn("short", bi.pct_badge(8, 10, expect=10))
+        self.assertIn("short", bi.rate_cell(2, 3, expect=10))
+        self.assertIn("†", bi.rate_cell(2, 3, expect=10))
+        self.assertNotIn("short", bi.rate_cell(8, 10, expect=10))
 
     def test_short_cell_needs_an_expectation(self):
-        """Without --expected-reps there is nothing to be short of; do not guess."""
-        self.assertNotIn("short", bi.pct_badge(2, 3, expect=0))
+        """Without a repeat count there is nothing to be short of; do not guess."""
+        self.assertNotIn("short", bi.rate_cell(2, 3, expect=0))
+
+    def test_the_bar_is_the_width_of_the_interval(self):
+        """The floor on the bar width is in proportion units. A floor of 0.8 there drew
+        every interval at 80% of the track, which is the opposite of the point."""
+        def width(k, n):
+            h = bi.rate_cell(k, n)
+            return float(h.split('width:')[1].split('%')[0])
+        lo, hi = bi.wilson(8, 10)
+        self.assertAlmostEqual(width(8, 10), (hi - lo) * 100, places=1)
+        self.assertLess(width(80, 100), width(8, 10))
+
+    def test_the_bar_is_optional(self):
+        """The effect table carries a CI on the difference; a third hairline is noise."""
+        self.assertNotIn('class="ci"', bi.rate_cell(8, 10, bar=False))
+        self.assertIn('class="ci"', bi.rate_cell(8, 10))
 
     def test_tooltip_states_the_interval(self):
-        """The exact bounds must be reachable; the bar alone is not a number."""
-        h = bi.pct_badge(0, 10)
+        """The exact bounds must be reachable; a bar alone is not a number."""
+        h = bi.rate_cell(0, 10)
         self.assertIn("0 of 10 passed", h)
         self.assertIn("95% CI", h)
 
@@ -89,6 +108,32 @@ class ExpectedReps(unittest.TestCase):
 
     def test_no_cells(self):
         self.assertEqual(bi.expected_reps(summary({})), 0)
+
+
+class FmtPP(unittest.TestCase):
+    def test_zero_has_no_sign(self):
+        self.assertEqual(bi.fmt_pp(0.0), "0")
+
+    def test_whole_numbers_lose_the_decimal(self):
+        self.assertEqual(bi.fmt_pp(50.0), "+50")
+        self.assertEqual(bi.fmt_pp(-3.0), "-3")
+
+    def test_a_bound_near_zero_keeps_its_decimal(self):
+        """+0.4 must not print as "+0" and imply the interval excludes no effect."""
+        self.assertEqual(bi.fmt_pp(0.4), "+0.4")
+        self.assertEqual(bi.fmt_pp(-0.4), "-0.4")
+
+
+class FmtCI(unittest.TestCase):
+    def test_bounds_share_a_precision(self):
+        """-11.2, +51 reads as two different measurements. It is one interval."""
+        self.assertEqual(bi.fmt_ci(-11.2, 51.0), "-11.2, +51.0")
+
+    def test_whole_bounds_stay_terse(self):
+        self.assertEqual(bi.fmt_ci(-11.0, 51.0), "-11, +51")
+
+    def test_a_bound_near_zero_survives(self):
+        self.assertEqual(bi.fmt_ci(-0.2, 67.6), "-0.2, +67.6")
 
 
 class Effects(unittest.TestCase):
@@ -113,61 +158,60 @@ class Effects(unittest.TestCase):
                                "env_skill_n": 10},
                      "big": {"delta_pp": 50.0, "ci95_pp": [12, 76], "env_only_n": 10,
                              "env_skill_n": 10}})
-        h = bi.build_effects([("t", s, "")])
+        h = effects_html([("t", s, "")])
         self.assertLess(h.index("big"), h.index("small"))
 
     def test_ci_crossing_zero_is_greyed(self):
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [-11, 51],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn("num flat", bi.build_effects([("t", s, "")]))
+        self.assertIn('<tr class="ns">', effects_html([("t", s, "")]))
 
     def test_ci_clear_of_zero_is_not_greyed(self):
         s = summary({}, {"m": {"delta_pp": 50.0, "ci95_pp": [12, 76],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertNotIn("num flat", bi.build_effects([("t", s, "")]))
+        self.assertNotIn('<tr class="ns">', effects_html([("t", s, "")]))
 
     def test_ci_touching_zero_counts_as_crossing(self):
         """[0, 40] does not exclude no effect. Rounding must not upgrade a result."""
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [0, 40],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn("num flat", bi.build_effects([("t", s, "")]))
+        self.assertIn('<tr class="ns">', effects_html([("t", s, "")]))
+
+    def test_counts_are_reported_to_the_header(self):
+        """The "N of M clear of zero" line must be counted, not asserted by hand."""
+        s = summary({}, {"clear": {"delta_pp": 50.0, "ci95_pp": [12, 76],
+                                   "env_only_n": 10, "env_skill_n": 10},
+                         "muddy": {"delta_pp": 20.0, "ci95_pp": [-11, 51],
+                                   "env_only_n": 10, "env_skill_n": 10}})
+        _, n_sep, n_all = bi.build_effects([("t", s, "")])
+        self.assertEqual((n_sep, n_all), (1, 2))
 
     def test_no_comparison_says_so(self):
-        h = bi.build_effects([("t", summary({"m|env-only": {"n": 10, "passes": 1}}), "")])
-        self.assertIn("No skill-versus-baseline comparison", h)
+        h = effects_html([("t", summary({"m|env-only": {"n": 10, "passes": 1}}), "")])
+        self.assertIn("No task has both arms yet", h)
 
-    def test_short_arm_is_tagged(self):
+    def test_short_arm_is_marked(self):
         s = summary({"m|env-only": {"n": 10, "passes": 1},
                      "m|env+skill": {"n": 4, "passes": 1}},
-                    {"m": {"delta_pp": 15.0, "ci95_pp": [-20, 50],
-                           "env_only_n": 10, "env_skill_n": 4}})
-        self.assertIn("short cell", bi.build_effects([("t", s, "")]))
+                    {"m": {"delta_pp": 15.0, "ci95_pp": [-20, 50], "env_only_pass": 1,
+                           "env_only_n": 10, "env_skill_pass": 1, "env_skill_n": 4}})
+        self.assertIn("†", effects_html([("t", s, "")]))
 
+    def test_effect_rows_carry_one_interval_not_three(self):
+        s = summary({}, {"m": {"delta_pp": 50.0, "ci95_pp": [12, 76], "env_only_pass": 5,
+                               "env_only_n": 10, "env_skill_pass": 10, "env_skill_n": 10}})
+        h = effects_html([("t", s, "")])
+        self.assertEqual(h.count('class="ci"'), 0)
+        self.assertEqual(h.count('class="whisk"'), 1)
 
-class FmtPP(unittest.TestCase):
-    def test_zero_has_no_sign(self):
-        self.assertEqual(bi.fmt_pp(0.0), "0")
-
-    def test_whole_numbers_lose_the_decimal(self):
-        self.assertEqual(bi.fmt_pp(50.0), "+50")
-        self.assertEqual(bi.fmt_pp(-3.0), "-3")
-
-    def test_a_bound_near_zero_keeps_its_decimal(self):
-        """+0.4 must not print as "+0" and imply the interval excludes no effect."""
-        self.assertEqual(bi.fmt_pp(0.4), "+0.4")
-        self.assertEqual(bi.fmt_pp(-0.4), "-0.4")
-
-
-class FmtCI(unittest.TestCase):
-    def test_bounds_share_a_precision(self):
-        """[-11.2, +51] reads as two different measurements. It is one interval."""
-        self.assertEqual(bi.fmt_ci(-11.2, 51.0), "[-11.2, +51.0]")
-
-    def test_whole_bounds_stay_terse(self):
-        self.assertEqual(bi.fmt_ci(-11.0, 51.0), "[-11, +51]")
-
-    def test_a_bound_near_zero_survives(self):
-        self.assertEqual(bi.fmt_ci(-0.2, 67.6), "[-0.2, +67.6]")
+    def test_rows_are_ranked_and_numbered(self):
+        s = summary({}, {"a": {"delta_pp": 10.0, "ci95_pp": [-5, 25],
+                               "env_only_n": 10, "env_skill_n": 10},
+                         "b": {"delta_pp": 50.0, "ci95_pp": [12, 76],
+                               "env_only_n": 10, "env_skill_n": 10}})
+        h = effects_html([("t", s, "")])
+        self.assertIn('<td class="rank">1</td>', h)
+        self.assertIn('<td class="rank">2</td>', h)
 
 
 class DeltaBar(unittest.TestCase):
@@ -198,7 +242,13 @@ class Grid(unittest.TestCase):
         a = summary({"m1|env-only": {"n": 10, "passes": 5}}, task="a")
         b = summary({"m2|env-only": {"n": 10, "passes": 5}}, task="b")
         h = bi.build_grid([("a", a, ""), ("b", b, "")])
-        self.assertIn("—", h)
+        self.assertIn("&mdash;", h)
+
+    def test_missing_cell_sorts_below_zero_percent(self):
+        """Sorting must not float an unrun cell up next to a 0% one."""
+        a = summary({"m1|env-only": {"n": 10, "passes": 0}}, task="a")
+        b = summary({"m2|env-only": {"n": 10, "passes": 5}}, task="b")
+        self.assertIn('data-v="-1"', bi.build_grid([("a", a, ""), ("b", b, "")]))
 
     def test_names_are_escaped(self):
         """Task, model and arm names come from files, so they are not trusted markup."""
@@ -217,13 +267,19 @@ class Discover(unittest.TestCase):
     def test_picks_up_a_report_dir(self):
         with tempfile.TemporaryDirectory() as d:
             for t in ("alpha", "beta"):
-                with open(os.path.join(d, "summary_%s.json" % t), "w") as fh:
+                with open(os.path.join(d, "summary_%s.json" % t), "w", encoding="utf-8") as fh:
                     json.dump(summary({"m|env-only": {"n": 10, "passes": 1}}, task=t), fh)
             with open(os.path.join(d, "report_alpha.html"), "w", encoding="utf-8") as fh:
                 fh.write("<html></html>")
             got = bi.discover(d)
             self.assertEqual([n for n, _, _ in got], ["alpha", "beta"])
             self.assertEqual([h for _, _, h in got], ["report_alpha.html", ""])
+
+    def test_absent_report_gives_no_dead_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "summary_x.json"), "w", encoding="utf-8") as fh:
+                json.dump(summary({}, task="x"), fh)
+            self.assertEqual(bi.discover(d)[0][2], "")
 
     def test_empty_report_is_not_linked(self):
         """build_report truncates before it writes, so a crash leaves 0 bytes behind.
@@ -234,32 +290,45 @@ class Discover(unittest.TestCase):
             open(os.path.join(d, "report_x.html"), "w").close()
             self.assertEqual(bi.discover(d)[0][2], "")
 
-    def test_absent_report_gives_no_dead_link(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "summary_x.json"), "w") as fh:
-                json.dump(summary({}, task="x"), fh)
-            self.assertEqual(bi.discover(d)[0][2], "")
-
 
 class Page(unittest.TestCase):
-    def test_the_real_example_renders(self):
+    def real(self):
         p = os.path.join(HERE, "examples", "brain-extraction-7t", "summary.json")
         if not os.path.exists(p):
             self.skipTest("example removed")
         with open(p, encoding="utf-8") as fh:
-            s = json.load(fh)
-        h = bi.build([("Brain extraction — 7T", s, "")])
+            return json.load(fh)
+
+    def test_the_real_example_renders(self):
+        h = bi.build([("Brain extraction - 7T", self.real(), "")])
         self.assertIn("<!doctype html>", h)
-        self.assertIn("8/10", h)          # glm-5.2 baseline, denominator visible
-        self.assertIn("Does the skill help?", h)
-        self.assertNotIn("__", h)         # no unfilled placeholder
+        self.assertIn("8/10", h)          # denominator visible
+        self.assertIn("Skill effect", h)
+        self.assertIn("Pass rate", h)
+
+    def test_the_header_counts_the_sweep(self):
+        h = bi.build([("Brain extraction - 7T", self.real(), "")])
+        self.assertIn("5 models", h)
+        self.assertIn("100</b> runs", h)
+        self.assertIn("10 per cell", h)
+
+    def test_sortable_headers_and_a_filter_are_wired(self):
+        h = bi.build([("t", self.real(), "")])
+        self.assertIn("data-s", h)
+        self.assertIn('data-filter="fx"', h)
+        self.assertIn('id="fx"', h)
 
     def test_no_external_hosts(self):
         """Self-contained means it renders with no network. Do not regress that."""
         s = summary({"m|env-only": {"n": 10, "passes": 5}})
         h = bi.build([("t", s, "")])
-        for tok in ("http://", "https://", "//cdn", "src="):
+        for tok in ("http://", "https://", "//cdn", "src=", "@import"):
             self.assertNotIn(tok, h, "external reference: %s" % tok)
+
+    def test_no_unfilled_placeholder(self):
+        h = bi.build([("t", summary({"m|env-only": {"n": 10, "passes": 5}}), "")])
+        self.assertNotIn("__", h)
+        self.assertNotIn("{}", h)
 
 
 if __name__ == "__main__":

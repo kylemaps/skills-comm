@@ -62,24 +62,23 @@ Only `numpy`-free stdlib is used (`json`, `csv`, `base64`, `html`) — no depend
 
 ## Reading the index
 
-**The unit is a cell**: one task, one model, one arm, repeated N times. Two consequences are
-rendered rather than left implicit.
+Two tables. **Skill effect** is the leaderboard: every skill-versus-baseline comparison ranked by
+effect size, the difference drawn on an axis centred at zero with the 95% CI as a whisker. Rows
+greyed when that interval includes zero. **Pass rate** is the task × model grid, arms stacked.
+Both sortable by any column; the effect table has a filter box.
 
-- **`k/n` sits next to every rate.** 8/10 and 80/100 are both "80%". A rate on its own lets a
+The unit is a cell: one task, one model, one arm, repeated N times.
+
+- **`k/n` sits beside every rate.** 8/10 and 80/100 are both "80%". A rate on its own lets a
   topped-up cell sit in the grid looking like a comparison while the denominators have quietly
-  diverged. A cell short of the task's repeat count is marked, and that count is inferred from the
+  diverged. A cell short of the task's repeat count is marked `†`; the count is inferred from the
   task's own cells, so a 5-repeat pilot is not flagged against a 10-repeat constant.
-- **Each rate carries its 95% Wilson interval**, drawn as a track under the badge; hover for the
-  bounds. Wilson rather than the normal approximation, because these cells land on 0/10 and 10/10
+- **Each rate in the grid carries its 95% Wilson interval** as a track under the number, bounds on
+  hover. Wilson rather than the normal approximation, because these cells land on 0/10 and 10/10
   routinely and the normal approximation returns impossible bounds at both ends. It is the same
   function `summarize.py` uses, and a test pins the two together.
-
-**"Does the skill help?"** ranks every skill-versus-baseline comparison by effect size, with the
-difference drawn on an axis centred at zero and the 95% CI as a whisker. Rows whose interval
-straddles zero are greyed: for those the experiment cannot tell the arms apart, and that is the
-part which gets read past when a result is quoted. The numbers come out of `skill_effect` in
-`summary.json` rather than being recomputed here, so the page cannot drift from what the analysis
-scripts publish. A third arm keeps its own label.
+- **Effect sizes come out of `skill_effect`**, not recomputed here, so the page cannot drift from
+  what the analysis scripts publish. A third arm keeps its own label.
 
 Run the tests with `python test_build_index.py` (stdlib, no dependencies).
 
