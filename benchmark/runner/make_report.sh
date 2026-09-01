@@ -24,6 +24,10 @@
 # the commit and the input state. Files are ordered by prefix so a diff of two
 # report directories reads top to bottom.
 #
+# It also writes the dashboard into the same directory: report_<task>.html per
+# task and index.html over all of them. Same inputs as every number above, so
+# the page and the text cannot disagree.
+#
 # DETERMINISM
 # -----------
 # Output must be byte-identical for identical inputs, or diffing it is
