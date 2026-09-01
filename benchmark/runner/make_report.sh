@@ -135,6 +135,32 @@ for pair in "out:7t" "out_nodura:nodura"; do
   echo "--- qcval $lbl"
 done
 
+# --- dashboard --------------------------------------------------------
+# summarize.py has already written summary_<task>.json and runs_<task>.csv into
+# $OUT, which is exactly what the reporting layer consumes. Building the HTML
+# here means a finished sweep reaches a readable page in one command instead of
+# three, and the page is regenerated from the same inputs as every number above,
+# so the two cannot disagree.
+#
+# Skipped rather than failed when the reporting layer is absent, so an older
+# checkout still produces a report.
+REPORTING="$HERE/../reporting"
+if [ ! -f "$REPORTING/build_index.py" ]; then
+  echo "--- skip dashboard (no $REPORTING)"
+else
+  for t in "${TASKS[@]}"; do
+    [ -f "$OUT/summary_$t.json" ] || continue
+    RUBRIC="$HOME/grader-repo/benchmark/graders/$t/rubric.json"
+    ARGS=()
+    [ -f "$RUBRIC" ] && ARGS+=(--rubric "$RUBRIC")
+    python "$REPORTING/build_report.py"         --summary "$OUT/summary_$t.json" --runs "$OUT/runs_$t.csv"         --title "$t" "${ARGS[@]+"${ARGS[@]}"}"         --out "$OUT/report_$t.html" > /dev/null 2>> "$OUT/60_dashboard.txt"
+  done
+  # --report-dir picks up every summary_<task>.json in $OUT and links each task
+  # to its report_<task>.html, so adding a task needs no argument edited here.
+  python "$REPORTING/build_index.py" --report-dir "$OUT" --out "$OUT/index.html"       >> "$OUT/60_dashboard.txt" 2>&1
+  echo "--- dashboard: $OUT/index.html"
+fi
+
 # --- normalise paths so a diff shows only numbers ----------------------
 # Several tools echo where they wrote to, which lands inside the captured
 # output. Two reports of identical data then differ on every one of those lines
