@@ -371,6 +371,51 @@ class TestRunDates(unittest.TestCase):
         self.assertEqual(self.f(rs), ("2026-08-15", "2026-08-15"))
 
 
+class TestTasksDiff(unittest.TestCase):
+    """Deciding whether a grader pin bump invalidates a published result."""
+
+    def setUp(self):
+        self.m = load("tasks_diff")
+
+    def doc(self, cats):
+        return {"categories": {k: {"tasks": v} for k, v in cats.items()}}
+
+    def test_flatten_spans_categories(self):
+        f = self.m.flatten(self.doc({"structural": {"a": {}}, "diffusion": {"b": {}}}))
+        self.assertEqual(sorted(f), ["a", "b"])
+
+    def test_a_task_that_moved_category_is_still_the_same_task(self):
+        """The agent never sees the category, so a move must not read as a change."""
+        old = self.m.flatten(self.doc({"structural": {"a": {"prompt": {"goal": "g"}}}}))
+        new = self.m.flatten(self.doc({"clinical": {"a": {"prompt": {"goal": "g"}}}}))
+        self.assertEqual(self.m.field_diff(old["a"], new["a"]), [])
+
+    def test_key_order_is_not_a_change(self):
+        a = {"prompt": {"goal": "g", "dataset": "d"}}
+        b = {"prompt": {"dataset": "d", "goal": "g"}}
+        self.assertEqual(self.m.field_diff(a, b), [])
+
+    def test_a_prompt_change_is_detected(self):
+        a = {"prompt": {"goal": "old"}, "solution": {"x": 1}}
+        b = {"prompt": {"goal": "new"}, "solution": {"x": 1}}
+        self.assertEqual(self.m.field_diff(a, b), ["prompt"])
+
+    def test_grader_side_change_does_not_touch_the_prompt(self):
+        """A solution change means re-grade, not re-run. The two must not be conflated."""
+        a = {"prompt": {"goal": "g"}, "solution": {"pass_criterion": "old"}}
+        b = {"prompt": {"goal": "g"}, "solution": {"pass_criterion": "new"}}
+        self.assertEqual(self.m.field_diff(a, b), ["solution"])
+
+    def test_an_added_field_counts(self):
+        self.assertEqual(self.m.field_diff({"prompt": {}}, {"prompt": {}, "grading": "x"}),
+                         ["grading"])
+
+    def test_nested_prompt_fields_are_named(self):
+        a = {"goal": "g", "dataset": {"id": "ds1"}, "required_output": "o"}
+        b = {"goal": "g", "dataset": {"id": "ds2"}, "required_output": "CHANGED"}
+        self.assertEqual(self.m.field_diff(a, b), ["dataset", "required_output"])
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 
