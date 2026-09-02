@@ -335,6 +335,42 @@ class TestCapability(unittest.TestCase):
         self.assertIn("-30pp", out.replace(" ", ""))
 
 
+class TestRunDates(unittest.TestCase):
+    """Cells carry when they ran, so a retired model's numbers can be dated."""
+
+    def setUp(self):
+        self.f = load("summarize").run_dates
+
+    def r(self, start="", end=""):
+        return {"start": start, "end": end}
+
+    def test_spans_first_to_last(self):
+        rs = [self.r(end="2026-08-13T06:01:35Z"), self.r(end="2026-08-15T09:00:00Z"),
+              self.r(end="2026-08-14T00:00:00Z")]
+        self.assertEqual(self.f(rs), ("2026-08-13", "2026-08-15"))
+
+    def test_date_only_no_false_precision(self):
+        """A cell's runs are hours apart; a timestamp would imply they were not."""
+        first, last = self.f([self.r(end="2026-08-13T06:01:35Z")])
+        self.assertEqual((first, last), ("2026-08-13", "2026-08-13"))
+
+    def test_falls_back_to_start_when_the_run_never_ended(self):
+        """A killed run has a start and no end. It still happened on a date."""
+        self.assertEqual(self.f([self.r(start="2026-08-13T06:00:00Z")]),
+                         ("2026-08-13", "2026-08-13"))
+
+    def test_no_dates_is_none_not_today(self):
+        """Defaulting to now would silently date old results to the day of the rebuild."""
+        self.assertEqual(self.f([self.r(), self.r()]), (None, None))
+
+    def test_empty_group(self):
+        self.assertEqual(self.f([]), (None, None))
+
+    def test_undated_runs_do_not_drag_the_range(self):
+        rs = [self.r(end="2026-08-15T00:00:00Z"), self.r()]
+        self.assertEqual(self.f(rs), ("2026-08-15", "2026-08-15"))
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 

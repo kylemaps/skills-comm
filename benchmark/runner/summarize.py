@@ -503,6 +503,19 @@ def hr(title):
     print("\n=== %s ===" % title)
 
 
+def run_dates(rs):
+    """(first, last) UTC dates for a group of runs, as YYYY-MM-DD, or (None, None).
+
+    Recorded per cell because a leaderboard that spans months needs to say when each
+    number was measured. A model retired from the gateway keeps its cells forever -- they
+    are evidence of what was true then -- so the date is what distinguishes a standing
+    result from a stale one. Date, not timestamp: the extra precision would imply the
+    runs in a cell were simultaneous, and they are not.
+    """
+    ds = sorted(d[:10] for r in rs for d in [r.get("end") or r.get("start") or ""] if d)
+    return (ds[0], ds[-1]) if ds else (None, None)
+
+
 def report(runs, task):
     valid = [r for r in runs if r["valid"]]
     excluded = [r for r in runs if not r["valid"]]
@@ -888,6 +901,8 @@ def report(runs, task):
 
     return {
         "task": task,
+        "first_run": run_dates(runs)[0],
+        "last_run": run_dates(runs)[1],
         "n_runs": len(runs),
         "n_valid": len(valid),
         "n_excluded": len(excluded),
@@ -897,6 +912,8 @@ def report(runs, task):
         "cells": {
             "%s|%s" % (model, arm): {
                 "n": len(rs),
+                "first_run": run_dates(rs)[0],
+                "last_run": run_dates(rs)[1],
                 "passes": sum(1 for r in rs if r["passed"]),
                 "mean": round(mean_sd([r["score"] for r in rs])[0], 2),
                 "sd": round(mean_sd([r["score"] for r in rs])[1], 2),
