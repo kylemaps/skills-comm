@@ -101,10 +101,12 @@ class RateCell(unittest.TestCase):
 
 class ExpectedReps(unittest.TestCase):
     def test_modal_n(self):
-        s = summary({"a|env-only": {"n": 10, "passes": 1},
-                     "a|env+skill": {"n": 10, "passes": 2},
-                     "b|env-only": {"n": 4, "passes": 0}})
-        self.assertEqual(bi.expected_reps(s), 10)
+        """The mode, not the max. In the first version of this test max == mode,
+        so returning max(ns) passed it."""
+        s = summary({"a|env-only": {"n": 4, "passes": 1},
+                     "a|env+skill": {"n": 4, "passes": 2},
+                     "b|env-only": {"n": 10, "passes": 0}})
+        self.assertEqual(bi.expected_reps(s), 4)
 
     def test_no_cells(self):
         self.assertEqual(bi.expected_reps(summary({})), 0)
@@ -178,13 +180,20 @@ class Effects(unittest.TestCase):
         self.assertIn('<tr class="ns">', effects_html([("t", s, "")]))
 
     def test_counts_are_reported_to_the_header(self):
-        """The "N of M clear of zero" line must be counted, not asserted by hand."""
-        s = summary({}, {"clear": {"delta_pp": 50.0, "ci95_pp": [12, 76],
-                                   "env_only_n": 10, "env_skill_n": 10},
+        """Asymmetric on purpose: 1-of-2 is unchanged if the counter is inverted,
+        so an inverted n_sep passed this test in its first form."""
+        s = summary({}, {"clearA": {"delta_pp": 50.0, "ci95_pp": [12, 76],
+                                    "env_only_n": 10, "env_skill_n": 10},
+                         "clearB": {"delta_pp": -50.0, "ci95_pp": [-76, -12],
+                                    "env_only_n": 10, "env_skill_n": 10},
                          "muddy": {"delta_pp": 20.0, "ci95_pp": [-11, 51],
                                    "env_only_n": 10, "env_skill_n": 10}})
         _, n_sep, n_all = bi.build_effects([("t", s, "")])
-        self.assertEqual((n_sep, n_all), (1, 2))
+        self.assertEqual((n_sep, n_all), (2, 3))
+
+    def test_a_wholly_negative_interval_also_separates(self):
+        """Clear of zero means either side of it, not just above."""
+        self.assertTrue(bi.separates(-76.0, -12.0))
 
     def test_no_comparison_says_so(self):
         h = effects_html([("t", summary({"m|env-only": {"n": 10, "passes": 1}}), "")])
@@ -214,6 +223,55 @@ class Effects(unittest.TestCase):
         self.assertIn('<td class="rank">2</td>', h)
 
 
+class UsableCI(unittest.TestCase):
+    """An interval that was never computed must never become a number."""
+
+    def test_absent_is_none_not_zero_zero(self):
+        """[0, 0] beside a +50 effect is a fabricated result, not a missing one."""
+        self.assertIsNone(bi.usable_ci(None))
+        self.assertIsNone(bi.usable_ci([]))
+
+    def test_nan_is_rejected(self):
+        """summarize.newcombe returns NaN when an arm has no runs."""
+        nan = float("nan")
+        self.assertIsNone(bi.usable_ci([nan, nan]))
+        self.assertIsNone(bi.usable_ci([0.0, nan]))
+
+    def test_inf_is_rejected(self):
+        self.assertIsNone(bi.usable_ci([float("-inf"), 5.0]))
+
+    def test_wrong_length_is_rejected(self):
+        self.assertIsNone(bi.usable_ci([1, 2, 3]))
+        self.assertIsNone(bi.usable_ci([5]))
+
+    def test_non_numeric_is_rejected(self):
+        self.assertIsNone(bi.usable_ci(["a", "b"]))
+        self.assertIsNone(bi.usable_ci([None, None]))
+
+    def test_reversed_bounds_are_ordered(self):
+        self.assertEqual(bi.usable_ci([40.0, -10.0]), (-10.0, 40.0))
+
+    def test_a_good_interval_survives(self):
+        self.assertEqual(bi.usable_ci([-11.2, 51.0]), (-11.2, 51.0))
+
+
+class Separates(unittest.TestCase):
+    def test_nan_does_not_count_as_a_result(self):
+        """`not (nan <= 0 <= nan)` is True, so NaN used to read as significant."""
+        self.assertFalse(bi.separates(None, None))
+
+    def test_straddling_zero_does_not_separate(self):
+        self.assertFalse(bi.separates(-11.0, 51.0))
+
+    def test_touching_zero_does_not_separate(self):
+        self.assertFalse(bi.separates(0.0, 40.0))
+        self.assertFalse(bi.separates(-40.0, 0.0))
+
+    def test_clear_either_side_separates(self):
+        self.assertTrue(bi.separates(3.8, 68.7))
+        self.assertTrue(bi.separates(-68.7, -3.8))
+
+
 class DeltaBar(unittest.TestCase):
     def test_zero_delta_sits_on_the_axis(self):
         self.assertIn("nil", bi.delta_bar(0, -30, 30))
@@ -228,6 +286,88 @@ class DeltaBar(unittest.TestCase):
         for tok in h.split("left:")[1:]:
             v = float(tok.split("%")[0])
             self.assertTrue(0 <= v <= 100, "left %s out of track" % v)
+
+
+class EffectRendering(unittest.TestCase):
+    """Mutation-tested. Each of these caught a mutation the earlier suite missed."""
+
+    def row(self, **kw):
+        e = {"delta_pp": 40.0, "ci95_pp": [3.8, 68.7], "env_only_pass": 6,
+             "env_only_n": 10, "env_skill_pass": 10, "env_skill_n": 10,
+             "fisher_p": 0.087}
+        e.update(kw)
+        return effects_html([("t", summary({}, {"m": e}), "")])
+
+    def test_the_p_value_is_rendered_as_given(self):
+        """A mutation rendering 1-p passed the whole suite. A wrong p on a public
+        scientific page is the worst single thing this file can do."""
+        self.assertIn(">0.087<", self.row())
+        self.assertNotIn("0.913", self.row())
+
+    def test_p_keeps_three_decimals(self):
+        self.assertIn(">0.003<", self.row(fisher_p=0.003))
+
+    def test_an_absent_p_is_a_dash_not_a_number(self):
+        self.assertIn("&mdash;", self.row(fisher_p=None))
+
+    def test_an_absent_interval_says_so(self):
+        h = self.row(ci95_pp=None)
+        self.assertIn("not computed", h)
+        self.assertNotIn("0, 0", h)
+
+    def test_an_absent_interval_draws_no_whisker(self):
+        """A stub on the centre line claims a precision never computed."""
+        self.assertNotIn("whisk", self.row(ci95_pp=None))
+        self.assertIn("whisk", self.row())
+
+    def test_an_absent_interval_is_not_counted_as_clear(self):
+        s = summary({}, {"m": {"delta_pp": 50.0, "env_only_n": 10, "env_skill_n": 10}})
+        _, n_sep, n_all = bi.build_effects([("t", s, "")])
+        self.assertEqual((n_sep, n_all), (0, 1))
+
+    def test_model_names_are_escaped_in_the_effect_table(self):
+        """Escaping was pinned only in the grid; removing it here passed."""
+        s = summary({}, {"<img src=x>": {"delta_pp": 1.0, "ci95_pp": [0, 2],
+                                         "env_only_n": 10, "env_skill_n": 10}})
+        h = effects_html([("t<b>", s, "")])
+        self.assertNotIn("<img src=x>", h)
+        self.assertIn("&lt;img", h)
+        self.assertIn("t&lt;b&gt;", h)
+
+
+class DeltaBarGeometry(unittest.TestCase):
+    """The bar's meaning is its position. A sign flip passed the earlier suite."""
+
+    def left(self, h, cls):
+        seg = h.split('class="%s"' % cls)[1]
+        return float(seg.split("left:")[1].split("%")[0])
+
+    def test_a_positive_delta_starts_at_the_centre_line(self):
+        self.assertAlmostEqual(self.left(bi.delta_bar(40, 3.8, 68.7), "fill pos"), 50.0, 1)
+
+    def test_a_negative_delta_ends_at_the_centre_line(self):
+        h = bi.delta_bar(-40, -68.7, -3.8)
+        seg = h.split('class="fill neg"')[1]
+        left = float(seg.split("left:")[1].split("%")[0])
+        width = float(seg.split("width:")[1].split("%")[0])
+        self.assertAlmostEqual(left + width, 50.0, places=1)
+        self.assertLess(left, 50.0)
+
+    def test_bigger_effects_reach_further(self):
+        a = bi.delta_bar(20, 0, 40)
+        b = bi.delta_bar(60, 40, 80)
+        wa = float(a.split('class="fill pos"')[1].split("width:")[1].split("%")[0])
+        wb = float(b.split('class="fill pos"')[1].split("width:")[1].split("%")[0])
+        self.assertLess(wa, wb)
+
+    def test_the_whisker_spans_the_interval_not_the_delta(self):
+        """A mutation drawing the whisker from the delta bounds passed before."""
+        h = bi.delta_bar(40, -10, 90)
+        seg = h.split('class="whisk"')[1]
+        left = float(seg.split("left:")[1].split("%")[0])
+        width = float(seg.split("width:")[1].split("%")[0])
+        self.assertAlmostEqual(left, 45.0, places=1)          # x(-10)
+        self.assertAlmostEqual(left + width, 95.0, places=1)  # x(90)
 
 
 class Grid(unittest.TestCase):

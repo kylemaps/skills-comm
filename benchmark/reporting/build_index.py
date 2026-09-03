@@ -105,9 +105,41 @@ def fmt_pp(v, force_dp=False):
 
 
 def fmt_ci(lo, hi):
-    """Both bounds at one precision, so a single interval never reads as two."""
+    """Both bounds at one precision, so a single interval never reads as two.
+
+    An absent interval prints as a dash. It must not borrow a number from anywhere.
+    """
+    if lo is None or hi is None:
+        return '<span class="dim">not computed</span>'
     dp = not (("%+.1f" % lo).endswith(".0") and ("%+.1f" % hi).endswith(".0"))
     return "%s, %s" % (fmt_pp(lo, dp), fmt_pp(hi, dp))
+
+
+def usable_ci(ci):
+    """A pair of finite bounds, or None. Never a substitute pair.
+
+    Defaulting a missing interval to [0, 0] renders a zero-width whisker on the centre
+    line next to a real effect size, which reads as an extraordinarily precise result
+    rather than an absent one. A NaN bound is worse: every comparison against NaN is
+    False, so `not (lo <= 0 <= hi)` reported an uncomputable interval as excluding zero,
+    i.e. as a positive finding. summarize.newcombe returns NaN when an arm has no runs.
+    """
+    if not isinstance(ci, (list, tuple)) or len(ci) != 2:
+        return None
+    try:
+        lo, hi = float(ci[0]), float(ci[1])
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(lo) or math.isnan(hi) or math.isinf(lo) or math.isinf(hi):
+        return None
+    return (lo, hi) if lo <= hi else (hi, lo)
+
+
+def separates(lo, hi):
+    """Does this interval exclude no-effect? Absent means no, never yes."""
+    if lo is None or hi is None:
+        return False
+    return lo > 0 or hi < 0
 
 
 def rate_cell(passes, n, expect=0, bar=True):
@@ -148,12 +180,17 @@ def delta_bar(delta, lo, hi):
         return min(100.0, max(0.0, 50.0 + pp / 2.0))
 
     b0, b1 = sorted((x(0), x(delta)))
-    w0, w1 = sorted((x(lo), x(hi)))
     cls = "pos" if delta > 0 else ("neg" if delta < 0 else "nil")
-    return ('<span class="dbar"><i class="axis"></i>'
-            '<i class="whisk" style="left:{w0:.1f}%;width:{ww:.1f}%"></i>'
+    # No interval, no whisker. Drawing a stub at the centre line would claim a
+    # precision that was never computed.
+    whisk = ""
+    if lo is not None and hi is not None:
+        w0, w1 = sorted((x(lo), x(hi)))
+        whisk = ('<i class="whisk" style="left:%.1f%%;width:%.1f%%"></i>'
+                 % (w0, max(w1 - w0, 0.8)))
+    return ('<span class="dbar"><i class="axis"></i>{whisk}'
             '<i class="fill {cls}" style="left:{b0:.1f}%;width:{bw:.1f}%"></i></span>'
-            ).format(w0=w0, ww=max(w1 - w0, 0.8), cls=cls, b0=b0, bw=max(b1 - b0, 0.8))
+            ).format(whisk=whisk, cls=cls, b0=b0, bw=max(b1 - b0, 0.8))
 
 
 STYLE = """<style>
@@ -278,12 +315,17 @@ def build_effects(entries):
     for name, s, href in entries:
         expect = expected_reps(s)
         for model, arm, e in effect_rows(s):
-            ci = e.get("ci95_pp") or [0, 0]
+            # An absent interval used to default to [0, 0], which drew a zero-width
+            # whisker on the centre line beside a real effect size: a fabricated
+            # result, not a missing one. summarize.py withholds the interval below
+            # MIN_N_FOR_STATS, so this is reachable from the ordinary producer.
+            ci = usable_ci(e.get("ci95_pp"))
             rows.append({
                 "task": name, "href": href, "model": model, "arm": arm,
                 "kb": e.get("env_only_pass", 0), "nb": e.get("env_only_n", 0),
                 "ks": e.get("env_skill_pass", 0), "ns": e.get("env_skill_n", 0),
-                "delta": e.get("delta_pp", 0.0), "lo": ci[0], "hi": ci[1],
+                "delta": e.get("delta_pp", 0.0),
+                "lo": ci[0] if ci else None, "hi": ci[1] if ci else None,
                 "p": e.get("fisher_p"), "expect": expect,
                 "short": bool(expect) and min(e.get("env_only_n", 0),
                                               e.get("env_skill_n", 0)) < expect,
@@ -296,7 +338,7 @@ def build_effects(entries):
     for i, r in enumerate(rows, 1):
         # A CI spanning zero means the arms are not separated. Marked on the row rather
         # than explained in a caption.
-        sep = not (r["lo"] <= 0 <= r["hi"])
+        sep = separates(r["lo"], r["hi"])
         arm = "" if r["arm"] in ("env+skill", "skill") else \
             '<span class="arm">%s</span>' % html.escape(r["arm"])
         task = ('<a href="%s">%s</a>' % (html.escape(r["href"]), html.escape(r["task"]))
@@ -321,7 +363,7 @@ def build_effects(entries):
                 dtxt=fmt_pp(r["delta"]), ci=fmt_ci(r["lo"], r["hi"]),
                 psort=1.0 if r["p"] is None else r["p"], p=p))
 
-    n_sep = sum(1 for r in rows if not (r["lo"] <= 0 <= r["hi"]))
+    n_sep = sum(1 for r in rows if separates(r["lo"], r["hi"]))
     table = (
         '<div class="bar"><h2>Skill effect</h2>'
         '<input type="search" data-filter="fx" placeholder="Filter task or model" '
