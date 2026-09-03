@@ -19,7 +19,27 @@ HARNESS="${HARNESS_DIR:-$HOME/grader-repo/benchmark/harness}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$HARNESS" || { echo "no harness at $HARNESS"; exit 1; }
-python fetch_reference.py --task "$TASK" >/dev/null 2>&1
+# The grading plane's one external dependency, and its output and exit code were
+# both being discarded. A failed fetch then graded every run against a missing or
+# stale reference, which floors a whole task at zero and reads as a bad model --
+# the failure shape that has cost this project the most time. Hard stop instead.
+#
+# Absent script means an older grader pack that ships its references, so that is a
+# note rather than an error. A present script that fails is fatal.
+FETCH_LOG="$BENCH_HOME/fetch_reference_$TASK.log"
+if [ -f fetch_reference.py ]; then
+  if python fetch_reference.py --task "$TASK" > "$FETCH_LOG" 2>&1; then
+    echo "reference ready for $TASK ($(grep -c "\[fetch\]" "$FETCH_LOG") fetched, $(grep -c "\[skip\]" "$FETCH_LOG") already present)"
+  else
+    echo "ABORT: could not fetch the reference for $TASK."
+    sed "s/^/  /" "$FETCH_LOG"
+    echo "  Grading against a missing reference scores every run zero, which is"
+    echo "  indistinguishable from a bad model. Nothing has been graded."
+    exit 1
+  fi
+else
+  echo "note: no fetch_reference.py in $HARNESS; references must already be in the pack"
+fi
 
 TOTAL=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
 GRADED=0
