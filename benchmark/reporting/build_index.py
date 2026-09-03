@@ -142,6 +142,37 @@ def separates(lo, hi):
     return lo > 0 or hi < 0
 
 
+def agreement(lo, hi, p, alpha=0.05):
+    """How the interval and the test line up: "clear", "split" or "unclear".
+
+    Newcombe on the difference of proportions and Fisher on the 2x2 are different
+    tests and can disagree. That is not a bug in either, and it is live in this data:
+    qwen3 on the 7T task has CI [+3.8, +68.7] with p=0.087. Marking such a row
+    significant because the interval excludes zero, or unmarked because p is above
+    alpha, both pick a winner without saying so.
+
+    "split" says the result sits on the boundary of what this many runs can resolve,
+    which is the true statement and the useful one. A missing p is not a disagreement,
+    so an interval alone can still read "clear".
+    """
+    sep = separates(lo, hi)
+    if p is None:
+        return "clear" if sep else "unclear"
+    sig = p < alpha
+    if sep and sig:
+        return "clear"
+    if sep or sig:
+        return "split"
+    return "unclear"
+
+
+AGREEMENT_NOTE = {
+    "clear": "Interval excludes no effect and Fisher agrees.",
+    "split": "Interval and Fisher disagree. On the boundary of what this many runs resolve.",
+    "unclear": "This experiment cannot separate the arms.",
+}
+
+
 def rate_cell(passes, n, expect=0, bar=True):
     """Pass rate, its denominator, and a 95% Wilson interval drawn underneath.
 
@@ -261,7 +292,13 @@ border-radius:1px;background:var(--track)}
 .dbar .fill{top:2.5px;height:6px;border-radius:1.5px}
 .dbar .fill.pos{background:var(--good)}.dbar .fill.neg{background:var(--bad)}
 .dbar .fill.nil{background:var(--faint)}
-tr.ns td{color:var(--faint)}tr.ns .dbar .fill{opacity:.45}tr.ns .model{color:var(--muted)}
+tr.unclear td{color:var(--muted)}tr.unclear .dbar .fill{opacity:.5}
+tr.split .dbar .fill{opacity:.75}
+.st{font:600 9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;
+padding:2px 5px;border-radius:4px;border:1px solid var(--line);white-space:nowrap}
+.st.clear{color:var(--good);border-color:var(--good)}
+.st.split{color:var(--ink)}
+.st.unclear{color:var(--muted)}
 .empty{padding:26px 14px;color:var(--muted);font-size:.83rem;text-align:center}
 .foot{color:var(--faint);font-size:.75rem;margin-top:26px}
 .foot code{font-family:var(--mono)}
@@ -336,9 +373,11 @@ def build_effects(entries):
     rows.sort(key=lambda r: (-r["delta"], r["task"], r["model"]))
     body = []
     for i, r in enumerate(rows, 1):
-        # A CI spanning zero means the arms are not separated. Marked on the row rather
-        # than explained in a caption.
-        sep = separates(r["lo"], r["hi"])
+        # Marked on the row rather than explained in a caption, and as text rather
+        # than by colour alone: greying was the only signal, which fails anyone who
+        # cannot perceive it and disappears entirely in print.
+        state = agreement(r["lo"], r["hi"], r["p"])
+        sep = state == "clear"
         arm = "" if r["arm"] in ("env+skill", "skill") else \
             '<span class="arm">%s</span>' % html.escape(r["arm"])
         task = ('<a href="%s">%s</a>' % (html.escape(r["href"]), html.escape(r["task"]))
@@ -352,8 +391,10 @@ def build_effects(entries):
             '<td class="c" data-v="{d:.4f}">{bar}</td>'
             '<td class="n" data-v="{d:.4f}">{dtxt}</td>'
             '<td class="n dim">{ci}</td>'
-            '<td class="n" data-v="{psort}">{p}</td></tr>'.format(
-                ns="ns" if not sep else "", i=i, tsort=html.escape(r["task"]), task=task,
+            '<td class="n" data-v="{psort}">{p}</td>'
+            '<td class="c"><span class="st {state}" title="{note}">{state}</span></td></tr>'.format(
+                state=state, note=html.escape(AGREEMENT_NOTE[state]),
+                ns=state, i=i, tsort=html.escape(r["task"]), task=task,
                 model=html.escape(r["model"]), arm=arm,
                 rb=r["kb"] / r["nb"] if r["nb"] else 0,
                 cb=rate_cell(r["kb"], r["nb"], r["expect"], bar=False),
@@ -363,7 +404,8 @@ def build_effects(entries):
                 dtxt=fmt_pp(r["delta"]), ci=fmt_ci(r["lo"], r["hi"]),
                 psort=1.0 if r["p"] is None else r["p"], p=p))
 
-    n_sep = sum(1 for r in rows if separates(r["lo"], r["hi"]))
+    n_sep = sum(1 for r in rows
+                if agreement(r["lo"], r["hi"], r["p"]) == "clear")
     table = (
         '<div class="bar"><h2>Skill effect</h2>'
         '<input type="search" data-filter="fx" placeholder="Filter task or model" '
@@ -373,6 +415,7 @@ def build_effects(entries):
         '<th data-s>No skill</th><th data-s>With skill</th>'
         '<th class="c" data-s>&minus;100 &nbsp;0&nbsp; +100 pp</th>'
         '<th data-s>&Delta; pp</th><th>95%% CI</th><th data-s>Fisher p</th>'
+        '<th class="c" data-s>Verdict</th>'
         '</tr></thead><tbody>%s</tbody></table></div>' % "".join(body))
     return table, n_sep, len(rows)
 
@@ -438,7 +481,7 @@ def build(entries):
         plural(len(models), "model"),
         "<b>%d</b> runs" % runs,
         ("%s per cell" % "/".join(str(r) for r in sorted(reps))) if reps else "",
-        ("<b>%d/%d</b> effects clear of zero" % (n_sep, n_cmp)) if n_cmp else "",
+        ("<b>%d/%d</b> clear" % (n_sep, n_cmp)) if n_cmp else "",
     ] if x)
 
     return """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -451,7 +494,8 @@ def build(entries):
     <span><span class="sw"></span>95%% Wilson CI</span>
     <span><code>k/n</code> passed / runs</span>
     <span><code>&dagger;</code> short cell</span>
-    <span>greyed row: CI includes 0</span>
+    <span>verdict: <b>clear</b> interval and Fisher agree &middot;
+      <b>split</b> they disagree &middot; <b>unclear</b> neither</span>
   </p>
   %s
   %s

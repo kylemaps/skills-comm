@@ -166,18 +166,18 @@ class Effects(unittest.TestCase):
     def test_ci_crossing_zero_is_greyed(self):
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [-11, 51],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn('<tr class="ns">', effects_html([("t", s, "")]))
+        self.assertIn('<tr class="unclear">', effects_html([("t", s, "")]))
 
     def test_ci_clear_of_zero_is_not_greyed(self):
         s = summary({}, {"m": {"delta_pp": 50.0, "ci95_pp": [12, 76],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertNotIn('<tr class="ns">', effects_html([("t", s, "")]))
+        self.assertNotIn('<tr class="unclear">', effects_html([("t", s, "")]))
 
     def test_ci_touching_zero_counts_as_crossing(self):
         """[0, 40] does not exclude no effect. Rounding must not upgrade a result."""
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [0, 40],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn('<tr class="ns">', effects_html([("t", s, "")]))
+        self.assertIn('<tr class="unclear">', effects_html([("t", s, "")]))
 
     def test_counts_are_reported_to_the_header(self):
         """Asymmetric on purpose: 1-of-2 is unchanged if the counter is inverted,
@@ -270,6 +270,48 @@ class Separates(unittest.TestCase):
     def test_clear_either_side_separates(self):
         self.assertTrue(bi.separates(3.8, 68.7))
         self.assertTrue(bi.separates(-68.7, -3.8))
+
+
+class Agreement(unittest.TestCase):
+    """Newcombe and Fisher are different tests and can disagree. Say so."""
+
+    def test_both_agree_is_clear(self):
+        self.assertEqual(bi.agreement(11.7, 76.3, 0.033), "clear")
+
+    def test_neither_is_unclear(self):
+        self.assertEqual(bi.agreement(-11.2, 51.0, 0.474), "unclear")
+
+    def test_interval_without_fisher_is_split(self):
+        """Live case: qwen3 on 7t, CI [+3.8, +68.7] with p=0.087."""
+        self.assertEqual(bi.agreement(3.8, 68.7, 0.087), "split")
+
+    def test_fisher_without_interval_is_split(self):
+        self.assertEqual(bi.agreement(-1.0, 60.0, 0.04), "split")
+
+    def test_a_missing_p_is_not_a_disagreement(self):
+        self.assertEqual(bi.agreement(11.7, 76.3, None), "clear")
+        self.assertEqual(bi.agreement(-11.2, 51.0, None), "unclear")
+
+    def test_an_absent_interval_is_never_clear(self):
+        self.assertEqual(bi.agreement(None, None, 0.001), "split")
+        self.assertEqual(bi.agreement(None, None, None), "unclear")
+
+    def test_only_agreement_counts_toward_the_headline(self):
+        """The header claim is the strong one, so it takes the strict reading."""
+        s = summary({}, {"split": {"delta_pp": 40.0, "ci95_pp": [3.8, 68.7],
+                                   "fisher_p": 0.087, "env_only_n": 10, "env_skill_n": 10},
+                         "clear": {"delta_pp": 50.0, "ci95_pp": [11.7, 76.3],
+                                   "fisher_p": 0.033, "env_only_n": 10, "env_skill_n": 10}})
+        _, n_sep, n_all = bi.build_effects([("t", s, "")])
+        self.assertEqual((n_sep, n_all), (1, 2))
+
+    def test_the_verdict_is_text_not_only_colour(self):
+        """Greying was the sole signal, which fails in print and for colour-blind
+        readers, on the column that matters most."""
+        s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [-11, 51], "fisher_p": 0.47,
+                               "env_only_n": 10, "env_skill_n": 10}})
+        h = effects_html([("t", s, "")])
+        self.assertIn(">unclear<", h)
 
 
 class DeltaBar(unittest.TestCase):

@@ -26,8 +26,18 @@ import base64
 import csv
 import html
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+# Imported, not re-derived. This report and the leaderboard render the same
+# summary.json, and the one failure worth designing against is the two of them
+# disagreeing about a number. Sharing the formatting and the significance test
+# makes that impossible rather than merely unlikely.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_index import (  # noqa: E402
+    AGREEMENT_NOTE, BASELINE_ARMS, agreement, fmt_ci, fmt_pp, is_skill_arm,
+    usable_ci)
 
 
 def b64(data: bytes) -> str:
@@ -75,41 +85,106 @@ def pass_rate(cell: dict) -> float:
     return cell.get("passes", 0) / n if n else 0.0
 
 
+def effect_lookup(skill_effect):
+    """{(model, arm): effect}, from keys written either `model` or `model|arm`.
+
+    summarize.py switched to the second form when a sweep gained a second skill arm.
+    This looked up the bare model name, so on every summary written since, the whole
+    column rendered as em-dashes: a populated heading over no data, which reads as "no
+    effect measured" rather than "renderer is broken". Head-to-head `a_vs_b` entries
+    answer a different question and are excluded.
+    """
+    out = {}
+    for key, v in (skill_effect or {}).items():
+        model, _, arm = key.partition("|")
+        if "_vs_" in arm:
+            continue
+        out[(model, arm or "env+skill")] = v
+    return out
+
+
+def score_summary(c):
+    """The score half of a cell, or a marker when the mean describes no run.
+
+    summarize.py flags a cell bimodal when its scores cluster at both ends, and says in
+    as many words: quote the pass rate, not the mean. Rendering 30±48 there is worse
+    than rendering nothing. One decimal, because 99.81 at zero decimals is 100, and no
+    run scored 100.
+    """
+    mean, sd = c.get("mean"), c.get("sd")
+    if mean is None:
+        return ""
+    if c.get("bimodal"):
+        tip = "Bimodal: mean %.1f, sd %.1f, median %.1f. The mean describes no run." % (
+            mean, sd or 0.0, c.get("median", mean))
+        return '<span class="score" title="%s"> · bimodal</span>' % html.escape(tip)
+    return '<span class="score"> · %.1f±%.1f</span>' % (mean, sd or 0.0)
+
+
+def effect_cell(se):
+    if not se:
+        return '<td class="num">&mdash;</td>'
+    ci = usable_ci(se.get("ci95_pp"))
+    lo, hi = ci if ci else (None, None)
+    p = se.get("fisher_p")
+    ptxt = "p n/a" if p is None else ("p=%.3f" % p)
+    # Same verdict function as the leaderboard, so the two pages cannot reach
+    # different conclusions about the same row. Named in text rather than signalled
+    # by colour alone.
+    state = agreement(lo, hi, p)
+    return ('<td class="num %s">%s pp<span class="sub"> CI[%s] %s &middot; '
+            '<span class="st" title="%s">%s</span></span></td>'
+            % (state, fmt_pp(se.get("delta_pp", 0.0)), fmt_ci(lo, hi), ptxt,
+               html.escape(AGREEMENT_NOTE[state]), state))
+
+
 def leaderboard_table(models, arms, lut, skill_effect, poolable):
-    head = "".join(f"<th>{html.escape(a)}<br><span class='sub'>pass · score</span></th>" for a in arms)
-    eff = "<th>skill effect</th>" if skill_effect else ""
+    eff = effect_lookup(skill_effect)
+    skill_arms = [a for a in arms if is_skill_arm(a)]
+    # One effect column per skill arm. A single column cannot hold two skills, and
+    # showing an arbitrary one of them under a heading that names neither is worse
+    # than showing both.
+    eff_arms = [a for a in skill_arms if any((m, a) in eff for m in models)]
+
+    head = "".join("<th>%s<br><span class='sub'>pass · score</span></th>" % html.escape(a)
+                   for a in arms)
+    head += "".join("<th>effect<br><span class='sub'>%s vs baseline</span></th>"
+                    % html.escape(a) for a in eff_arms)
     rows = []
     for m in models:
         cellhtml = []
         for a in arms:
             c = lut.get((m, a))
             if not c:
-                cellhtml.append('<td class="num">—</td>'); continue
-            pr = pass_rate(c)
+                cellhtml.append('<td class="num">&mdash;</td>')
+                continue
+            n, k = c.get("n", 0), c.get("passes", 0)
+            pr = k / n if n else 0.0
             cellhtml.append(
-                f'<td class="num"><b class="pr" style="--v:{pr}">{c["passes"]}/{c["n"]}</b>'
-                f'<span class="score"> · {c.get("mean", 0):.0f}±{c.get("sd", 0):.0f}</span></td>')
-        e = ""
-        if skill_effect and m in skill_effect:
-            se = skill_effect[m]
-            ci = se.get("ci95_pp", [None, None])
-            sig = "sig" if (se.get("fisher_p", 1) or 1) < 0.05 else ""
-            e = (f'<td class="num {sig}">{se.get("delta_pp", 0):+.0f} pp'
-                 f'<span class="sub"> CI[{ci[0]:.0f},{ci[1]:.0f}] p={se.get("fisher_p", float("nan")):.3f}</span></td>')
-        elif skill_effect:
-            e = '<td class="num">—</td>'
-        rows.append(f"<tr><td><b>{html.escape(m)}</b></td>{''.join(cellhtml)}{e}</tr>")
-    # pooled
-    if poolable and len(models) > 1:
+                '<td class="num"><b class="pr" style="--v:%.4f">%d/%d</b>%s</td>'
+                % (pr, k, n, score_summary(c)))
+        for a in eff_arms:
+            cellhtml.append(effect_cell(eff.get((m, a))))
+        rows.append("<tr><td><b>%s</b></td>%s</tr>"
+                    % (html.escape(m), "".join(cellhtml)))
+
+    # Pooling across models needs every model present in every arm, which `poolable`
+    # does not check -- it means the provenance is homogeneous. Summing a ragged design
+    # puts two different populations side by side as though they were a comparison.
+    balanced = all((m, a) in lut for m in models for a in arms)
+    if poolable and balanced and len(models) > 1:
         pooled = []
         for a in arms:
-            tot_p = sum(lut[(m, a)]["passes"] for m in models if (m, a) in lut)
-            tot_n = sum(lut[(m, a)]["n"] for m in models if (m, a) in lut)
+            tot_p = sum(lut[(m, a)].get("passes", 0) for m in models)
+            tot_n = sum(lut[(m, a)].get("n", 0) for m in models)
             pr = tot_p / tot_n if tot_n else 0
-            pooled.append(f'<td class="num"><b class="pr" style="--v:{pr}">{tot_p}/{tot_n}</b></td>')
-        e = '<td class="num">—</td>' if skill_effect else ""
-        rows.append(f'<tr class="pooled"><td><b>ALL</b></td>{"".join(pooled)}{e}</tr>')
-    return f"<table><thead><tr><th>model</th>{head}{eff}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+            pooled.append('<td class="num"><b class="pr" style="--v:%.4f">%d/%d</b></td>'
+                          % (pr, tot_p, tot_n))
+        pooled += ['<td class="num">&mdash;</td>'] * len(eff_arms)
+        rows.append('<tr class="pooled"><td><b>ALL</b></td>%s</tr>' % "".join(pooled))
+
+    return ("<table><thead><tr><th>model</th>%s</tr></thead><tbody>%s</tbody></table>"
+            % (head, "".join(rows)))
 
 
 def scoring_card(rubric: dict) -> str:
@@ -145,7 +220,10 @@ def per_run_table(runs):
             if c == "verdict":
                 cells.append(f"<td>{verdict_pill(val)}</td>")
             elif c in ("score", "dice"):
-                cells.append(f'<td class="num">{val}</td>')
+                # Escaped like every other column. These come from the grader parsing
+                # model-produced output, so they are not trusted input, and a stray
+                # "<" silently swallows the rest of the row.
+                cells.append(f'<td class="num">{html.escape(str(val))}</td>')
             else:
                 cells.append(f"<td>{html.escape(str(val))}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
