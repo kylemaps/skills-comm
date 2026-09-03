@@ -37,6 +37,7 @@ import unittest
 from importlib import util
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+nl = chr(10)
 
 
 def load(name):
@@ -414,6 +415,41 @@ class TestTasksDiff(unittest.TestCase):
         a = {"goal": "g", "dataset": {"id": "ds1"}, "required_output": "o"}
         b = {"goal": "g", "dataset": {"id": "ds2"}, "required_output": "CHANGED"}
         self.assertEqual(self.m.field_diff(a, b), ["dataset", "required_output"])
+
+
+class TestDiskCheckVerdict(unittest.TestCase):
+    """The inode gate printed "healthy" at 86% inodes for as long as it was broken.
+
+    Two defects, both pinned here. These are textual checks on a shell script rather
+    than behavioural ones, because reproducing the behaviour needs a filesystem at a
+    chosen inode pressure. Textual is enough: each pins the exact spelling that failed.
+    """
+
+    def setUp(self):
+        with open(os.path.join(HERE, "disk_check.sh"), encoding="utf-8") as fh:
+            self.src = fh.read()
+        # Comments are stripped before checking for the broken spelling: the fix
+        # documents that spelling in a comment, and a test that cannot tell code
+        # from prose would forbid explaining the bug it is guarding against.
+        self.code = nl.join(l for l in self.src.splitlines()
+                            if not l.lstrip().startswith("#"))
+
+    def test_does_not_combine_dash_i_with_output(self):
+        """GNU df rejects `-i --output=...` and prints only a usage hint, so the
+        percentage came back empty and every inode threshold silently compared 0."""
+        self.assertNotIn("df -i --output=", self.code)
+
+    def test_reads_the_inode_percentage_field(self):
+        self.assertIn("--output=ipcent", self.code)
+
+    def test_thresholds_do_not_default_a_missing_reading_to_zero(self):
+        """${IPCT:-0} makes an unreadable measurement look like an empty disk. A
+        threshold check that cannot measure must not report the safe answer."""
+        for bad in ("${PCT:-0}", "${IPCT:-0}"):
+            self.assertNotIn(bad + '" -ge', self.code, "%s still defaults to 0" % bad)
+
+    def test_an_unparsable_reading_is_fatal(self):
+        self.assertIn("cannot tell", self.code)
 
 
 class TestReportDeterminism(unittest.TestCase):

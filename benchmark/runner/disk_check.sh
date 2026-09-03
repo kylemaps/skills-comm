@@ -57,7 +57,11 @@ echo "=== inodes (a full inode table reads as disk-full while df shows space) ==
 df -i "$HOME" | sed 's/^/  /'
 
 PCT=$(df --output=pcent "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
-IPCT=$(df -i --output=pcent "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
+# NOT `df -i --output=pcent`. GNU df rejects -i combined with --output and prints
+# nothing but a usage hint, so that spelling left IPCT empty -- and ${IPCT:-0}
+# then read as 0%, which is how this script printed "VERDICT: healthy" while the
+# inode table was 86% full. The field for inodes is ipcent.
+IPCT=$(df --output=ipcent "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
 AVAIL_K=$(df --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
 AVAIL_G=$(( ${AVAIL_K:-0} / 1024 / 1024 ))
 
@@ -149,10 +153,21 @@ else
 fi
 
 echo
-if [ "${PCT:-0}" -ge 85 ] || [ "${IPCT:-0}" -ge 85 ]; then
+# A threshold check that cannot take its measurement must not report the safe
+# answer. Defaulting an unreadable percentage to 0 is what made the inode gate
+# invisible for as long as it was broken.
+for v in PCT IPCT; do
+  case "${!v}" in
+    "" | *[!0-9]* )
+      echo "=== VERDICT: cannot tell. $v did not parse from df on this system."
+      echo "    Refusing to say it is safe to launch. Check df manually."
+      exit 1 ;;
+  esac
+done
+if [ "$PCT" -ge 85 ] || [ "$IPCT" -ge 85 ]; then
   echo "=== VERDICT: do not launch. ${PCT}% disk, ${IPCT}% inodes. Reclaim first."
   exit 1
-elif [ "${PCT:-0}" -ge 70 ] || [ "${IPCT:-0}" -ge 70 ]; then
+elif [ "$PCT" -ge 70 ] || [ "$IPCT" -ge 70 ]; then
   echo "=== VERDICT: launch only after reclaiming. ${PCT}% disk, ${IPCT}% inodes."
   exit 0
 else
