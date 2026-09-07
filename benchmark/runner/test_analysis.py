@@ -511,6 +511,42 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         self.assertIn('"harness failure: run timed out', src)
 
 
+class TestRetryable(unittest.TestCase):
+    """Which exclusions get re-run. Selecting too narrowly leaves cells short."""
+
+    def setUp(self):
+        self.f = load("summarize").is_retryable
+
+    def test_a_timeout_is_retryable(self):
+        self.assertTrue(self.f("harness failure: run timed out (exit 124), killed "
+                               "before the agent finished"))
+
+    def test_contamination_is_retryable(self):
+        """Our bug: an env-only run must never see the skill. Selecting only on
+        "harness failure" left these excluded and never re-run, so the cell lost
+        the run and could not get it back."""
+        self.assertTrue(self.f("contaminated: env-only run loaded the skill"))
+
+    def test_misassignment_is_retryable(self):
+        self.assertTrue(self.f("misassigned: skill absent in env+skill run"))
+        self.assertTrue(self.f("misassigned: skill installed in env-only run"))
+
+    def test_an_ungraded_run_is_not_retryable(self):
+        """It needs the grader, not the gateway. Re-running spends tokens to
+        reproduce a result already on disk."""
+        self.assertFalse(self.f("not graded yet -- run the grader on this task"))
+
+    def test_a_valid_run_is_not_retryable(self):
+        self.assertFalse(self.f(""))
+        self.assertFalse(self.f(None))
+
+    def test_find_failed_uses_the_shared_predicate(self):
+        """Defined once, or the two drift and runs go missing silently."""
+        src = open(os.path.join(HERE, "find_failed.py"), encoding="utf-8").read()
+        self.assertIn("is_retryable", src)
+        self.assertNotIn('startswith("harness failure")', src)
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 

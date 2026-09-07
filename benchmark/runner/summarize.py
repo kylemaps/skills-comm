@@ -108,6 +108,23 @@ NOT_FOUND_RE = re.compile(
 # caught it and 51 runs across earlier sweeps were scored as model failures.
 RUN_TIMEOUT_EXIT = 124
 
+# Which exclusions mean "we broke this run, run it again".
+#
+# Every reason below is our fault: the wrong skill in place, the right skill
+# missing, the gateway dying, or our own timeout killing the agent. All of them
+# leave a cell short, and a short cell is not something to caption around.
+#
+# "not graded yet" is deliberately absent. That run is fine and needs the grader,
+# not the gateway; re-running it would spend tokens to reproduce a result already
+# sitting on disk.
+RETRYABLE_EXCLUSIONS = ("harness failure:", "contaminated:", "misassigned:")
+
+
+def is_retryable(reason):
+    """Should this excluded run be re-run? find_failed.py selects on this."""
+    return bool(reason) and reason.startswith(RETRYABLE_EXCLUSIONS)
+
+
 INFRA_ERROR_RES = [
     (re.compile(r"Model '' was not found"), "gateway returned empty model name"),
     (re.compile(r"\b429\b|rate.?limit", re.I), "gateway rate limit"),

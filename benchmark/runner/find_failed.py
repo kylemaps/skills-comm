@@ -15,8 +15,8 @@ obvious thing has not been done. If a run failed because our harness broke,
 re-run it.
 
 Reuses summarize.py's classifier so "what counts as our fault" is defined in
-exactly one place. A run qualifies when it produced no output AND either matched
-a known harness-failure signature or never made a single model call.
+exactly one place. A run qualifies when summarize excluded it for a reason we caused: a harness
+failure, our timeout killing it, or the wrong skill being in place.
 """
 import argparse
 import glob
@@ -24,7 +24,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from summarize import load_run  # noqa: E402
+from summarize import is_retryable, load_run  # noqa: E402
 
 
 def main():
@@ -48,7 +48,11 @@ def main():
     runs = [load_run(d, a.task, tokens_available) for d in dirs] if tokens_available else probe
 
     for r in runs:
-        if not r["exclude_reason"].startswith("harness failure"):
+        # Every exclusion we caused, not just the ones spelled "harness failure".
+        # A contaminated or misassigned run is our bug too, and selecting on that
+        # one prefix left those excluded and then never re-run, which is the worst
+        # of both: the cell loses the run and never gets it back.
+        if not is_retryable(r["exclude_reason"]):
             continue
         if a.arm and r["arm"] != a.arm:
             continue
