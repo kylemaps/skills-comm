@@ -102,6 +102,12 @@ NOT_FOUND_RE = re.compile(
 #
 # Deliberately narrow. Anything ambiguous should stay in and be scored, because
 # discarding real failures inflates the pass rate.
+# `timeout` exits 124 when it kills the command. run_bench.sh wraps every run in
+# one, so this is the harness ending a run, never the agent. It is a plain exit
+# code rather than a stderr signature, which is why the regex list below never
+# caught it and 51 runs across earlier sweeps were scored as model failures.
+RUN_TIMEOUT_EXIT = 124
+
 INFRA_ERROR_RES = [
     (re.compile(r"Model '' was not found"), "gateway returned empty model name"),
     (re.compile(r"\b429\b|rate.?limit", re.I), "gateway rate limit"),
@@ -474,6 +480,21 @@ def load_run(run_dir, task, tokens_available=False):
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
     elif r["arm"].startswith("env+skill") and not has_skill_installed:
         r["exclude_reason"] = "misassigned: skill absent in %s run" % r["arm"]
+    elif r["exit_code"] == RUN_TIMEOUT_EXIT:
+        # A timeout is our failure, not the model's: WE killed the run. It is
+        # excluded even when it produced output, which is the part that took a
+        # while to see. On diffusion-brain-mask 11 of 80 runs hit the wall, and
+        # they did not fall evenly -- 7 landed in baseline arms and scored 0 as
+        # agent failures, while all 4 in a skill arm had written a mask before
+        # they died and passed. Scoring both as the model's doing inflates the
+        # skill effect from one side and deflates it from the other.
+        #
+        # A killed run's output is an unknown intermediate. The agent never got
+        # to say it was finished, so the mask may be a first pass it meant to
+        # refine. Grading that as a completed attempt is unsound whichever way
+        # it scores. Exclude, raise RUN_TIMEOUT, re-run.
+        r["exclude_reason"] = ("harness failure: run timed out (exit %d), killed "
+                               "before the agent finished" % RUN_TIMEOUT_EXIT)
     elif r["infra_error"] and not r["output_present"]:
         r["exclude_reason"] = "harness failure: %s" % r["infra_error"]
     elif (not r["output_present"] and tokens_available

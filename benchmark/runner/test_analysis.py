@@ -452,6 +452,65 @@ class TestDiskCheckVerdict(unittest.TestCase):
         self.assertIn("cannot tell", self.code)
 
 
+class TestTimeoutIsOurFailure(unittest.TestCase):
+    """A run the harness killed must not be scored against the model.
+
+    On diffusion-brain-mask 11 of 80 runs hit the 45-minute wall and they did not
+    fall evenly: 7 in baseline arms, 4 in a skill arm. Scoring them as agent
+    failures moves the skill effect in one direction only.
+    """
+
+    def setUp(self):
+        self.m = load("summarize")
+
+    def test_the_exit_code_is_124(self):
+        self.assertEqual(self.m.RUN_TIMEOUT_EXIT, 124)
+
+    def classify(self, **over):
+        """Drive the validity block through a minimal run record."""
+        r = {"arm": "env-only", "skills_installed": "", "skills_seen": [],
+             "infra_error": "", "output_present": True, "graded": True,
+             "tokens_total": 100, "exit_code": 0}
+        r.update(over)
+        # Mirror of the decision chain in summarize.load_run, in order.
+        if r["arm"] == "env-only" and r["skills_seen"]:
+            return "contaminated"
+        if r["exit_code"] == self.m.RUN_TIMEOUT_EXIT:
+            return "timeout"
+        if r["infra_error"] and not r["output_present"]:
+            return "infra"
+        return ""
+
+    def test_a_timeout_with_output_is_still_excluded(self):
+        """The part that is easy to get wrong. A killed run's mask is an unknown
+        intermediate: the agent never said it was finished."""
+        self.assertEqual(self.classify(exit_code=124, output_present=True), "timeout")
+
+    def test_a_timeout_without_output_is_excluded(self):
+        self.assertEqual(self.classify(exit_code=124, output_present=False), "timeout")
+
+    def test_a_clean_run_is_not_excluded(self):
+        self.assertEqual(self.classify(exit_code=0), "")
+
+    def test_a_nonzero_exit_that_is_not_a_timeout_is_not_a_timeout(self):
+        """Exit 1 is the agent failing, which is a result, not our fault."""
+        self.assertEqual(self.classify(exit_code=1), "")
+
+    def test_contamination_still_outranks_a_timeout(self):
+        """A contaminated run is unusable whatever else happened to it."""
+        self.assertEqual(
+            self.classify(exit_code=124, skills_seen=["brain-extraction"]),
+            "contaminated")
+
+    def test_the_reason_is_retryable(self):
+        """find_failed.py selects runs whose exclude_reason starts with
+        "harness failure", and retry_failed.sh drives it. Without that prefix a
+        timeout is excluded and then never re-run, which leaves the cell short
+        and is worse than scoring it."""
+        src = open(os.path.join(HERE, "summarize.py"), encoding="utf-8").read()
+        self.assertIn('"harness failure: run timed out', src)
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 
