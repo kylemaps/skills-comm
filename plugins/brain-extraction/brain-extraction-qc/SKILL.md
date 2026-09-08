@@ -173,7 +173,7 @@ human verification form so that AI-human agreement can be measured over time.
      "${DERIV}/<sub>_<ses>_desc-brain_iqm.tsv"
    ```
 
-   Render the QC view from the template `../qc-studio/template/qc.json`, substituting
+   Render the QC view from the tokenized template in `references/qcstudio-integration.md`, substituting
    `{{PIPELINE_NAME}}` / `{{PIPELINE_VERSION}}` (and `{{INPUT_IMAGE_ENTITIES}}` to match the
    pipeline's `invocation.json`), and write it into the user's project (e.g.
    `<dataset>/qc-studio/<name>/qc.json`). The rendered file MUST be valid JSON with no leftover

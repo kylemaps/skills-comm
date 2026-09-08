@@ -6,8 +6,8 @@ human-rating front end that *augments* the automated AI evaluation — it does n
 the AI eval or the montage. Load this reference when the brain mask lives in (or can be
 copied into) a Nipoppy `derivatives/` tree and the user wants to review it in QC Studio.
 
-The QC view is generated from the tokenized template `qc-studio/template/qc.json` (with its own
-`README.md`): the skill substitutes the rendered pipeline's `{{PIPELINE_NAME}}` /
+The QC view is generated from the tokenized template given below: the skill
+substitutes the rendered pipeline's `{{PIPELINE_NAME}}` /
 `{{PIPELINE_VERSION}}` (and `{{INPUT_IMAGE_ENTITIES}}`) and writes the result into the user's
 project (e.g. `<dataset>/qc-studio/<name>/qc.json`). This file explains how to produce the
 inputs it points at and how to launch the viewer.
@@ -38,7 +38,7 @@ For the `brain_extraction_qc` task, map fields to the pipeline + QC outputs:
 | `svg_montage_path` | `…/<sub>_<ses>_desc-brain_qc.png` (the 3×9 mosaic from `qc_brain_extraction.py`) |
 | `iqm_path` | `…/<sub>_<ses>_desc-brain_iqm.tsv` (the IQM sidecar from `qc_brain_extraction.py`) |
 
-Tokenized template form (`qc-studio/template/qc.json`); the skill substitutes
+Tokenized template form; the skill substitutes
 `{{PIPELINE_NAME}}` / `{{PIPELINE_VERSION}}` / `{{INPUT_IMAGE_ENTITIES}}` when rendering:
 
 ```json

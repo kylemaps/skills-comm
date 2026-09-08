@@ -30,11 +30,12 @@ user choose; the choice selects the recipe rather than a `module load`:
 
 1. **Confirm naming.** Ask for the pipeline **name** (default `brainextraction-<tool>`) and
    **version** (default `1.0.0`) so the user can version and share it.
-2. **Render the bundle.** Read `../nipoppy-pipelines/template/` and the chosen tool's section in
-   `../nipoppy-pipelines/tool-recipes.md`, substitute every `{{TOKEN}}`, and write the five files
-   (`config`, `descriptor`, `invocation`, `tracker`, `hpc`) into the user's project, e.g.
-   `<dataset>/pipelines/<name>/`. The rendered files MUST be valid JSON (no trailing commas, no
-   leftover `{{...}}`). Keep the standardized output names — never tool-specific names.
+2. **Author the bundle.** Write the five files (`config`, `descriptor`, `invocation`, `tracker`,
+   `hpc`) into the user's project, e.g. `<dataset>/pipelines/<name>/`, following the Nipoppy
+   pipeline schema — check `nipoppy pipeline create --help` and the Nipoppy documentation for the
+   current field definitions. The files MUST be valid JSON. Keep the standardized output names —
+   never tool-specific names. This skill does not bundle pipeline templates; if the schema cannot
+   be established confidently, say so and use the standalone SLURM workflow instead.
 3. **Validate & install.**
    ```bash
    nipoppy pipeline validate <dataset>/pipelines/<name>
@@ -48,11 +49,10 @@ user choose; the choice selects the recipe rather than a `module load`:
 5. **Hand off to QC.** Outputs land at
    `derivatives/<name>/<version>/output/<sub>/<ses>/anat/<sub>_<ses>_desc-brain_mask.nii.gz`
    (and `_desc-brain_T1w.nii.gz`). Invoke `brain-extraction-qc` with those paths; it renders the
-   matching QC Studio view from `../qc-studio/template/qc.json`.
+   matching QC Studio view from its own `references/qcstudio-integration.md`.
 
-See `../nipoppy-pipelines/README.md` for the template, tokens, and the package/version/share
-path. The standalone SLURM workflow below remains the fallback for data that is not in a Nipoppy
-dataset.
+The standalone SLURM workflow below remains the fallback for data that is not in a Nipoppy
+dataset, and for any case where the pipeline bundle cannot be authored confidently.
 
 ## Steps
 
@@ -214,7 +214,7 @@ dataset.
 - ALWAYS create `logs/` before submitting so the SLURM output path resolves.
 - Do not express tool preference unless explicitly asked.
 - If the input is inside a Nipoppy dataset, prefer scaffolding a tool-specific Nipoppy pipeline
-  (render from `../nipoppy-pipelines/template/`) over a standalone SLURM script — see the Nipoppy
+  over a standalone SLURM script — see the Nipoppy
   datasets section. Always keep the standardized `_desc-brain_mask.nii.gz` /
   `_desc-brain_T1w.nii.gz` output names so the tracker and QC view stay tool-agnostic.
 - Do not proceed past Step 1 if the input file does not exist.
