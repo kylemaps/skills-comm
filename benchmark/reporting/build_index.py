@@ -462,14 +462,52 @@ def build_grid(entries):
             '</tr></thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
 
 
+def notices(entries):
+    """What summarize.py flagged and this page used to discard.
+
+    The grid renders `cells`, which holds only the runs that survived. A sweep can
+    therefore look complete while a fifth of it was thrown out, and un-poolable data
+    can sit under a pooled-looking heading. Both facts are in summary.json and both
+    were being ignored. Terse rows, no prose: the numbers say it.
+    """
+    rows = []
+    for name, s, _ in entries:
+        bits = []
+        n_ex = s.get("n_excluded") or 0
+        if n_ex:
+            why = s.get("exclusions") or {}
+            top = sorted(why.items(), key=lambda kv: (-kv[1], kv[0]))
+            detail = "; ".join("%s &times;%d" % (html.escape(k.split(":")[0]), v)
+                               for k, v in top[:3])
+            bits.append('<b>%d</b> of %d runs excluded%s'
+                        % (n_ex, s.get("n_runs") or n_ex,
+                           " &mdash; " + detail if detail else ""))
+        # poolable is absent in older summaries; absent is not the same as false.
+        if s.get("poolable") is False:
+            because = s.get("not_poolable_because") or s.get("provenance_varies") or []
+            bits.append("not poolable%s"
+                        % (" &mdash; " + ", ".join(html.escape(b) for b in because)
+                           if because else ""))
+        if bits:
+            rows.append('<tr><td class="l name">%s</td><td class="l">%s</td></tr>'
+                        % (html.escape(name), " &middot; ".join(bits)))
+    if not rows:
+        return ""
+    return ('<div class="bar"><h2>Excluded and not pooled</h2></div>'
+            '<div class="card scroll"><table><thead><tr>'
+            '<th class="l">Task</th><th class="l">What summarize flagged</th>'
+            '</tr></thead><tbody>%s</tbody></table></div>' % "".join(rows))
+
+
 def build(entries):
     effects, n_sep, n_cmp = build_effects(entries)
 
-    models, runs, reps = set(), 0, set()
+    models, runs, reps, n_excluded = set(), 0, set(), 0
     for _, s, _ in entries:
         for key, v in s.get("cells", {}).items():
             models.add(key.partition("|")[0])
             runs += v.get("n", 0)
+        n_excluded += s.get("n_excluded") or 0
         if expected_reps(s):
             reps.add(expected_reps(s))
 
@@ -480,6 +518,7 @@ def build(entries):
         plural(len(entries), "task"),
         plural(len(models), "model"),
         "<b>%d</b> runs" % runs,
+        ("%d excluded" % n_excluded) if n_excluded else "",
         ("%s per cell" % "/".join(str(r) for r in sorted(reps))) if reps else "",
         ("<b>%d/%d</b> clear" % (n_sep, n_cmp)) if n_cmp else "",
     ] if x)
@@ -499,10 +538,11 @@ def build(entries):
   </p>
   %s
   %s
+  %s
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (STYLE, meta, effects, build_grid(entries), SCRIPT)
+</div>%s</body></html>""" % (STYLE, meta, effects, build_grid(entries), notices(entries), SCRIPT)
 
 
 def discover(report_dir):

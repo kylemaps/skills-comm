@@ -445,6 +445,51 @@ class Grid(unittest.TestCase):
         self.assertIn("env+skillB", bi.build_grid([("t", s, "")]))
 
 
+class Notices(unittest.TestCase):
+    """`cells` holds only surviving runs, so a sweep can look complete while a
+    fifth of it was thrown out. Both facts are in summary.json and the page was
+    discarding both."""
+
+    def sm(self, **kw):
+        s = summary({"m|env-only": {"n": 10, "passes": 5}})
+        s.update(kw)
+        return s
+
+    def test_exclusions_are_shown_with_their_reason(self):
+        h = bi.notices([("t", self.sm(n_runs=80, n_excluded=13, exclusions={
+            "harness failure: run timed out (exit 124)": 11,
+            "contaminated: env-only run loaded the skill": 2}), "")])
+        self.assertIn("13", h)
+        self.assertIn("80", h)
+        self.assertIn("harness failure", h)
+
+    def test_not_poolable_names_the_field(self):
+        """A flag you cannot argue with gets ignored."""
+        h = bi.notices([("t", self.sm(poolable=False,
+                                      not_poolable_because=["skills_hash"]), "")])
+        self.assertIn("not poolable", h)
+        self.assertIn("skills_hash", h)
+
+    def test_absent_poolable_is_not_treated_as_false(self):
+        """Older summaries predate the field. Absent is not the same as false."""
+        self.assertEqual(bi.notices([("t", self.sm(), "")]), "")
+
+    def test_poolable_true_says_nothing(self):
+        self.assertEqual(bi.notices([("t", self.sm(poolable=True), "")]), "")
+
+    def test_a_clean_sweep_renders_no_strip_at_all(self):
+        self.assertEqual(bi.notices([("t", self.sm(n_excluded=0, poolable=True), "")]), "")
+
+    def test_the_header_counts_exclusions(self):
+        h = bi.build([("t", self.sm(n_runs=80, n_excluded=13), "")])
+        self.assertIn("13 excluded", h)
+
+    def test_reasons_are_escaped(self):
+        h = bi.notices([("t", self.sm(n_runs=1, n_excluded=1,
+                                      exclusions={"<img src=x>": 1}), "")])
+        self.assertNotIn("<img src=x>", h)
+
+
 class Discover(unittest.TestCase):
     def test_picks_up_a_report_dir(self):
         with tempfile.TemporaryDirectory() as d:
