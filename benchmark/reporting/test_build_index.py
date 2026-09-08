@@ -166,18 +166,18 @@ class Effects(unittest.TestCase):
     def test_ci_crossing_zero_is_greyed(self):
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [-11, 51],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn('<tr class="unclear">', effects_html([("t", s, "")]))
+        self.assertIn('<tr class="unclear exp"', effects_html([("t", s, "")]))
 
     def test_ci_clear_of_zero_is_not_greyed(self):
         s = summary({}, {"m": {"delta_pp": 50.0, "ci95_pp": [12, 76],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertNotIn('<tr class="unclear">', effects_html([("t", s, "")]))
+        self.assertNotIn('<tr class="unclear exp"', effects_html([("t", s, "")]))
 
     def test_ci_touching_zero_counts_as_crossing(self):
         """[0, 40] does not exclude no effect. Rounding must not upgrade a result."""
         s = summary({}, {"m": {"delta_pp": 20.0, "ci95_pp": [0, 40],
                                "env_only_n": 10, "env_skill_n": 10}})
-        self.assertIn('<tr class="unclear">', effects_html([("t", s, "")]))
+        self.assertIn('<tr class="unclear exp"', effects_html([("t", s, "")]))
 
     def test_counts_are_reported_to_the_header(self):
         """Asymmetric on purpose: 1-of-2 is unchanged if the counter is inverted,

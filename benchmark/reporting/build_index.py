@@ -420,6 +420,19 @@ SCRIPT = """<script>
     var f = parseFloat(v);
     return isNaN(f) ? v.toLowerCase() : f;
   }
+  // A comparison row may be followed by its detail row. Everything below moves,
+  // hides and counts the pair as one unit -- sorting them independently would
+  // silently attach a panel of runtimes to the wrong comparison.
+  function detailOf(tr) {
+    var n = tr.nextElementSibling;
+    return (n && n.classList.contains('det')) ? n : null;
+  }
+  function comparisons(tbl) {
+    return Array.prototype.filter.call(tbl.tBodies[0].rows, function (r) {
+      return !r.classList.contains('det');
+    });
+  }
+
   document.querySelectorAll('table').forEach(function (tbl) {
     tbl.querySelectorAll('th[data-s]').forEach(function (th) {
       th.addEventListener('click', function () {
@@ -430,32 +443,76 @@ SCRIPT = """<script>
         });
         th.classList.add(desc ? 'desc' : 'asc');
         var body = tbl.tBodies[0];
-        var rows = Array.prototype.slice.call(body.rows);
-        rows.sort(function (a, b) {
-          var x = val(a.cells[i]), y = val(b.cells[i]);
+        var rows = comparisons(tbl);
+        var pairs = rows.map(function (r) { return [r, detailOf(r)]; });
+        pairs.sort(function (a, b) {
+          var x = val(a[0].cells[i]), y = val(b[0].cells[i]);
           if (x < y) return desc ? 1 : -1;
           if (x > y) return desc ? -1 : 1;
           return 0;
         });
-        rows.forEach(function (r) { body.appendChild(r); });
+        pairs.forEach(function (p) {
+          body.appendChild(p[0]);
+          if (p[1]) body.appendChild(p[1]);
+        });
       });
     });
   });
-  // Text filter and verdict facets share one pass, and the row count is always
-  // rendered, so a filtered table can never be mistaken for the whole sweep.
+
+  // Click or keyboard opens the detail panel: runtime, tokens, uptake, tools, dates.
+  document.querySelectorAll('tr.exp').forEach(function (tr) {
+    var det = detailOf(tr);
+    if (!det) { tr.removeAttribute('role'); tr.removeAttribute('tabindex'); return; }
+    function toggle() {
+      var open = det.hasAttribute('hidden');
+      if (open) { det.removeAttribute('hidden'); } else { det.setAttribute('hidden', ''); }
+      tr.setAttribute('aria-expanded', open ? 'true' : 'false');
+      tr.classList.toggle('open', open);
+    }
+    tr.addEventListener('click', function (e) {
+      if (e.target.closest('a')) return;   // task links still navigate
+      toggle();
+    });
+    tr.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+
+  // Text box, two dropdowns and the verdict facets share one pass. The count is
+  // always rendered, so a filtered table can never be mistaken for the whole sweep.
   document.querySelectorAll('input[data-filter]').forEach(function (box) {
     var id = box.getAttribute('data-filter');
     var tbl = document.getElementById(id);
     var out = document.querySelector('[data-count="' + id + '"]');
     var chips = document.querySelectorAll('[data-vf][data-for="' + id + '"]');
+    var sels = document.querySelectorAll('select[data-for="' + id + '"]');
     var pick = 'all';
     function apply() {
       var q = box.value.trim().toLowerCase();
-      var rows = tbl.tBodies[0].rows, shown = 0;
-      Array.prototype.forEach.call(rows, function (r) {
-        var hit = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
-        var keep = hit && (pick === 'all' || r.className === pick);
+      var rows = comparisons(tbl), shown = 0;
+      rows.forEach(function (r) {
+        var keep = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
+        if (keep && pick !== 'all') keep = r.classList.contains(pick);
+        if (keep) {
+          Array.prototype.forEach.call(sels, function (sel) {
+            var want = sel.value;
+            if (want !== 'all' && r.getAttribute(sel.getAttribute('data-key')) !== want) {
+              keep = false;
+            }
+          });
+        }
         r.style.display = keep ? '' : 'none';
+        var det = detailOf(r);
+        if (det) {
+          // A hidden row's panel is hidden and collapsed, so re-showing the row
+          // never reveals a panel the reader did not open.
+          det.style.display = keep ? '' : 'none';
+          if (!keep) {
+            det.setAttribute('hidden', '');
+            r.setAttribute('aria-expanded', 'false');
+            r.classList.remove('open');
+          }
+        }
         if (keep) shown += 1;
       });
       if (out) {
@@ -465,6 +522,9 @@ SCRIPT = """<script>
       }
     }
     box.addEventListener('input', apply);
+    Array.prototype.forEach.call(sels, function (sel) {
+      sel.addEventListener('change', apply);
+    });
     Array.prototype.forEach.call(chips, function (c) {
       c.addEventListener('click', function () {
         pick = c.getAttribute('data-vf');
@@ -477,6 +537,68 @@ SCRIPT = """<script>
   });
 })();
 </script>"""
+
+
+def baseline_arm_for(summary, model):
+    """The baseline arm this model actually ran, or None.
+
+    Not hardcoded to "env-only": a task can name its control differently, and
+    guessing produces a detail panel that silently compares a cell to nothing.
+    """
+    for arm in cell_matrix(summary).get(model, {}):
+        if not is_skill_arm(arm):
+            return arm
+    return None
+
+
+def _num(v, unit="", dp=0):
+    if v in (None, "", 0):
+        return '<span class="dim">&mdash;</span>'
+    return ("%.*f%s" % (dp, v, unit)) if dp else ("%s%s" % ("{:,}".format(int(v)), unit))
+
+
+def detail_panel(summary, model, skill_arm):
+    """Everything the harness measured about this comparison beyond pass rate.
+
+    Runtime, token cost, uptake, which tools were reached for, and when the runs
+    happened. All read straight from the cell -- nothing is derived here, because a
+    figure computed two ways is a figure that eventually disagrees with itself.
+    Tokens per passing run is deliberately absent: summarize computes it from raw
+    runs and summary.json carries only a median, so it cannot be reproduced exactly.
+    """
+    cells = summary.get("cells", {})
+    base = baseline_arm_for(summary, model)
+    arms = [a for a in (base, skill_arm) if a]
+    got = [(a, cells.get("%s|%s" % (model, a))) for a in arms]
+    got = [(a, c) for a, c in got if c]
+    if not got:
+        return ""
+
+    def row(label, fn, hint=""):
+        tds = "".join('<td class="n">%s</td>' % fn(c) for _, c in got)
+        return ('<tr><th scope="row">%s%s</th>%s</tr>'
+                % (html.escape(label),
+                   ' <span class="hint">%s</span>' % html.escape(hint) if hint else "",
+                   tds))
+
+    head = "".join('<th>%s</th>' % html.escape(ARM_LABEL.get(a, a)) for a, _ in got)
+    body = [
+        row("Median runtime", lambda c: _num(c.get("median_minutes"), " min", 1)),
+        row("Median tokens", lambda c: _num(c.get("median_tokens_total")), "per run"),
+        row("Opened the skill", lambda c: "%d/%d" % (c.get("uptake", 0), c.get("n", 0))),
+        row("Tools reached for",
+            lambda c: html.escape(", ".join(
+                "%s %d" % (k, v) for k, v in
+                sorted((c.get("methods") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+            ) or "none")),
+        row("Not-found claims", lambda c: _num(c.get("not_found_claims"))),
+        row("Ran", lambda c: html.escape(
+            c["first_run"] if c.get("first_run") == c.get("last_run")
+            else "%s to %s" % (c.get("first_run"), c.get("last_run")))
+            if c.get("first_run") else '<span class="dim">&mdash;</span>'),
+    ]
+    return ('<table class="detail"><thead><tr><th scope="col"></th>%s</tr></thead>'
+            '<tbody>%s</tbody></table>' % (head, "".join(body)))
 
 
 def build_effects(entries):
@@ -498,6 +620,7 @@ def build_effects(entries):
             ci = usable_ci(e.get("ci95_pp"))
             rows.append({
                 "task": name, "href": href, "model": model, "arm": arm,
+                "summary": s,
                 "kb": e.get("env_only_pass", 0), "nb": e.get("env_only_n", 0),
                 "ks": e.get("env_skill_pass", 0), "ns": e.get("env_skill_n", 0),
                 "delta": e.get("delta_pp", 0.0),
@@ -523,7 +646,7 @@ def build_effects(entries):
         p = ('<span class="pv dim">&mdash;</span>' if r["p"] is None
              else '<span class="pv">%.3f</span>' % r["p"])
         body.append(
-            '<tr class="{ns}"><td class="rank">{i}</td>'
+            '<tr class="{ns} exp" tabindex="0" role="button" aria-expanded="false" title="Show runtime, tokens, tools" data-task="{tsort}" data-model="{model}"><td class="rank">{i}</td>'
             '<td class="l name" data-v="{tsort}">{task}</td>'
             '<td class="l"><span class="model">{model}</span>{arm}</td>'
             '<td data-v="{rb:.4f}">{cb}</td><td data-v="{rs:.4f}">{cs}</td>'
@@ -542,6 +665,21 @@ def build_effects(entries):
                 d=r["delta"], bar=delta_bar(r["delta"], r["lo"], r["hi"]),
                 dtxt=fmt_pp(r["delta"]), ci=fmt_ci(r["lo"], r["hi"]),
                 psort=1.0 if r["p"] is None else r["p"], p=p))
+        panel = detail_panel(r["summary"], r["model"], r["arm"])
+        if panel:
+            body.append('<tr class="det" hidden><td colspan="8">%s</td></tr>' % panel)
+
+    def picker(key, label, values):
+        # Populated from the data, never a hardcoded list: a fixed roster keeps
+        # offering models that are gone and never offers the ones just added.
+        opts = "".join('<option value="%s">%s</option>' % (html.escape(v), html.escape(v))
+                       for v in values)
+        return ('<select data-for="fx" data-key="data-%s" aria-label="Filter by %s">'
+                '<option value="all">All %ss</option>%s</select>'
+                % (key, label, label, opts))
+
+    pickers = (picker("task", "task", sorted({r["task"] for r in rows}))
+               + picker("model", "model", sorted({r["model"] for r in rows})))
 
     n_sep = sum(1 for r in rows
                 if agreement(r["lo"], r["hi"], r["p"]) == "clear")
@@ -555,8 +693,9 @@ def build_effects(entries):
         '<button type="button" data-for="fx" data-vf="split" aria-pressed="false">Split</button>'
         '<button type="button" data-for="fx" data-vf="unclear" aria-pressed="false">Unclear</button>'
         '</span>'
-        '<input type="search" data-filter="fx" placeholder="Filter task or model" '
-        'aria-label="Filter task or model"></span></div>'
+        '%s'
+        '<input type="search" data-filter="fx" placeholder="Search" '
+        'aria-label="Search task or model"></span></div>'
         '<div class="card tall"><table id="fx"><thead><tr>'
         '<th></th><th class="l" data-s>Task</th><th class="l" data-s>Model</th>'
         '<th data-s>No skill<span class="sub">k/n</span></th>'
@@ -565,7 +704,7 @@ def build_effects(entries):
         '<span>&minus;100</span><span>0</span><span>+100</span></span></th>'
         '<th data-s>&Delta; pp<span class="sub">95%% CI</span></th>'
         '<th class="c" data-s>Verdict<span class="sub">Fisher p</span></th>'
-        '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), "".join(body)))
+        '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), pickers, "".join(body)))
     return table, n_sep, len(rows)
 
 
