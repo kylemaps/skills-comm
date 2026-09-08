@@ -610,11 +610,25 @@ def report(runs, task):
              else within_arm).append(k)
 
         if within_arm:
-            not_poolable += [k for k in within_arm if k in DECIDES_POOLING]
-            print("\n  !! NOT POOLABLE: %s vary WITHIN an arm."
-                  % ", ".join(within_arm))
-            print("     A single arm built from runs made under different conditions")
-            print("     is not one experiment. Split or re-run before quoting anything.")
+            # The printed warning has to agree with the flag. Filtering only what set
+            # `poolable`, while still printing every field that varied, left the
+            # terminal shouting NOT POOLABLE over a summary.json that said
+            # poolable: true. A human-facing message contradicting the machine-facing
+            # field is worse than either being wrong on its own.
+            blocking = [k for k in within_arm if k in DECIDES_POOLING]
+            noted = [k for k in within_arm if k not in DECIDES_POOLING]
+            not_poolable += blocking
+            if blocking:
+                print("\n  !! NOT POOLABLE: %s vary WITHIN an arm."
+                      % ", ".join(blocking))
+                print("     A single arm built from runs made under different conditions")
+                print("     is not one experiment. Split or re-run before quoting anything.")
+            if noted:
+                print("\n  %s vary within an arm but do not decide pooling."
+                      % ", ".join(noted))
+                print("     skills_sha is the repo commit, so it moves whenever the")
+                print("     RUNNER changes and not only when the skill does. skills_hash")
+                print("     is the skill's content, and is what the flag reads.")
 
         if across_arms:
             # Changing the skill is the point of the experiment, so skill provenance

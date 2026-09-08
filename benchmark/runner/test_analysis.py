@@ -575,6 +575,18 @@ class TestPoolingDecision(unittest.TestCase):
         self.assertNotIn('"poolable": not heterogeneous', self.src)
         self.assertIn('"poolable": not not_poolable', self.src)
 
+    def test_the_warning_agrees_with_the_flag(self):
+        """Filtering what set `poolable` while still printing every varying field
+        left the terminal shouting NOT POOLABLE over a summary.json saying
+        poolable: true. A message that contradicts the field is worse than either
+        being wrong alone."""
+        self.assertIn('", ".join(blocking)', self.src)
+        self.assertNotIn('% ", ".join(within_arm))', self.src)
+
+    def test_non_deciding_variation_is_still_reported(self):
+        """Excluded from the decision, not silenced."""
+        self.assertIn("do not decide pooling", self.src)
+
     def test_the_reason_is_published(self):
         """A false flag is only debuggable if the summary says which field caused it."""
         self.assertIn('"not_poolable_because"', self.src)
