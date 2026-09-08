@@ -17,3 +17,11 @@ venv/
 
 # Local Claude state
 .claude/settings.local.json
+
+# Benchmark local state: fetched datasets and run outputs. Regenerable, large,
+# and inode-hungry -- one run leaves several thousand small files behind, which
+# is what filled the inode table on the Play server while df showed a third of
+# the disk still free.
+benchmark/runs/
+benchmark/ground_truth/
+benchmark/datasets/
