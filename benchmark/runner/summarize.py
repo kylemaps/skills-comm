@@ -560,6 +560,26 @@ def report(runs, task):
 
     # -- provenance ---------------------------------------------------------
     hr("PROVENANCE")
+    # Poolability is not "did any field vary". Skill provenance differing BETWEEN
+    # arms IS the experiment, and flagging it made every sweep un-poolable for the
+    # thing it was built to measure. All three brain-extraction packs carry
+    # poolable:false on skills_sha alone -- and skills_sha is the repo commit, which
+    # moves whenever any file changes, including the runner. On the motion pack the
+    # two recorded commits differ only in retry_failed.sh and run_sweep.sh:
+    #     git diff 75565e3 2966821 -- plugins/brain-extraction/   ->   empty
+    # so the skill those runs saw was byte-identical.
+    #
+    # What actually breaks pooling is narrower, and both cases are already detected
+    # below to print their warnings. The flag just ignored them.
+    # skills_sha is reported but never decides poolability. It is the repo commit,
+    # so it moves when the RUNNER changes and not only when the skill does, and
+    # skills_hash measures the same thing exactly. On the nodura and motion packs
+    # skills_sha varies within an arm while skills_hash does not: the runs in that
+    # arm saw byte-identical skills and the sweep was flagged un-poolable anyway.
+    # Where the content really did differ, skills_hash says so -- on the 7t pack it
+    # does, and that one stays un-poolable on its own evidence.
+    DECIDES_POOLING = [k for k in PROVENANCE_KEYS if k != "skills_sha"]
+    not_poolable = []
     heterogeneous = []
     for k in PROVENANCE_KEYS:
         vals = [r[k] for r in runs]
@@ -590,6 +610,7 @@ def report(runs, task):
              else within_arm).append(k)
 
         if within_arm:
+            not_poolable += [k for k in within_arm if k in DECIDES_POOLING]
             print("\n  !! NOT POOLABLE: %s vary WITHIN an arm."
                   % ", ".join(within_arm))
             print("     A single arm built from runs made under different conditions")
@@ -611,6 +632,7 @@ def report(runs, task):
                 print("  experiment. Valid, but the baseline is a HISTORICAL control:")
                 print("  it was measured at a different time. Say so when reporting.")
             if env_keys:
+                not_poolable += [k for k in env_keys if k in DECIDES_POOLING]
                 print("\n  !! %s differ between arms." % ", ".join(env_keys))
                 print("     The environment is supposed to be the controlled variable.")
                 print("     Any difference between arms may be the environment, not")
@@ -946,7 +968,10 @@ def report(runs, task):
         "n_excluded": len(excluded),
         "exclusions": dict(Counter(r["exclude_reason"] for r in excluded)),
         "provenance": {k: dict(Counter(r[k] for r in runs)) for k in PROVENANCE_KEYS},
-        "poolable": not heterogeneous,
+        "poolable": not not_poolable,
+        "not_poolable_because": sorted(set(not_poolable)),
+        # Anything that varied at all, including harmlessly across arms.
+        "provenance_varies": sorted(heterogeneous),
         "cells": {
             "%s|%s" % (model, arm): {
                 "n": len(rs),

@@ -547,6 +547,43 @@ class TestRetryable(unittest.TestCase):
         self.assertNotIn('startswith("harness failure")', src)
 
 
+class TestPoolingDecision(unittest.TestCase):
+    """Which provenance fields are allowed to declare a sweep un-poolable."""
+
+    def setUp(self):
+        self.m = load("summarize")
+        src = open(os.path.join(HERE, "summarize.py"), encoding="utf-8").read()
+        self.src = src
+
+    def test_skills_sha_does_not_decide(self):
+        """It is the repo commit, so it moves when the RUNNER changes and not only
+        when the skill does. skills_hash measures the same thing exactly. On the
+        nodura and motion packs skills_sha varied within an arm while skills_hash
+        did not: those runs saw byte-identical skills and were flagged anyway."""
+        self.assertIn('DECIDES_POOLING = [k for k in PROVENANCE_KEYS if k != "skills_sha"]',
+                      self.src)
+
+    def test_skills_hash_does_decide(self):
+        """Where the content really differed it must still block. The 7t pack has
+        two recorded skills_hash values inside one arm."""
+        self.assertIn("skills_hash", self.m.PROVENANCE_KEYS)
+        self.assertNotIn('k != "skills_hash"', self.src)
+
+    def test_the_flag_is_not_bare_heterogeneity(self):
+        """"Did any field vary" flagged skill provenance differing BETWEEN arms,
+        which is the experiment, not a defect."""
+        self.assertNotIn('"poolable": not heterogeneous', self.src)
+        self.assertIn('"poolable": not not_poolable', self.src)
+
+    def test_the_reason_is_published(self):
+        """A false flag is only debuggable if the summary says which field caused it."""
+        self.assertIn('"not_poolable_because"', self.src)
+
+    def test_heterogeneity_is_still_reported(self):
+        """Excluded from the decision, not from the record."""
+        self.assertIn('"provenance_varies"', self.src)
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 
