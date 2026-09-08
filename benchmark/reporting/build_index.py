@@ -20,6 +20,20 @@ every rate (8/10 and 80/100 are both "80%"), each rate carries its 95% Wilson in
 cell short of the task's repeat count is flagged. Effect sizes are read from `skill_effect`
 rather than recomputed, so the page cannot drift from what the analysis scripts publish.
 
+Layout notes, because they are load-bearing rather than decorative:
+
+* Every effect row is two lines — headline value on top, its supporting detail beneath.
+  That collapses four numeric columns (Δ, CI, p, verdict) into two without hiding a
+  single figure, which is what lets the table survive 20 tasks × 10 models.
+* The only hue in the effect table is the diverging blue/red on the effect bar, so the
+  eye lands on the one column that answers the question. Red/green is avoided outright:
+  it is the worst pair for the ~8% of male readers with a red-green deficiency.
+* Meaning is never carried by colour alone. The verdict is a word, a shape and a hue;
+  a short cell is a dagger as well as a colour.
+* Every text colour on this page clears WCAG AA (4.5:1) against the surface it sits on,
+  in both modes. The muted greys are 5.3:1, not the 2.8:1 they used to be — and it was
+  the "unclear" rows, the ones a reader should scrutinise hardest, that were faintest.
+
 Stdlib only.
 """
 import argparse
@@ -205,7 +219,8 @@ def delta_bar(delta, lo, hi):
     """A difference in percentage points on a track centred at zero, CI as a whisker.
 
     -100..+100 pp maps across the track. When the whisker crosses the centre line the
-    experiment cannot separate the arms.
+    experiment cannot separate the arms. The whisker is drawn with end caps, so a wide
+    interval reads as a measured range rather than as a smudge behind the bar.
     """
     def x(pp):
         return min(100.0, max(0.0, 50.0 + pp / 2.0))
@@ -225,83 +240,176 @@ def delta_bar(delta, lo, hi):
 
 
 STYLE = """<style>
-:root{--bg:#fff;--head:#f7f7f8;--ink:#1a1a1c;--muted:#6c6c76;--faint:#9a9aa4;--line:#e6e6ea;
---accent:#3b6fd4;--good:#20a56a;--bad:#d14b3c;--track:#e8e8ec;--sel:#f2f6fd;
---mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+:root{color-scheme:light dark;
+--surface:#fcfcfb;--plane:#f4f4f1;--head:#f7f7f5;--hover:rgba(11,11,11,.032);
+--rule:rgba(11,11,11,.10);--rule2:rgba(11,11,11,.17);
+--ink:#0b0b0b;--ink2:#4a4945;--ink3:#6b6a64;
+--link:#1c5cab;--pos:#2a78d6;--neg:#d03b3b;--nil:#8b8a84;
+--track:#e8e7e3;--warn:#d06a00;--danger:#c8342c;
+--shadow:0 1px 2px rgba(11,11,11,.05),0 8px 20px -14px rgba(11,11,11,.30);
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-@media(prefers-color-scheme:dark){:root{--bg:#0d0d0f;--head:#161619;--ink:#e7e7ea;--muted:#9494a0;
---faint:#6a6a76;--line:#26262c;--accent:#6f9bec;--good:#35b97f;--bad:#e0685a;--track:#2a2a31;--sel:#15202f}}
+@media(prefers-color-scheme:dark){:root{
+--surface:#161617;--plane:#0b0b0c;--head:#1d1d1e;--hover:rgba(255,255,255,.048);
+--rule:rgba(255,255,255,.11);--rule2:rgba(255,255,255,.21);
+--ink:#f3f3f0;--ink2:#b6b5ae;--ink3:#92918b;
+--link:#7fb0f0;--pos:#4f93ea;--neg:#e6564f;--nil:#8c8b85;
+--track:#2c2c2d;--warn:#e0a83a;--danger:#ef7a72;
+--shadow:0 1px 2px rgba(0,0,0,.55),0 10px 26px -16px rgba(0,0,0,.9)}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;
--webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:40px 24px 80px}
-h1{font-size:1.35rem;font-weight:650;margin:0 0 6px;letter-spacing:-.01em}
-.meta{color:var(--muted);font-size:.82rem;margin:0;font-variant-numeric:tabular-nums}
-.meta b{color:var(--ink);font-weight:600}
-.key{color:var(--faint);font-size:.75rem;margin:10px 0 0;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
-.key code{font-family:var(--mono);color:var(--muted)}
-.key .sw{display:inline-block;width:16px;height:3px;border-radius:2px;background:var(--muted);
-opacity:.6;vertical-align:middle;margin-right:5px}
-.bar{display:flex;align-items:center;gap:12px;margin:30px 0 10px}
-h2{font-size:.74rem;font-weight:650;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0}
-input[type=search]{margin-left:auto;width:230px;padding:6px 10px;font:inherit;font-size:.82rem;
-background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:7px;outline:none}
-input[type=search]:focus{border-color:var(--accent)}
-.card{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--bg)}
-.scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:.83rem}
-thead th{background:var(--head);color:var(--muted);font-weight:600;font-size:.72rem;
-text-transform:uppercase;letter-spacing:.04em;text-align:right;padding:9px 12px;
-border-bottom:1px solid var(--line);white-space:nowrap}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--plane);color:var(--ink);font-family:var(--sans);
+font-size:13.5px;line-height:1.45;-webkit-font-smoothing:antialiased;
+text-rendering:optimizeLegibility}
+.wrap{max-width:1250px;margin:0 auto;padding:56px 28px 88px}
+
+/* masthead: title, then the sweep in figures, then the vocabulary */
+h1{font-size:1.55rem;font-weight:640;margin:0;letter-spacing:-.021em;line-height:1.15}
+.stats{display:flex;flex-wrap:wrap;margin:22px 0 0;border:1px solid var(--rule);
+border-radius:14px;background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.stat{display:flex;flex-direction:column;gap:3px;padding:14px 24px;min-width:106px;
+border-left:1px solid var(--rule)}
+.stat:first-child{border-left:0}
+.stat b{font-size:1.34rem;font-weight:620;letter-spacing:-.022em;line-height:1.05;
+font-variant-numeric:tabular-nums}
+.stat span{font-size:.665rem;font-weight:600;text-transform:uppercase;
+letter-spacing:.085em;color:var(--ink3)}
+.key{display:flex;flex-wrap:wrap;gap:7px 22px;margin:16px 3px 0;font-size:.735rem;
+color:var(--ink2);align-items:center}
+.key>span{display:inline-flex;align-items:center;gap:6px}
+.key code{font-family:var(--mono);font-size:.92em;color:var(--ink)}
+.key .swatch{display:inline-block;width:18px;height:3px;border-radius:2px;
+background:var(--ink3);opacity:.85}
+
+/* section chrome */
+.bar{display:flex;align-items:center;gap:14px;margin:48px 0 12px;flex-wrap:wrap}
+h2{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;
+color:var(--ink2);margin:0}
+.count{font-size:.7rem;color:var(--ink3);font-variant-numeric:tabular-nums}
+.tools{margin-left:auto;display:flex;align-items:center;gap:9px}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+.seg button{font:inherit;font-size:.695rem;font-weight:600;letter-spacing:.02em;
+padding:5px 11px;background:var(--surface);color:var(--ink2);border:0;
+border-left:1px solid var(--rule);cursor:pointer}
+.seg button:first-child{border-left:0}
+.seg button:hover{color:var(--ink);background:var(--hover)}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--surface)}
+input[type=search]{width:214px;padding:5px 11px;font:inherit;font-size:.75rem;
+background:var(--surface);color:var(--ink);border:1px solid var(--rule);
+border-radius:8px;outline:none}
+input[type=search]::placeholder{color:var(--ink3)}
+input[type=search]:focus{border-color:var(--link)}
+.card{border:1px solid var(--rule);border-radius:14px;background:var(--surface);
+box-shadow:var(--shadow)}
+.scroll{overflow:auto;border-radius:13px;max-height:78vh}
+@media(max-width:900px){.tall{overflow:auto;border-radius:13px}}
+
+/* tables */
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:.815rem}
+thead th{position:sticky;top:0;z-index:3;background:var(--head);color:var(--ink3);
+font-weight:650;font-size:.655rem;text-transform:uppercase;letter-spacing:.07em;
+text-align:right;padding:10px 14px;border-bottom:1px solid var(--rule2);
+white-space:nowrap;vertical-align:bottom}
+thead th:first-child{border-top-left-radius:13px}
+thead th:last-child{border-top-right-radius:13px}
 th.l{text-align:left}th.c{text-align:center}
+th .model{text-transform:none;font-size:.735rem;font-weight:600;color:var(--ink2)}
+th .sub{display:block;font-size:.95em;font-weight:500;letter-spacing:.045em;
+text-transform:none;color:var(--ink3);margin-top:3px}
 th[data-s]{cursor:pointer;user-select:none}
 th[data-s]:hover{color:var(--ink)}
-th[data-s]::after{content:"";margin-left:5px}
+th[data-s]::after{content:"";margin-left:5px;opacity:.6}
 th[data-s].asc::after{content:"\\2191"}th[data-s].desc::after{content:"\\2193"}
-tbody td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:right;vertical-align:middle}
-tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:var(--sel)}
+tbody td{padding:10px 14px;border-bottom:1px solid var(--rule);text-align:right;
+vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:last-child td:first-child{border-bottom-left-radius:13px}
+tbody tr:last-child td:last-child{border-bottom-right-radius:13px}
+tbody tr:hover td{background:var(--hover)}
 td.l{text-align:left}td.c{text-align:center}
-td.rank{color:var(--faint);font-family:var(--mono);font-size:.76rem;width:34px}
-td.name{white-space:nowrap}
-td.name a{color:var(--ink);text-decoration:none}td.name a:hover{color:var(--accent);text-decoration:underline}
-.model{font-family:var(--mono);font-size:.8rem}
-.arm{font-family:var(--mono);font-size:.68rem;color:var(--muted);border:1px solid var(--line);
-border-radius:4px;padding:1px 4px;margin-left:6px;white-space:nowrap}
-.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-.dim{color:var(--faint)}
-.na{color:var(--faint)}
-.rate{display:inline-grid;grid-template-columns:auto auto;gap:1px 6px;justify-items:end;
-align-items:baseline;min-width:74px;padding:2px 5px;border-radius:5px;
-background:color-mix(in srgb,var(--good) calc(var(--v)*16%),transparent)}
-.rate .num{font:600 12.5px/1.25 var(--sans);font-variant-numeric:tabular-nums}
-.rate .kn{font:10.5px/1.25 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
-.rate.short .kn{color:var(--bad)}
-.rate .ci{grid-column:1/-1;position:relative;width:100%;height:2px;margin-top:3px;
-border-radius:1px;background:var(--track)}
-.rate .ci i{position:absolute;top:0;height:2px;border-radius:1px;background:var(--muted);opacity:.6}
-.cell{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
-.crow{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%}
-.clab{font:10px/1 var(--mono);color:var(--muted);white-space:nowrap}
-.clab i{display:inline-block;width:5px;height:5px;border-radius:1px;margin-right:5px;vertical-align:middle}
-.clab i.base{background:var(--faint)}.clab i.skill{background:var(--good)}
-.dbar{position:relative;display:block;width:130px;height:11px;margin:0 auto}
+td.rank{color:var(--ink3);font-family:var(--mono);font-size:.72rem;width:42px;
+font-variant-numeric:tabular-nums}
+td.name{white-space:nowrap;font-weight:500;letter-spacing:-.006em}
+td.name a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule2);
+padding-bottom:1px}
+td.name a:hover{color:var(--link);border-bottom-color:var(--link)}
+.model{font-family:var(--mono);font-size:.775rem;letter-spacing:-.01em;white-space:nowrap}
+.arm{display:block;font-family:var(--mono);font-size:.635rem;color:var(--ink2);
+margin-top:3px;white-space:nowrap}
+.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.dim{color:var(--ink3)}
+.na{color:var(--ink3)}
+.stick{position:sticky;left:0;z-index:2;background:var(--surface);box-shadow:1px 0 0 var(--rule)}
+table.grid tbody td{vertical-align:top}
+table.grid tbody td.name{vertical-align:middle}
+table.grid tbody td{min-width:126px}
+table.grid tbody td.name{min-width:210px}
+thead th.stick{z-index:4;background:var(--head)}
+tbody tr:hover td.stick{background:var(--surface)}
+
+/* a rate: value, denominator, and — in the grid — its Wilson interval */
+.rate{display:inline-grid;grid-template-columns:1fr;justify-items:end;gap:1px;
+min-width:54px}
+.rate .num{font-size:.93rem;font-weight:600;font-variant-numeric:tabular-nums;
+letter-spacing:-.016em;line-height:1.2}
+.rate .kn{font:10.5px/1.3 var(--mono);color:var(--ink3);font-variant-numeric:tabular-nums}
+.rate.short .kn{color:var(--danger)}
+.rate .ci{position:relative;width:100%;min-width:54px;height:3px;margin-top:5px;
+border-radius:2px;background:var(--track)}
+.rate .ci i{position:absolute;top:0;height:3px;border-radius:2px;background:var(--ink3)}
+
+/* grid cell: one stacked arm per line, label left, figures right */
+.cell{display:flex;flex-direction:column;gap:10px;align-items:stretch}
+.crow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:start}
+.clab{font:10px/1.4 var(--mono);color:var(--ink2);white-space:nowrap;text-align:left;
+padding-top:2px}
+.clab i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+.clab i.base{background:transparent;box-shadow:inset 0 0 0 1.5px var(--nil)}
+.clab i.skill{background:var(--pos)}
+
+/* the effect bar: zero-centred, CI as a capped whisker */
+.dbar{position:relative;display:block;width:174px;height:16px;margin:0 auto}
 .dbar i{position:absolute}
-.dbar .axis{left:50%;top:0;width:1px;height:11px;background:var(--line)}
-.dbar .whisk{top:5px;height:1px;background:var(--faint)}
-.dbar .fill{top:2.5px;height:6px;border-radius:1.5px}
-.dbar .fill.pos{background:var(--good)}.dbar .fill.neg{background:var(--bad)}
-.dbar .fill.nil{background:var(--faint)}
-tr.unclear td{color:var(--muted)}tr.unclear .dbar .fill{opacity:.5}
-tr.split .dbar .fill{opacity:.75}
-.st{font:600 9.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.04em;
-padding:2px 5px;border-radius:4px;border:1px solid var(--line);white-space:nowrap}
-.st.clear{color:var(--good);border-color:var(--good)}
-.st.split{color:var(--ink)}
-.st.unclear{color:var(--muted)}
-.empty{padding:26px 14px;color:var(--muted);font-size:.83rem;text-align:center}
-.foot{color:var(--faint);font-size:.75rem;margin-top:26px}
-.foot code{font-family:var(--mono)}
+.dbar .axis{left:50%;top:0;width:1px;height:16px;background:var(--rule2)}
+.dbar .whisk{top:7.5px;height:1px;background:var(--ink3)}
+.dbar .whisk::before,.dbar .whisk::after{content:"";position:absolute;top:-3px;width:1px;
+height:7px;background:var(--ink3)}
+.dbar .whisk::before{left:0}
+.dbar .whisk::after{right:0}
+.dbar .fill{top:4px;height:8px;border-radius:2px;box-shadow:0 0 0 1.5px var(--surface)}
+.dbar .fill.pos{background:var(--pos)}
+.dbar .fill.neg{background:var(--neg)}
+.dbar .fill.nil{background:var(--nil)}
+.ax{display:flex;justify-content:space-between;width:174px;margin:5px auto 0;
+font:9.5px/1 var(--mono);font-weight:500;letter-spacing:0;color:var(--ink3);
+text-transform:none}
+.delta{font-size:.93rem;font-weight:600;font-variant-numeric:tabular-nums;
+letter-spacing:-.016em;line-height:1.2}
+.ci95{display:block;font:10.5px/1.35 var(--mono);color:var(--ink2);
+font-variant-numeric:tabular-nums;margin-top:2px}
+
+/* verdict: a word, a shape and a hue — readable in grey and colour-blind */
+.vd{display:inline-flex;align-items:center;gap:6px;font-size:.755rem;font-weight:620;
+color:var(--ink)}
+.vd i{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.vd.clear i{background:var(--pos)}
+.vd.split i{background:conic-gradient(var(--warn) 180deg,transparent 0);
+box-shadow:inset 0 0 0 1.5px var(--warn)}
+.vd.unclear{color:var(--ink2);font-weight:560}
+.vd.unclear i{background:transparent;box-shadow:inset 0 0 0 1.5px var(--nil)}
+.pv{display:block;font:10.5px/1.35 var(--mono);color:var(--ink2);
+font-variant-numeric:tabular-nums;margin-top:3px}
+tr.unclear .delta{color:var(--ink2);font-weight:560}
+tr.unclear .dbar .fill{opacity:.42}
+tr.split .dbar .fill{opacity:.72}
+
+.empty{padding:34px 16px;color:var(--ink2);font-size:.82rem;text-align:center}
+.note{color:var(--ink2)}
+.note b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
+.foot{color:var(--ink2);font-size:.735rem;margin-top:36px;max-width:76ch;line-height:1.6}
+.foot code{font-family:var(--mono);color:var(--ink)}
+@media(max-width:720px){.wrap{padding:34px 16px 64px}
+.tools{margin-left:0;width:100%}input[type=search]{flex:1;width:auto}}
 </style>"""
 
 SCRIPT = """<script>
@@ -333,12 +441,37 @@ SCRIPT = """<script>
       });
     });
   });
+  // Text filter and verdict facets share one pass, and the row count is always
+  // rendered, so a filtered table can never be mistaken for the whole sweep.
   document.querySelectorAll('input[data-filter]').forEach(function (box) {
-    var tbl = document.getElementById(box.getAttribute('data-filter'));
-    box.addEventListener('input', function () {
+    var id = box.getAttribute('data-filter');
+    var tbl = document.getElementById(id);
+    var out = document.querySelector('[data-count="' + id + '"]');
+    var chips = document.querySelectorAll('[data-vf][data-for="' + id + '"]');
+    var pick = 'all';
+    function apply() {
       var q = box.value.trim().toLowerCase();
-      Array.prototype.forEach.call(tbl.tBodies[0].rows, function (r) {
-        r.style.display = !q || r.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+      var rows = tbl.tBodies[0].rows, shown = 0;
+      Array.prototype.forEach.call(rows, function (r) {
+        var hit = !q || r.textContent.toLowerCase().indexOf(q) >= 0;
+        var keep = hit && (pick === 'all' || r.className === pick);
+        r.style.display = keep ? '' : 'none';
+        if (keep) shown += 1;
+      });
+      if (out) {
+        out.textContent = shown === rows.length
+          ? shown + ' comparisons'
+          : shown + ' of ' + rows.length + ' comparisons';
+      }
+    }
+    box.addEventListener('input', apply);
+    Array.prototype.forEach.call(chips, function (c) {
+      c.addEventListener('click', function () {
+        pick = c.getAttribute('data-vf');
+        Array.prototype.forEach.call(chips, function (o) {
+          o.setAttribute('aria-pressed', o === c ? 'true' : 'false');
+        });
+        apply();
       });
     });
   });
@@ -347,7 +480,13 @@ SCRIPT = """<script>
 
 
 def build_effects(entries):
-    """Every skill-versus-baseline comparison, ranked by effect size."""
+    """Every skill-versus-baseline comparison, ranked by effect size.
+
+    Eight columns, two lines each: the headline figure on the first line and the number
+    that qualifies it on the second (k/n under a rate, the interval under Δ, Fisher p
+    under the verdict). That is the density decision — it pairs each figure with its own
+    caveat instead of spreading them across four columns that scroll off the right edge.
+    """
     rows = []
     for name, s, href in entries:
         expect = expected_reps(s)
@@ -377,22 +516,22 @@ def build_effects(entries):
         # than by colour alone: greying was the only signal, which fails anyone who
         # cannot perceive it and disappears entirely in print.
         state = agreement(r["lo"], r["hi"], r["p"])
-        sep = state == "clear"
         arm = "" if r["arm"] in ("env+skill", "skill") else \
             '<span class="arm">%s</span>' % html.escape(r["arm"])
         task = ('<a href="%s">%s</a>' % (html.escape(r["href"]), html.escape(r["task"]))
                 if r["href"] else html.escape(r["task"]))
-        p = '<span class="dim">&mdash;</span>' if r["p"] is None else ("%.3f" % r["p"])
+        p = ('<span class="pv dim">&mdash;</span>' if r["p"] is None
+             else '<span class="pv">%.3f</span>' % r["p"])
         body.append(
             '<tr class="{ns}"><td class="rank">{i}</td>'
             '<td class="l name" data-v="{tsort}">{task}</td>'
             '<td class="l"><span class="model">{model}</span>{arm}</td>'
             '<td data-v="{rb:.4f}">{cb}</td><td data-v="{rs:.4f}">{cs}</td>'
             '<td class="c" data-v="{d:.4f}">{bar}</td>'
-            '<td class="n" data-v="{d:.4f}">{dtxt}</td>'
-            '<td class="n dim">{ci}</td>'
-            '<td class="n" data-v="{psort}">{p}</td>'
-            '<td class="c"><span class="st {state}" title="{note}">{state}</span></td></tr>'.format(
+            '<td class="n" data-v="{d:.4f}"><span class="delta">{dtxt}</span>'
+            '<span class="ci95">{ci}</span></td>'
+            '<td class="c" data-v="{psort}"><span class="vd {state}" title="{note}">'
+            '<i></i>{state}</span>{p}</td></tr>'.format(
                 state=state, note=html.escape(AGREEMENT_NOTE[state]),
                 ns=state, i=i, tsort=html.escape(r["task"]), task=task,
                 model=html.escape(r["model"]), arm=arm,
@@ -408,19 +547,35 @@ def build_effects(entries):
                 if agreement(r["lo"], r["hi"], r["p"]) == "clear")
     table = (
         '<div class="bar"><h2>Skill effect</h2>'
+        '<span class="count" data-count="fx">%d comparisons</span>'
+        '<span class="tools">'
+        '<span class="seg" role="group" aria-label="Filter by verdict">'
+        '<button type="button" data-for="fx" data-vf="all" aria-pressed="true">All</button>'
+        '<button type="button" data-for="fx" data-vf="clear" aria-pressed="false">Clear</button>'
+        '<button type="button" data-for="fx" data-vf="split" aria-pressed="false">Split</button>'
+        '<button type="button" data-for="fx" data-vf="unclear" aria-pressed="false">Unclear</button>'
+        '</span>'
         '<input type="search" data-filter="fx" placeholder="Filter task or model" '
-        'aria-label="Filter"></div>'
-        '<div class="card scroll"><table id="fx"><thead><tr>'
+        'aria-label="Filter task or model"></span></div>'
+        '<div class="card tall"><table id="fx"><thead><tr>'
         '<th></th><th class="l" data-s>Task</th><th class="l" data-s>Model</th>'
-        '<th data-s>No skill</th><th data-s>With skill</th>'
-        '<th class="c" data-s>&minus;100 &nbsp;0&nbsp; +100 pp</th>'
-        '<th data-s>&Delta; pp</th><th>95%% CI</th><th data-s>Fisher p</th>'
-        '<th class="c" data-s>Verdict</th>'
-        '</tr></thead><tbody>%s</tbody></table></div>' % "".join(body))
+        '<th data-s>No skill<span class="sub">k/n</span></th>'
+        '<th data-s>With skill<span class="sub">k/n</span></th>'
+        '<th class="c" data-s>Effect<span class="ax">'
+        '<span>&minus;100</span><span>0</span><span>+100</span></span></th>'
+        '<th data-s>&Delta; pp<span class="sub">95%% CI</span></th>'
+        '<th class="c" data-s>Verdict<span class="sub">Fisher p</span></th>'
+        '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), "".join(body)))
     return table, n_sep, len(rows)
 
 
 def build_grid(entries):
+    """Task × model, arms stacked inside the cell.
+
+    The task column is sticky, so at ten models the row you are reading keeps its name
+    while the models scroll. Each rate keeps its denominator and its Wilson interval;
+    a heatmap would fit more models per screen by throwing both away.
+    """
     models = []
     for _, s, _ in entries:
         for m in cell_matrix(s):
@@ -454,12 +609,15 @@ def build_grid(entries):
                        % (sort_v, "".join(lines)))
         label = html.escape(name)
         tcell = '<a href="%s">%s</a>' % (html.escape(href), label) if href else label
-        rows.append('<tr><td class="l name" data-v="%s">%s</td>%s</tr>'
+        rows.append('<tr><td class="l name stick" data-v="%s">%s</td>%s</tr>'
                     % (label, tcell, "".join(tds)))
 
-    return ('<div class="bar"><h2>Pass rate</h2></div>'
-            '<div class="card scroll"><table><thead><tr><th class="l" data-s>Task</th>%s'
-            '</tr></thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
+    return ('<div class="bar"><h2>Pass rate</h2>'
+            '<span class="count">%d tasks &times; %d models</span></div>'
+            '<div class="card scroll"><table class="grid">'
+            '<thead><tr><th class="l stick" data-s>Task</th>%s'
+            '</tr></thead><tbody>%s</tbody></table></div>'
+            % (len(entries), len(models), head, "".join(rows)))
 
 
 def notices(entries):
@@ -489,14 +647,15 @@ def notices(entries):
                         % (" &mdash; " + ", ".join(html.escape(b) for b in because)
                            if because else ""))
         if bits:
-            rows.append('<tr><td class="l name">%s</td><td class="l">%s</td></tr>'
+            rows.append('<tr><td class="l name">%s</td><td class="l note">%s</td></tr>'
                         % (html.escape(name), " &middot; ".join(bits)))
     if not rows:
         return ""
-    return ('<div class="bar"><h2>Excluded and not pooled</h2></div>'
+    return ('<div class="bar"><h2>Excluded and not pooled</h2>'
+            '<span class="count">%d tasks</span></div>'
             '<div class="card scroll"><table><thead><tr>'
             '<th class="l">Task</th><th class="l">What summarize flagged</th>'
-            '</tr></thead><tbody>%s</tbody></table></div>' % "".join(rows))
+            '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), "".join(rows)))
 
 
 def build(entries):
@@ -511,16 +670,21 @@ def build(entries):
         if expected_reps(s):
             reps.add(expected_reps(s))
 
-    def plural(n, w):
-        return "%d %s%s" % (n, w, "" if n == 1 else "s")
+    def stat(value, label):
+        return '<div class="stat"><b>%s</b><span>%s</span></div>' % (value, label)
 
-    meta = " &middot; ".join(x for x in [
-        plural(len(entries), "task"),
-        plural(len(models), "model"),
-        "<b>%d</b> runs" % runs,
-        ("%d excluded" % n_excluded) if n_excluded else "",
-        ("%s per cell" % "/".join(str(r) for r in sorted(reps))) if reps else "",
-        ("<b>%d/%d</b> clear" % (n_sep, n_cmp)) if n_cmp else "",
+    def plural(n, w):
+        return "%s%s" % (w, "" if n == 1 else "s")
+
+    # The same figures the meta line always carried, set as a row of tiles so the page
+    # opens on the size of the sweep. No number here is computed differently.
+    tiles = "".join(x for x in [
+        stat(len(entries), plural(len(entries), "task")),
+        stat(len(models), plural(len(models), "model")),
+        stat(runs, "runs"),
+        stat(n_excluded, "excluded") if n_excluded else "",
+        stat("/".join(str(r) for r in sorted(reps)), "per cell") if reps else "",
+        stat("%d/%d" % (n_sep, n_cmp), "clear") if n_cmp else "",
     ] if x)
 
     return """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -528,13 +692,14 @@ def build(entries):
 <title>Neurodesk agent benchmark</title>
 %s</head><body><div class="wrap">
   <h1>Neurodesk agent benchmark</h1>
-  <p class="meta">%s</p>
+  <div class="stats">%s</div>
   <p class="key">
-    <span><span class="sw"></span>95%% Wilson CI</span>
     <span><code>k/n</code> passed / runs</span>
+    <span><span class="swatch"></span>95%% Wilson CI</span>
     <span><code>&dagger;</code> short cell</span>
-    <span>verdict: <b>clear</b> interval and Fisher agree &middot;
-      <b>split</b> they disagree &middot; <b>unclear</b> neither</span>
+    <span><span class="vd clear"><i></i>clear</span> interval and Fisher agree</span>
+    <span><span class="vd split"><i></i>split</span> they disagree</span>
+    <span><span class="vd unclear"><i></i>unclear</span> neither</span>
   </p>
   %s
   %s
@@ -542,7 +707,8 @@ def build(entries):
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (STYLE, meta, effects, build_grid(entries), notices(entries), SCRIPT)
+</div>%s</body></html>""" % (STYLE, tiles, effects, build_grid(entries),
+                            notices(entries), SCRIPT)
 
 
 def discover(report_dir):

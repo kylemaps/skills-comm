@@ -482,7 +482,7 @@ class Notices(unittest.TestCase):
 
     def test_the_header_counts_exclusions(self):
         h = bi.build([("t", self.sm(n_runs=80, n_excluded=13), "")])
-        self.assertIn("13 excluded", h)
+        self.assertIn("<b>13</b><span>excluded</span>", h)
 
     def test_reasons_are_escaped(self):
         h = bi.notices([("t", self.sm(n_runs=1, n_excluded=1,
@@ -535,9 +535,9 @@ class Page(unittest.TestCase):
 
     def test_the_header_counts_the_sweep(self):
         h = bi.build([("Brain extraction - 7T", self.real(), "")])
-        self.assertIn("5 models", h)
-        self.assertIn("100</b> runs", h)
-        self.assertIn("10 per cell", h)
+        self.assertIn("<b>5</b><span>models</span>", h)
+        self.assertIn("<b>100</b><span>runs</span>", h)
+        self.assertIn("<b>10</b><span>per cell</span>", h)
 
     def test_sortable_headers_and_a_filter_are_wired(self):
         h = bi.build([("t", self.real(), "")])

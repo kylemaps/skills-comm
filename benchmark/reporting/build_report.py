@@ -55,15 +55,19 @@ def one(d: dict) -> str:
     return ", ".join(str(k) for k in d)
 
 
+# An ordinal scale, so it gets one hue stepped light-to-dark plus a neutral for the
+# non-results. White-on-amber measured 1.9:1; the label now wears an ink token and the
+# hue rides on a dot beside it, which also survives greyscale and colour-blindness.
 VERDICT_COLORS = {
-    "indistinguishable": "#2ca25f", "acceptable": "#3aa0a0", "marginal": "#d9a441",
-    "unacceptable": "#d9784a", "invalid": "#7f8896", "fail": "#7f8896",
+    "indistinguishable": "#184f95", "acceptable": "#2a78d6", "marginal": "#86b6ef",
+    "unacceptable": "#d03b3b", "invalid": "#8b8a84", "fail": "#8b8a84",
 }
 
 
 def verdict_pill(verdict: str) -> str:
-    c = VERDICT_COLORS.get(verdict.lower(), "#7f8896")
-    return f'<span class="pill" style="--pc:{c}">{html.escape(verdict)}</span>'
+    c = VERDICT_COLORS.get(verdict.lower(), "#8b8a84")
+    return (f'<span class="pill"><i style="background:{c}"></i>'
+            f'{html.escape(verdict)}</span>')
 
 
 def parse_cells(cells: dict):
@@ -132,10 +136,11 @@ def effect_cell(se):
     # different conclusions about the same row. Named in text rather than signalled
     # by colour alone.
     state = agreement(lo, hi, p)
-    return ('<td class="num %s">%s pp<span class="sub"> CI[%s] %s &middot; '
-            '<span class="st" title="%s">%s</span></span></td>'
+    return ('<td class="num %s"><span class="delta">%s pp</span>'
+            '<span class="sub">%s &middot; %s'
+            '<span class="vd %s" title="%s"><i></i>%s</span></span></td>'
             % (state, fmt_pp(se.get("delta_pp", 0.0)), fmt_ci(lo, hi), ptxt,
-               html.escape(AGREEMENT_NOTE[state]), state))
+               state, html.escape(AGREEMENT_NOTE[state]), state))
 
 
 def leaderboard_table(models, arms, lut, skill_effect, poolable):
@@ -146,9 +151,9 @@ def leaderboard_table(models, arms, lut, skill_effect, poolable):
     # than showing both.
     eff_arms = [a for a in skill_arms if any((m, a) in eff for m in models)]
 
-    head = "".join("<th>%s<br><span class='sub'>pass · score</span></th>" % html.escape(a)
-                   for a in arms)
-    head += "".join("<th>effect<br><span class='sub'>%s vs baseline</span></th>"
+    head = "".join("<th class='num'>%s<span class='sub'>k/n · score</span></th>"
+                   % html.escape(a) for a in arms)
+    head += "".join("<th class='num'>effect<span class='sub'>%s vs baseline</span></th>"
                     % html.escape(a) for a in eff_arms)
     rows = []
     for m in models:
@@ -161,7 +166,8 @@ def leaderboard_table(models, arms, lut, skill_effect, poolable):
             n, k = c.get("n", 0), c.get("passes", 0)
             pr = k / n if n else 0.0
             cellhtml.append(
-                '<td class="num"><b class="pr" style="--v:%.4f">%d/%d</b>%s</td>'
+                '<td class="num"><span class="pr" style="--v:%.4f">'
+                '<b>%d/%d</b><i></i></span>%s</td>'
                 % (pr, k, n, score_summary(c)))
         for a in eff_arms:
             cellhtml.append(effect_cell(eff.get((m, a))))
@@ -178,8 +184,8 @@ def leaderboard_table(models, arms, lut, skill_effect, poolable):
             tot_p = sum(lut[(m, a)].get("passes", 0) for m in models)
             tot_n = sum(lut[(m, a)].get("n", 0) for m in models)
             pr = tot_p / tot_n if tot_n else 0
-            pooled.append('<td class="num"><b class="pr" style="--v:%.4f">%d/%d</b></td>'
-                          % (pr, tot_p, tot_n))
+            pooled.append('<td class="num"><span class="pr" style="--v:%.4f">'
+                          '<b>%d/%d</b><i></i></span></td>' % (pr, tot_p, tot_n))
         pooled += ['<td class="num">&mdash;</td>'] * len(eff_arms)
         rows.append('<tr class="pooled"><td><b>ALL</b></td>%s</tr>' % "".join(pooled))
 
@@ -244,39 +250,96 @@ def gallery(thumbs_dir: Path) -> str:
 
 
 STYLE = """<style>
-:root{--bg:#f5f8fb;--panel:#fff;--ink:#16222e;--muted:#5b6b7a;--line:#e0e8ef;--accent:#2c7fb8;
---accent-soft:#e7f1f8;--mono:ui-monospace,Menlo,Consolas,monospace;
---sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
---shadow:0 1px 2px rgba(20,40,60,.06),0 8px 24px rgba(20,40,60,.05)}
-@media(prefers-color-scheme:dark){:root{--bg:#0e1620;--panel:#16212e;--ink:#dce6ef;--muted:#8ea0b2;
---line:#26333f;--accent:#4aa3d6;--accent-soft:#16303f;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35)}}
-:root[data-theme=light]{--bg:#f5f8fb;--panel:#fff;--ink:#16222e;--muted:#5b6b7a;--line:#e0e8ef;--accent:#2c7fb8;--accent-soft:#e7f1f8}
-:root[data-theme=dark]{--bg:#0e1620;--panel:#16212e;--ink:#dce6ef;--muted:#8ea0b2;--line:#26333f;--accent:#4aa3d6;--accent-soft:#16303f}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55}
-.wrap{max-width:1080px;margin:0 auto;padding:40px 24px 80px}h1{font-size:1.8rem;margin:0 0 4px;letter-spacing:-.02em}
-h2{font-size:1.12rem;margin:0 0 14px}h4{font-size:.8rem;color:var(--muted);margin:0 0 8px;font-weight:600}
-.sub{color:var(--muted);font-size:.82em}.chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 26px}
-.provchip{font:600 12px/1 var(--mono);background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:7px 10px;border-radius:7px}
-.provchip b{color:var(--ink)}
-section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:0 0 22px;box-shadow:var(--shadow)}
-.two{display:grid;grid-template-columns:1.3fr 1fr;gap:24px}@media(max-width:720px){.two{grid-template-columns:1fr}}
-.prompt{background:var(--accent-soft);border-left:3px solid var(--accent);padding:12px 16px;border-radius:0 8px 8px 0;margin:0 0 14px}
-.chip{display:inline-block;font:600 11px/1 var(--mono);background:var(--bg);border:1px solid var(--line);padding:5px 8px;border-radius:6px;margin:0 5px 6px 0;color:var(--muted)}
-.wrow{display:grid;grid-template-columns:120px 1fr 40px;gap:10px;align-items:center;margin:6px 0;font-size:.85rem}
-.wbar{height:8px;background:var(--bg);border:1px solid var(--line);border-radius:5px;overflow:hidden}.wbar i{display:block;height:100%;background:var(--accent)}
-table{width:100%;border-collapse:collapse;font-size:.88rem}.scroll{overflow-x:auto}
-th{text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;padding:0 12px 10px;border-bottom:1px solid var(--line)}
-td{padding:9px 12px;border-bottom:1px solid var(--line)}tr:last-child td{border-bottom:none}
-.num{font-variant-numeric:tabular-nums;font-family:var(--mono);text-align:right;white-space:nowrap}
-tr.pooled td{border-top:2px solid var(--line);font-weight:700}
-.pr{padding:2px 7px;border-radius:5px;color:#fff;background:color-mix(in srgb,#2ca25f calc(var(--v)*100%),#c14a3a)}
-.score{color:var(--muted);font-size:.85em}.sig{color:#2ca25f}
-.pill{display:inline-block;font:600 11px/1 var(--sans);color:#fff;background:var(--pc);padding:4px 8px;border-radius:20px}
-figure.fig{margin:0 0 16px}figure.fig img{width:100%;border-radius:10px;border:1px solid var(--line);display:block}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:9px}
-.cell{margin:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000}.cell img{width:100%;display:block}
-.cell figcaption{background:var(--panel);color:var(--muted);font:600 10px var(--mono);padding:3px 5px;text-align:center}
-footer{color:var(--muted);font-size:.8rem;line-height:1.7}footer code{font-family:var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+/* Same tokens as build_index.py, so the two pages read as one system. Every text
+   colour clears WCAG AA (4.5:1) on the surface behind it, in both modes; hue is
+   reserved for marks, and dark mode is stepped for its own surface, not inverted. */
+:root{color-scheme:light dark;
+--surface:#fcfcfb;--plane:#f4f4f1;--head:#f7f7f5;--hover:rgba(11,11,11,.032);
+--rule:rgba(11,11,11,.10);--rule2:rgba(11,11,11,.17);
+--ink:#0b0b0b;--ink2:#4a4945;--ink3:#6b6a64;
+--link:#1c5cab;--pos:#2a78d6;--neg:#d03b3b;--nil:#8b8a84;
+--track:#e8e7e3;--warn:#d06a00;--danger:#c8342c;--wash:#eef4fd;
+--shadow:0 1px 2px rgba(11,11,11,.05),0 8px 20px -14px rgba(11,11,11,.30);
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+@media(prefers-color-scheme:dark){:root{
+--surface:#161617;--plane:#0b0b0c;--head:#1d1d1e;--hover:rgba(255,255,255,.048);
+--rule:rgba(255,255,255,.11);--rule2:rgba(255,255,255,.21);
+--ink:#f3f3f0;--ink2:#b6b5ae;--ink3:#92918b;
+--link:#7fb0f0;--pos:#4f93ea;--neg:#e6564f;--nil:#8c8b85;
+--track:#2c2c2d;--warn:#e0a83a;--danger:#ef7a72;--wash:#13202f;
+--shadow:0 1px 2px rgba(0,0,0,.55),0 10px 26px -16px rgba(0,0,0,.9)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--plane);color:var(--ink);font-family:var(--sans);
+font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1100px;margin:0 auto;padding:56px 28px 88px}
+h1{font-size:1.55rem;font-weight:640;margin:0 0 4px;letter-spacing:-.021em}
+h2{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;
+color:var(--ink2);margin:0 0 16px}
+h4{font-size:.685rem;font-weight:650;text-transform:uppercase;letter-spacing:.07em;
+color:var(--ink3);margin:0 0 10px}
+.sub{color:var(--ink2);font-size:.78em}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 28px}
+.provchip{font:500 11.5px/1 var(--mono);background:var(--surface);
+border:1px solid var(--rule);color:var(--ink2);padding:8px 11px;border-radius:8px}
+.provchip b{color:var(--ink);font-weight:640}
+section{background:var(--surface);border:1px solid var(--rule);border-radius:14px;
+padding:24px 26px;margin:0 0 22px;box-shadow:var(--shadow)}
+.two{display:grid;grid-template-columns:1.3fr 1fr;gap:28px}
+@media(max-width:720px){.two{grid-template-columns:1fr}.wrap{padding:34px 16px 64px}}
+.prompt{background:var(--wash);border-left:2px solid var(--pos);padding:13px 17px;
+border-radius:0 8px 8px 0;margin:0 0 18px;font-size:.9rem}
+.chip{display:inline-block;font:500 11px/1 var(--mono);background:var(--plane);
+border:1px solid var(--rule);padding:6px 9px;border-radius:7px;margin:0 5px 6px 0;
+color:var(--ink2)}
+.wrow{display:grid;grid-template-columns:130px 1fr 42px;gap:12px;align-items:center;
+margin:7px 0;font-size:.82rem}
+.wbar{height:6px;background:var(--track);border-radius:3px;overflow:hidden}
+.wbar i{display:block;height:100%;background:var(--pos);border-radius:3px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:.83rem}
+.scroll{overflow:auto}
+th{text-align:left;font-size:.655rem;text-transform:uppercase;letter-spacing:.07em;
+color:var(--ink3);font-weight:650;padding:0 13px 10px;
+border-bottom:1px solid var(--rule2);vertical-align:bottom}
+th .sub{display:block;font-size:.95em;font-weight:500;letter-spacing:.045em;
+text-transform:none;margin-top:3px}
+td{padding:10px 13px;border-bottom:1px solid var(--rule);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--hover)}
+.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+tr.pooled td{border-top:1px solid var(--rule2);font-weight:650}
+.pr{display:inline-grid;grid-template-columns:1fr;justify-items:end;gap:4px;
+min-width:52px}
+.pr b{font:600 .92rem/1.2 var(--sans);font-variant-numeric:tabular-nums;
+letter-spacing:-.016em}
+.pr i{display:block;width:100%;height:3px;border-radius:2px;background:var(--track);
+background-image:linear-gradient(90deg,var(--pos) 0,var(--pos) 100%);
+background-size:calc(var(--v)*100%) 100%;background-repeat:no-repeat}
+.delta{font:600 .92rem/1.2 var(--sans);font-variant-numeric:tabular-nums;
+letter-spacing:-.016em}
+.unclear .delta{color:var(--ink2);font-weight:560}
+.score{color:var(--ink2);font-size:.85em}
+.vd{display:inline-flex;align-items:center;gap:5px;font-weight:640;color:var(--ink);
+margin-left:8px}
+.vd i{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+.vd.clear i{background:var(--pos)}
+.vd.split i{background:conic-gradient(var(--warn) 180deg,transparent 0);
+box-shadow:inset 0 0 0 1.5px var(--warn)}
+.vd.unclear{color:var(--ink2);font-weight:560}
+.vd.unclear i{background:transparent;box-shadow:inset 0 0 0 1.5px var(--nil)}
+.pill{display:inline-flex;align-items:center;gap:6px;font:600 11.5px/1 var(--sans);
+color:var(--ink)}
+.pill i{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+figure.fig{margin:0 0 16px}
+figure.fig img{width:100%;border-radius:10px;border:1px solid var(--rule);display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+.cell{margin:0;border:1px solid var(--rule);border-radius:9px;overflow:hidden;
+background:#000}
+.cell img{width:100%;display:block}
+.cell figcaption{background:var(--surface);color:var(--ink2);
+font:500 10px var(--mono);padding:4px 5px;text-align:center}
+footer{color:var(--ink2);font-size:.735rem;line-height:1.6;max-width:76ch}
+footer code{font-family:var(--mono);color:var(--ink)}
 </style>"""
 
 
