@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import re
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -563,10 +564,18 @@ class Direction(unittest.TestCase):
         self.assertIn("better", f)
 
     def test_both_ends_of_a_mirrored_axis_are_labelled(self):
-        """An unlabelled reversal is the one failure mode worse than no chart."""
+        """An unlabelled reversal is the one failure mode worse than no chart.
+
+        Asserts the values, not the markup: the right-hand tick must be the BETTER
+        end. A class name can be renamed without anyone noticing; a tick reading
+        "40 min" on the side the eye takes as good is the actual defect."""
         f = self._chart("mins")
-        self.assertIn('class="cax l"', f)
-        self.assertIn('class="cax r"', f)
+        i = f.index('class="cscale"')
+        scale = f[i:f.index("</div>", i)]
+        ticks = re.findall(r'<span class="cax">([^<]+)</span>', scale)
+        self.assertEqual(len(ticks), 2)
+        left, right = (float(t.split()[0]) for t in ticks)
+        self.assertLess(right, left)
 
     def test_log_is_offered_on_tokens_and_withheld_from_pass_rate(self):
         """A proportion has no decades to spread and lands on zero, which log cannot draw."""
@@ -576,6 +585,23 @@ class Direction(unittest.TestCase):
     def test_log_positions_are_rendered_server_side(self):
         """The toggle picks between two numbers the page already holds; it computes none."""
         self.assertIn("--xl:", self._chart("tokens"))
+
+
+    def test_only_one_axis_is_visible_at_a_time(self):
+        """Regression. The log axis was hidden with the `hidden` attribute, which the
+        UA stylesheet implements as display:none -- and `.caxis{display:grid}` is a
+        class rule, so it outranked it. Both axes drew, one above the other, each
+        naming a different right-hand end. Visibility is a class rule now, at the
+        same weight as the rule that broke it."""
+        self.assertIn(".caxis.log-only{display:none}", bi.STYLE)
+        self.assertIn(".charts.log .caxis.log-only{display:grid}", bi.STYLE)
+        self.assertNotIn('AXIS % ("log-only", " hidden"', bi.STYLE)
+        f = self._chart("mins")
+        self.assertIn('class="caxis log-only"', f)
+
+    def test_axis_zero_is_not_written_to_one_decimal(self):
+        """"0.0 min" claims a precision the end of an axis does not have."""
+        self.assertEqual(bi._compact(0.0, 1, " min"), "0 min")
 
 
 class Retired(unittest.TestCase):

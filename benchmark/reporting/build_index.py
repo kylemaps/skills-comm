@@ -475,7 +475,8 @@ letter-spacing:.09em;color:var(--ink2);margin:0 0 20px}
 .chart figcaption .unit{font-weight:500;text-transform:none;letter-spacing:0;
 color:var(--ink3);margin-left:8px}
 .plot{display:flex;flex-direction:column;gap:2px}
-.drow{display:grid;grid-template-columns:132px 1fr 128px;align-items:center;gap:16px;
+.drow{display:grid;grid-template-columns:132px 1fr var(--vw,128px);
+align-items:center;gap:16px;
 padding:9px 0;border-bottom:1px solid var(--rule)}
 .drow:last-child{border-bottom:0}
 .dm{font-family:var(--mono);font-size:.775rem;color:var(--ink);white-space:nowrap;
@@ -521,17 +522,19 @@ color:var(--ink3);background:var(--track)}
 
 /* Chart axis. Both ends are labelled because the low-is-better measures are mirrored,
    and an unlabelled reversal would be read backwards. */
-.caxis{display:grid;grid-template-columns:132px 1fr 128px;gap:16px;margin:6px 0 0}
-.caxis .cax{font:9.5px/1.4 var(--mono);color:var(--ink3)}
-.caxis .cax.l{grid-column:2;justify-self:start}
-.caxis .cax.r{grid-column:2;justify-self:end;grid-row:1}
-.caxis .cax.b{grid-column:3;justify-self:end;letter-spacing:.04em}
+.caxis{display:grid;grid-template-columns:132px 1fr var(--vw,128px);gap:16px;
+margin:7px 0 0}
+.caxis.log-only{display:none}
+.charts.log .caxis.log-only{display:grid}
+.charts.log .caxis.lin-only{display:none}
+.cscale{grid-column:2;display:flex;justify-content:space-between;align-items:baseline}
+.cax{font:9.5px/1.4 var(--mono);color:var(--ink3)}
+.cax.b{letter-spacing:.04em;text-transform:uppercase;font-size:8.5px}
 .tog{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink2);
 cursor:pointer;user-select:none}
 .tog input{margin:0;cursor:pointer}
-@media(max-width:720px){.drow{grid-template-columns:96px 1fr 104px;gap:10px}
-.caxis{grid-template-columns:96px 1fr 104px;gap:10px}
-.dvs{grid-auto-columns:48px;gap:6px}}
+@media(max-width:720px){.drow,.caxis{grid-template-columns:96px 1fr auto;gap:10px}
+.dvs{grid-auto-columns:46px;gap:6px}}
 @media print{
 :root{--surface:#fff;--plane:#fff;--head:#fff;--hover:transparent;
 --ink:#000;--ink2:#333;--ink3:#555;--rule:#bbb;--rule2:#888}
@@ -651,11 +654,6 @@ SCRIPT = """<script>
         if (any) { clw.removeAttribute('hidden'); } else { clw.setAttribute('hidden', ''); }
       }
       if (box) box.classList.toggle('log', !!(any && cl && cl.checked));
-      Array.prototype.forEach.call(
-        document.querySelectorAll('.log-only'), function (e) {
-          var on = !!(any && cl && cl.checked);
-          if (on) { e.removeAttribute('hidden'); } else { e.setAttribute('hidden', ''); }
-        });
     }
     ct.addEventListener('change', show);
     cm.addEventListener('change', show);
@@ -902,6 +900,8 @@ METRICS = [
 def _compact(v, dp, unit):
     """42118 -> 42.1k, 6306539 -> 6.31M. A seven-digit label does not fit a bar."""
     a = abs(v)
+    if v == 0:
+        return "0%s" % unit
     if not unit and a >= 1000:
         for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
             if a >= div:
@@ -1011,7 +1011,8 @@ def build_charts(entries, reg=None, roster=None):
             legend = "".join(LG % (arm_slot(reg, a), html.escape(arm_name(reg, a)))
                              for a in arms)
             charts.append(
-                FIG % (html.escape(name), key, 1 if lspan else 0, html.escape(label),
+                FIG % (html.escape(name), key, 1 if lspan else 0,
+                       56 * len(arms) + 8 * (len(arms) - 1), html.escape(label),
                        html.escape(unit.strip() or ""),
                        OWNMAX if within else "",
                        "".join(rows_html),
@@ -1035,7 +1036,8 @@ DROW = ('<div class="drow%s"><span class="dm">%s%s</span>'
         '<span class="dtrack">%s</span><span class="dvs">%s</span></div>')
 LG = '<span class="lg"><i class="sw a%d"></i>%s</span>'
 OWNMAX = '<span class="unit lin-only">each row scaled to its own maximum</span>'
-FIG = ('<figure class="chart" data-task="%s" data-metric="%s" data-log="%d" hidden>'
+FIG = ('<figure class="chart" data-task="%s" data-metric="%s" data-log="%d"'
+       ' style="--vw:%dpx" hidden>'
        '<figcaption>%s<span class="unit">%s</span>%s</figcaption>'
        '<div class="plot">%s</div>%s<div class="lgs">%s</div></figure>')
 OPT = '<option value="%s">%s</option>'
@@ -1064,13 +1066,13 @@ def _axis(top, lmin, lspan, within, better, dp, unit):
     out = (AXIS % ("lin-only", "", html.escape(l), html.escape(r)))
     if lspan:
         lg_l, lg_r = ends(lmin, top)
-        out += AXIS % ("log-only", " hidden", html.escape(lg_l), html.escape(lg_r))
+        out += AXIS % ("log-only", "", html.escape(lg_l), html.escape(lg_r))
     return out
 
 
-AXIS = ('<div class="caxis %s"%s><span class="cax l">%s</span>'
-        '<span class="cax r">%s</span>'
-        '<span class="cax b">better &rarr;</span></div>')
+AXIS = ('<div class="caxis %s"%s><span class="cscale">'
+        '<span class="cax">%s</span><span class="cax b">better &rarr;</span>'
+        '<span class="cax">%s</span></span></div>')
 
 
 def build_effects(entries, reg=None):
