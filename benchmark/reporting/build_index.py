@@ -440,6 +440,18 @@ box-shadow:0 0 0 2px var(--surface)}
 .sw.a0{background:transparent;box-shadow:inset 0 0 0 2px var(--nil)}
 .sw.a1{background:var(--pos)}.sw.a2{background:var(--warn)}.sw.a3{background:var(--neg)}
 @media(max-width:720px){.drow{grid-template-columns:96px 1fr 104px;gap:10px}}
+@media print{
+:root{--surface:#fff;--plane:#fff;--head:#fff;--hover:transparent;
+--ink:#000;--ink2:#333;--ink3:#555;--rule:#bbb;--rule2:#888}
+*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.tools,.seg,input[type=search],select{display:none}
+.wrap{max-width:none;padding:0}
+.card,.scroll,.tall{max-height:none;overflow:visible;box-shadow:none;break-inside:auto}
+thead th{position:static}
+.stick{position:static;box-shadow:none}
+tr{break-inside:avoid}
+.chart[hidden]{display:none}
+}
 .empty{padding:34px 16px;color:var(--ink2);font-size:.82rem;text-align:center}
 .note{color:var(--ink2)}
 .note b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
@@ -950,7 +962,34 @@ def build_effects(entries):
     return table, n_sep, len(rows)
 
 
-def build_grid(entries):
+def load_roster(path):
+    """Model ids the gateway currently serves. Plain lines, or its /v1/models JSON.
+
+    Retirement is read from a roster, never inferred from gaps in the data, because
+    "not run yet" and "cannot be run again" are indistinguishable from runs alone.
+    With no roster, nothing is marked: a benchmark should not guess that a model is
+    gone.
+    """
+    if not path:
+        return None
+    with open(path, encoding="utf-8") as fh:
+        raw = fh.read().strip()
+    if raw.startswith("{"):
+        try:
+            return [m.get("id", "") for m in json.loads(raw).get("data", [])]
+        except (ValueError, AttributeError):
+            return None
+    return [l.strip() for l in raw.splitlines() if l.strip() and not l.startswith("#")]
+
+
+def is_retired(model, roster):
+    """The gateway names models `provider/model`; our cells hold the bare name."""
+    if roster is None:
+        return False
+    return not any(model == r or r.endswith("/" + model) or model in r for r in roster)
+
+
+def build_grid(entries, roster=None):
     """Task × model, arms stacked inside the cell.
 
     The task column is sticky, so at ten models the row you are reading keeps its name
@@ -963,8 +1002,13 @@ def build_grid(entries):
             if m not in models:
                 models.append(m)
 
-    head = "".join('<th data-s><span class="model">%s</span></th>' % html.escape(m)
-                   for m in models)
+    # A retired model keeps its cells forever -- they are evidence of what was true
+    # then -- but it must not read as if it could be re-run.
+    head = "".join(
+        '<th data-s><span class="model">%s</span>%s</th>'
+        % (html.escape(m),
+           '<span class="sub">retired</span>' if is_retired(m, roster) else "")
+        for m in models)
     rows = []
     for name, s, href in entries:
         mat = cell_matrix(s)
@@ -1039,7 +1083,47 @@ def notices(entries):
             '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), "".join(rows)))
 
 
-def build(entries):
+def provenance_table(entries):
+    """What produced each number: image, agent, skill and task versions.
+
+    A published benchmark that cannot say which version produced a figure is an
+    anecdote. Every value is shown with its run count, and "not recorded" is kept
+    distinct from a value that differs -- one is a measurement we did not take.
+    """
+    keys = [("image_version", "image"), ("opencode_version", "agent"),
+            ("skills_hash", "skill"), ("tasks_sha", "tasks")]
+    rows = []
+    for name, s, _ in entries:
+        prov = s.get("provenance") or {}
+        if not prov:
+            continue
+        tds = []
+        for k, _lab in keys:
+            counts = prov.get(k) or {}
+            known = [(v, n) for v, n in counts.items()
+                     if v not in ("", "unknown", "none", None)]
+            known.sort(key=lambda vn: (-vn[1], vn[0]))
+            miss = sum(n for v, n in counts.items() if (v, n) not in known)
+            bits = ["%s <span class=\"dim\">(%d)</span>" % (html.escape(str(v)[:12]), n)
+                    for v, n in known[:2]]
+            if miss:
+                bits.append('<span class="dim">not recorded (%d)</span>' % miss)
+            tds.append('<td class="n">%s</td>' % (", ".join(bits) or
+                                                  '<span class="dim">&mdash;</span>'))
+        first, last = s.get("first_run"), s.get("last_run")
+        when = ("%s to %s" % (first, last)) if first and last and first != last else (first or "")
+        tds.append('<td class="n">%s</td>'
+                   % (html.escape(when) if when else '<span class="dim">&mdash;</span>'))
+        rows.append('<tr><td class="l name">%s</td>%s</tr>' % (html.escape(name), "".join(tds)))
+    if not rows:
+        return ""
+    head = "".join('<th>%s</th>' % lab for _, lab in keys) + "<th>ran</th>"
+    return ('<div class="bar"><h2>Provenance</h2></div>'
+            '<div class="card scroll"><table><thead><tr><th class="l">Task</th>%s</tr>'
+            '</thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
+
+
+def build(entries, roster=None):
     effects, n_sep, n_cmp = build_effects(entries)
 
     models, runs, reps, n_excluded = set(), 0, set(), 0
@@ -1086,12 +1170,13 @@ def build(entries):
   %s
   %s
   %s
+  %s
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
 </div>%s</body></html>""" % (STYLE, tiles, effects, build_charts(entries),
-                            build_grid(entries),
-                            notices(entries), SCRIPT)
+                            build_grid(entries, roster),
+                            notices(entries), provenance_table(entries), SCRIPT)
 
 
 def discover(report_dir):
@@ -1119,6 +1204,10 @@ def main():
                     help="repeatable: one task entry (use '' for no report link)")
     ap.add_argument("--report-dir", metavar="DIR",
                     help="a harness report directory; every summary_<task>.json becomes an entry")
+    ap.add_argument("--roster", metavar="FILE",
+                    help="models the gateway currently serves: one per line, or its "
+                         "/v1/models JSON. Models on the board but absent from it are "
+                         "marked retired. Omit it and nothing is marked.")
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
     if not a.entry and not a.report_dir:
@@ -1135,7 +1224,7 @@ def main():
 
     if a.out.parent:
         a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(build(entries), encoding="utf-8")
+    a.out.write_text(build(entries, load_roster(a.roster)), encoding="utf-8")
     print("wrote %s (%d KB, %d task(s))"
           % (a.out, a.out.stat().st_size // 1024, len(entries)))
     for name, s, _ in entries:
