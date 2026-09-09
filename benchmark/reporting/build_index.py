@@ -337,6 +337,12 @@ td.name a:hover{color:var(--link);border-bottom-color:var(--link)}
 .arm{display:block;font-family:var(--mono);font-size:.635rem;color:var(--ink2);
 margin-top:3px;white-space:nowrap}
 .n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.term{position:relative;white-space:nowrap}
+.term .q{display:inline-block;width:12px;height:12px;line-height:12px;margin-left:4px;
+border:1px solid currentColor;border-radius:50%;font-size:8.5px;font-style:normal;
+text-align:center;opacity:.5;vertical-align:1px;cursor:help}
+.term:hover .q,.term:focus .q{opacity:1}
+.term:focus{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 .dim{color:var(--ink3)}
 .na{color:var(--ink3)}
 .stick{position:sticky;left:0;z-index:2;background:var(--surface);box-shadow:1px 0 0 var(--rule)}
@@ -539,6 +545,48 @@ SCRIPT = """<script>
 </script>"""
 
 
+# Hover definitions. Every label on the page that is jargon gets one, so the page can
+# stay terse without assuming the reader knows our vocabulary. Kept as supplementary
+# detail only: nothing here is needed to read a number correctly, because a definition
+# reachable only by hovering is invisible in print and on a touchscreen.
+DEFINITIONS = {
+    "Median runtime": "Wall-clock time for a run, middle value across the cell.",
+    "Median tokens": "Input plus output tokens per run. Comparable within a model only: "
+                     "providers count reasoning and cache tokens differently.",
+    "Opened the skill": "Runs that actually read the skill file. Having it installed and "
+                        "reading it are different things, and both are measured.",
+    "Tools reached for": "Neuroimaging tools invoked, counting runs not invocations. A run "
+                         "that tried two tools appears under both.",
+    "Not-found claims": "Times the agent reported a file or tool as missing. High counts "
+                        "usually mean it was looking in the wrong place.",
+    "Ran": "Dates the runs in this cell were executed.",
+    "Task": "One benchmark problem: a dataset, a goal, and a hidden reference to score "
+            "against.",
+    "Model": "The LLM driving the agent. Models are the population measured across, not "
+             "competitors.",
+    "No skill": "Baseline arm. The agent gets the environment and the task, no skill file.",
+    "With skill": "Same task and environment, with the skill installed.",
+    "Effect": "Difference in pass rate, drawn on an axis centred at zero. The whisker is "
+              "the 95% interval.",
+    "Δ pp": "Change in pass rate, in percentage points. 20% to 70% is +50 pp.",
+    "95% CI": "Newcombe interval on the difference. If it spans zero, this many runs "
+              "cannot separate the arms.",
+    "Verdict": "clear: interval and Fisher agree. split: they disagree, so the result is "
+               "on the boundary of what this many runs resolve. unclear: neither.",
+    "Fisher p": "Fisher exact test on the 2x2 table. Probability of a difference this "
+                "large if the skill did nothing.",
+}
+
+
+def term(label):
+    """A label, with a hover definition when we have one for it."""
+    d = DEFINITIONS.get(label)
+    if not d:
+        return html.escape(label)
+    return ('<span class="term" tabindex="0" title="%s">%s<i class="q">?</i></span>'
+            % (html.escape(d), html.escape(label)))
+
+
 def baseline_arm_for(summary, model):
     """The baseline arm this model actually ran, or None.
 
@@ -577,7 +625,7 @@ def detail_panel(summary, model, skill_arm):
     def row(label, fn, hint=""):
         tds = "".join('<td class="n">%s</td>' % fn(c) for _, c in got)
         return ('<tr><th scope="row">%s%s</th>%s</tr>'
-                % (html.escape(label),
+                % (term(label),
                    ' <span class="hint">%s</span>' % html.escape(hint) if hint else "",
                    tds))
 
@@ -586,9 +634,11 @@ def detail_panel(summary, model, skill_arm):
         row("Median runtime", lambda c: _num(c.get("median_minutes"), " min", 1)),
         row("Median tokens", lambda c: _num(c.get("median_tokens_total")), "per run"),
         row("Opened the skill", lambda c: "%d/%d" % (c.get("uptake", 0), c.get("n", 0))),
+        # Counts in brackets. "bet 9, afni 3" reads as two numbers with a comma
+        # between them; "bet (9), afni (3)" reads as a tool and its count.
         row("Tools reached for",
             lambda c: html.escape(", ".join(
-                "%s %d" % (k, v) for k, v in
+                "%s (%d)" % (k, v) for k, v in
                 sorted((c.get("methods") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
             ) or "none")),
         row("Not-found claims", lambda c: _num(c.get("not_found_claims"))),
@@ -683,6 +733,20 @@ def build_effects(entries):
 
     n_sep = sum(1 for r in rows
                 if agreement(r["lo"], r["hi"], r["p"]) == "clear")
+    # Header built first, as its own string. Inlining term() into the table literal
+    # made the % operator bind across every adjacent literal, so the count's %d
+    # collected a header cell instead of a number.
+    thead = (
+        '<th></th><th class="l" data-s>' + term("Task") + '</th>'
+        '<th class="l" data-s>' + term("Model") + '</th>'
+        '<th data-s>' + term("No skill") + '<span class="sub">' + term("k/n") + '</span></th>'
+        '<th data-s>' + term("With skill") + '<span class="sub">' + term("k/n") + '</span></th>'
+        '<th class="c" data-s>' + term("Effect") + '<span class="ax">'
+        '<span>&minus;100</span><span>0</span><span>+100</span></span></th>'
+        '<th data-s>' + term("Δ pp") + '<span class="sub">' + term("95% CI") + '</span></th>'
+        '<th class="c" data-s>' + term("Verdict") + '<span class="sub">'
+        + term("Fisher p") + '</span></th>')
+
     table = (
         '<div class="bar"><h2>Skill effect</h2>'
         '<span class="count" data-count="fx">%d comparisons</span>'
@@ -696,15 +760,9 @@ def build_effects(entries):
         '%s'
         '<input type="search" data-filter="fx" placeholder="Search" '
         'aria-label="Search task or model"></span></div>'
-        '<div class="card tall"><table id="fx"><thead><tr>'
-        '<th></th><th class="l" data-s>Task</th><th class="l" data-s>Model</th>'
-        '<th data-s>No skill<span class="sub">k/n</span></th>'
-        '<th data-s>With skill<span class="sub">k/n</span></th>'
-        '<th class="c" data-s>Effect<span class="ax">'
-        '<span>&minus;100</span><span>0</span><span>+100</span></span></th>'
-        '<th data-s>&Delta; pp<span class="sub">95%% CI</span></th>'
-        '<th class="c" data-s>Verdict<span class="sub">Fisher p</span></th>'
-        '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), pickers, "".join(body)))
+        '<div class="card tall"><table id="fx"><thead><tr>%s</tr></thead>'
+        '<tbody>%s</tbody></table></div>'
+        % (len(rows), pickers, thead, "".join(body)))
     return table, n_sep, len(rows)
 
 

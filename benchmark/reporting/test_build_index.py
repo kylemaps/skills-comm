@@ -359,8 +359,11 @@ class EffectRendering(unittest.TestCase):
 
     def test_an_absent_interval_draws_no_whisker(self):
         """A stub on the centre line claims a precision never computed."""
-        self.assertNotIn("whisk", self.row(ci95_pp=None))
-        self.assertIn("whisk", self.row())
+        # The ELEMENT, not the word: "whisker" also appears in the Effect column's
+        # hover definition, so matching a bare substring made this pass or fail on
+        # prose rather than on markup.
+        self.assertNotIn('class="whisk"', self.row(ci95_pp=None))
+        self.assertIn('class="whisk"', self.row())
 
     def test_an_absent_interval_is_not_counted_as_clear(self):
         s = summary({}, {"m": {"delta_pp": 50.0, "env_only_n": 10, "env_skill_n": 10}})
