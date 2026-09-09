@@ -420,7 +420,7 @@ class Grid(unittest.TestCase):
         s = summary({"m|env+skill": {"n": 10, "passes": 10},
                      "m|env-only": {"n": 10, "passes": 8}})
         h = bi.build_grid([("t", s, "")])
-        self.assertLess(h.index("no skill"), h.index("with skill"))
+        self.assertLess(h.index("no skill"), h.index("Skill A"))
 
     def test_missing_model_is_a_dash_not_a_zero(self):
         """An unrun cell and a 0% cell are different claims."""
@@ -443,9 +443,153 @@ class Grid(unittest.TestCase):
         self.assertIn("&lt;img&gt;", h)
         self.assertIn("a&lt;b", h)
 
-    def test_unknown_arm_keeps_its_own_name(self):
-        s = summary({"m|env+skillB": {"n": 10, "passes": 3}})
-        self.assertIn("env+skillB", bi.build_grid([("t", s, "")]))
+    def test_any_skill_arm_gets_a_letter(self):
+        """An arm named after a folder still reads as an artefact, not a person."""
+        s = summary({"m|env+skill-michele": {"n": 10, "passes": 3}})
+        h = bi.build_grid([("t", s, "")])
+        self.assertIn("Skill A", h)
+        self.assertNotIn("michele", h)
+
+
+class Attribution(unittest.TestCase):
+    """A hash printed beside the wrong skill turns two incomparable runs into a
+    matched pair. Attribution is only made where summary.json settles it."""
+
+    def _s(self, cells, hashes, task="t"):
+        d = summary(cells, task=task)
+        d["provenance"] = {"skills_hash": hashes}
+        return d
+
+    def test_one_skill_arm_one_hash_is_attributed(self):
+        s = self._s({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}},
+                    {"291f844a43ec": 20, "unknown": 4})
+        reg = bi.arm_registry([("t", s, "")])
+        self.assertEqual(bi.attributed_hashes([("t", s, "")], reg),
+                         {"env+skill": ["291f844a43ec"]})
+
+    def test_two_skill_arms_two_hashes_is_left_blank(self):
+        """summary.json aggregates provenance per TASK. With two skill arms and two
+        hashes there is no record of which belongs to which, so neither is claimed."""
+        s = self._s({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9},
+                     "m|env+skill-b": {"n": 10, "passes": 7}},
+                    {"291f844a43ec": 10, "5ba66f0c7ddf": 10, "unknown": 10})
+        reg = bi.arm_registry([("t", s, "")])
+        self.assertEqual(bi.attributed_hashes([("t", s, "")], reg), {})
+
+    def test_unattributed_arm_says_so_instead_of_showing_nothing(self):
+        s = self._s({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9},
+                     "m|env+skill-b": {"n": 10, "passes": 7}},
+                    {"291f844a43ec": 10, "5ba66f0c7ddf": 10})
+        entries = [("t", s, "")]
+        h = bi.skills_key(entries, bi.arm_registry(entries))
+        self.assertIn("not attributable per arm", h)
+
+    def test_unknown_is_not_a_hash(self):
+        s = self._s({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}},
+                    {"unknown": 20})
+        reg = bi.arm_registry([("t", s, "")])
+        self.assertEqual(bi.attributed_hashes([("t", s, "")], reg), {})
+
+    def test_skill_label_and_link_come_from_the_caller(self):
+        """Nothing on this page infers what a skill IS. It is passed in or it is blank."""
+        s = self._s({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}}, {"abc123": 20})
+        entries = [("t", s, "")]
+        reg = bi.arm_registry(entries, {"env+skill": {"label": "brain-extraction",
+                                                      "href": "http://x/"}})
+        h = bi.skills_key(entries, reg)
+        self.assertIn("brain-extraction", h)
+        self.assertIn('href="http://x/"', h)
+
+
+class Registry(unittest.TestCase):
+    """The arm registry is what stops two charts disagreeing about a colour."""
+
+    def test_slots_are_global_not_per_task(self):
+        """The bug this replaces: colour came from the arm's index WITHIN a task, so a
+        one-skill task drew its skill in the same hue a two-skill task used for its
+        second. Two charts on one page then meant different things by one colour."""
+        a = summary({"m|env-only": {"n": 1, "passes": 0},
+                     "m|env+skill-b": {"n": 1, "passes": 1}}, task="a")
+        b = summary({"m|env-only": {"n": 1, "passes": 0},
+                     "m|env+skill-a": {"n": 1, "passes": 1},
+                     "m|env+skill-b": {"n": 1, "passes": 1}}, task="b")
+        reg = bi.arm_registry([("a", a, ""), ("b", b, "")])
+        self.assertEqual(reg["env+skill-b"]["slot"], reg["env+skill-b"]["slot"])
+        self.assertNotEqual(reg["env+skill-a"]["slot"], reg["env+skill-b"]["slot"])
+        self.assertEqual(reg["env-only"]["slot"], 0)
+
+    def test_letters_are_stable_across_tasks(self):
+        a = summary({"m|env+skill-a": {"n": 1, "passes": 1}}, task="a")
+        b = summary({"m|env+skill-b": {"n": 1, "passes": 1}}, task="b")
+        reg = bi.arm_registry([("a", a, ""), ("b", b, "")])
+        self.assertEqual(reg["env+skill-a"]["name"], "Skill A")
+        self.assertEqual(reg["env+skill-b"]["name"], "Skill B")
+
+    def test_control_is_never_a_letter(self):
+        s = summary({"m|env-only": {"n": 1, "passes": 0}})
+        reg = bi.arm_registry([("t", s, "")])
+        self.assertEqual(reg["env-only"]["name"], "no skill")
+        self.assertFalse(reg["env-only"]["skill"])
+
+
+class Direction(unittest.TestCase):
+    """Lower-is-better measures are mirrored, and a mirror must be labelled."""
+
+    def _chart(self, metric):
+        s = summary({"m|env-only": {"n": 10, "passes": 2, "median_minutes": 40.0,
+                                    "median_tokens_total": 20000000},
+                     "m|env+skill": {"n": 10, "passes": 8, "median_minutes": 4.0,
+                                     "median_tokens_total": 200000}})
+        h = bi.build_charts([("t", s, "")])
+        i = h.index('data-metric="%s"' % metric)
+        j = h.index("</figure>", i)
+        return h[i:j]
+
+    def test_faster_arm_sits_to_the_right(self):
+        """4 min must plot right of 40 min, or the chart reads backwards."""
+        f = self._chart("mins")
+        xs = [float(x.split("%")[0]) for x in f.split("--x:")[1:]]
+        self.assertGreater(max(xs), min(xs))
+        # The faster value is the one carrying the larger position.
+        self.assertIn("better", f)
+
+    def test_higher_pass_rate_also_sits_to_the_right(self):
+        f = self._chart("pass")
+        self.assertIn("better", f)
+
+    def test_both_ends_of_a_mirrored_axis_are_labelled(self):
+        """An unlabelled reversal is the one failure mode worse than no chart."""
+        f = self._chart("mins")
+        self.assertIn('class="cax l"', f)
+        self.assertIn('class="cax r"', f)
+
+    def test_log_is_offered_on_tokens_and_withheld_from_pass_rate(self):
+        """A proportion has no decades to spread and lands on zero, which log cannot draw."""
+        self.assertIn('data-log="1"', self._chart("tokens"))
+        self.assertIn('data-log="0"', self._chart("pass"))
+
+    def test_log_positions_are_rendered_server_side(self):
+        """The toggle picks between two numbers the page already holds; it computes none."""
+        self.assertIn("--xl:", self._chart("tokens"))
+
+
+class Retired(unittest.TestCase):
+    def test_retired_model_row_is_marked_in_the_chart(self):
+        s = summary({"gone|env-only": {"n": 10, "passes": 2},
+                     "gone|env+skill": {"n": 10, "passes": 8}})
+        h = bi.build_charts([("t", s, "")], roster=["live"])
+        self.assertIn("drow retired", h)
+        self.assertIn("retired</span>", h)
+
+    def test_live_model_is_not_marked(self):
+        s = summary({"live|env-only": {"n": 10, "passes": 2},
+                     "live|env+skill": {"n": 10, "passes": 8}})
+        self.assertNotIn("drow retired", bi.build_charts([("t", s, "")], roster=["live"]))
 
 
 class Notices(unittest.TestCase):

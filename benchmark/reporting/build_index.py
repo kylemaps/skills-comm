@@ -51,9 +51,62 @@ ARM_LABEL = {"env-only": "no skill", "env+skill": "with skill",
 
 BASELINE_ARMS = ("env-only", "baseline")
 
+LETTERS = "ABCDEFGH"
+
 
 def is_skill_arm(arm):
     return arm not in BASELINE_ARMS
+
+
+def arm_registry(entries, skills=None):
+    """Every arm on the page -> display name, colour slot, and where its skill lives.
+
+    Two faults this removes together.
+
+    Colour was assigned by an arm's index WITHIN a task. A task that ran only one skill
+    therefore drew that skill in the first skill colour, while a task that ran two drew
+    its second in it, so the same hue meant different things on two charts sitting one
+    above the other. Slots are global here: an arm is one colour on the whole page.
+
+    Naming was by the folder the skill came from, which in practice is a person's name.
+    An arm is named by its artefact -- Skill A, Skill B -- so the board reads as a
+    comparison of skills rather than of people, and the mapping to a file and a hash is
+    stated once, in the key, instead of implied by a label.
+
+    `skills` is an optional {arm: {"label":..., "href":..., "hash":...}} from the CLI.
+    Nothing is inferred: an arm with no entry shows its id and says the hash is not
+    recorded, because summary.json aggregates provenance per task, not per arm.
+    """
+    seen = []
+    for _, s, _ in entries:
+        for key in (s.get("cells") or {}):
+            arm = key.partition("|")[2]
+            if arm and arm not in seen:
+                seen.append(arm)
+    reg = {}
+    for a in sorted(a for a in seen if not is_skill_arm(a)):
+        reg[a] = {"name": "no skill", "slot": 0, "skill": False}
+    for i, a in enumerate(sorted(a for a in seen if is_skill_arm(a))):
+        reg[a] = {"name": "Skill %s" % LETTERS[i] if i < len(LETTERS) else a,
+                  "slot": min(i + 1, 3), "skill": True}
+    for a, meta in (skills or {}).items():
+        if a in reg:
+            reg[a].update({k: v for k, v in meta.items() if v})
+    return reg
+
+
+def arm_name(reg, arm):
+    """What to call an arm. Falls back to the old static map, then to the raw id."""
+    if reg and arm in reg:
+        return reg[arm]["name"]
+    return ARM_LABEL.get(arm, arm)
+
+
+def arm_slot(reg, arm, fallback=0):
+    """Which colour an arm owns. Global, so two charts cannot disagree about a hue."""
+    if reg and arm in reg:
+        return reg[arm]["slot"]
+    return min(fallback, 3)
 
 
 def wilson(k, n, z=1.96):
@@ -344,6 +397,11 @@ text-align:center;opacity:.5;vertical-align:1px;cursor:help}
 .term:hover .q,.term:focus .q{opacity:1}
 .term:focus{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 .dim{color:var(--ink3)}
+.lede{margin:0 0 12px;max-width:74ch;font-size:.775rem;line-height:1.55;color:var(--ink2)}
+.lede b{color:var(--ink);font-weight:600}
+.arm.a0{color:var(--nil)}.arm.a1{color:var(--pos)}
+.arm.a2{color:var(--warn)}.arm.a3{color:var(--neg)}
+.clab i.skill.a2{background:var(--warn)}.clab i.skill.a3{background:var(--neg)}
 .na{color:var(--ink3)}
 .stick{position:sticky;left:0;z-index:2;background:var(--surface);box-shadow:1px 0 0 var(--rule)}
 table.grid tbody td{vertical-align:top}
@@ -424,8 +482,14 @@ padding:9px 0;border-bottom:1px solid var(--rule)}
 overflow:hidden;text-overflow:ellipsis}
 .dtrack{position:relative;height:14px;background:linear-gradient(var(--track),var(--track))
 center/100% 1px no-repeat;border-radius:2px}
-.dtrack i{position:absolute}
-.dtrack .link{top:6px;height:2px;background:var(--ink3);opacity:.5;border-radius:1px}
+.dtrack i{position:absolute;left:var(--x)}
+.dtrack .link{top:6px;height:2px;width:var(--w);background:var(--ink3);opacity:.5;
+border-radius:1px}
+/* Log mode reads a second position rendered alongside the first. Both are computed
+   server-side, so the toggle switches which number is used and never derives one. */
+.charts.log .dtrack i{left:var(--xl)}
+.charts.log .dtrack .link{width:var(--wl)}
+.charts.log .lin-only{display:none}
 .dtrack .dot{top:3px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;
 box-shadow:0 0 0 2px var(--surface)}
 .dot.a0{background:transparent;box-shadow:0 0 0 2px var(--surface),inset 0 0 0 2px var(--nil)}
@@ -439,7 +503,35 @@ box-shadow:0 0 0 2px var(--surface)}
 .sw{width:10px;height:10px;border-radius:50%;display:inline-block}
 .sw.a0{background:transparent;box-shadow:inset 0 0 0 2px var(--nil)}
 .sw.a1{background:var(--pos)}.sw.a2{background:var(--warn)}.sw.a3{background:var(--neg)}
-@media(max-width:720px){.drow{grid-template-columns:96px 1fr 104px;gap:10px}}
+
+/* Column alignment. Values were flex-packed to the right at their natural widths, so
+   a 3-character figure and a 7-character one started in different places and the eye
+   had no line to run down. Fixed cells, tabular figures, right-aligned. */
+.dvs{display:grid;grid-auto-flow:column;grid-auto-columns:56px;gap:8px;justify-content:end}
+.dv{text-align:right;font-variant-numeric:tabular-nums}
+
+/* A retired model still owns its rows -- they are evidence of what was true then --
+   but it must not read as something that could be re-run. Muted, not deleted, and the
+   dots keep enough colour to stay distinguishable from each other. */
+.drow.retired .dm{color:var(--ink3)}
+.drow.retired .dtrack,.drow.retired .dvs{filter:saturate(.22);opacity:.72}
+.rtag{display:inline-block;margin-left:6px;padding:0 4px;border-radius:3px;
+font:8.5px/1.5 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+color:var(--ink3);background:var(--track)}
+
+/* Chart axis. Both ends are labelled because the low-is-better measures are mirrored,
+   and an unlabelled reversal would be read backwards. */
+.caxis{display:grid;grid-template-columns:132px 1fr 128px;gap:16px;margin:6px 0 0}
+.caxis .cax{font:9.5px/1.4 var(--mono);color:var(--ink3)}
+.caxis .cax.l{grid-column:2;justify-self:start}
+.caxis .cax.r{grid-column:2;justify-self:end;grid-row:1}
+.caxis .cax.b{grid-column:3;justify-self:end;letter-spacing:.04em}
+.tog{display:inline-flex;align-items:center;gap:6px;font-size:.72rem;color:var(--ink2);
+cursor:pointer;user-select:none}
+.tog input{margin:0;cursor:pointer}
+@media(max-width:720px){.drow{grid-template-columns:96px 1fr 104px;gap:10px}
+.caxis{grid-template-columns:96px 1fr 104px;gap:10px}
+.dvs{grid-auto-columns:48px;gap:6px}}
 @media print{
 :root{--surface:#fff;--plane:#fff;--head:#fff;--hover:transparent;
 --ink:#000;--ink2:#333;--ink3:#555;--rule:#bbb;--rule2:#888}
@@ -542,8 +634,32 @@ SCRIPT = """<script>
         if (hit) { f.removeAttribute('hidden'); } else { f.setAttribute('hidden', ''); }
       });
     }
+    // The log toggle only appears on measures that actually span decades. Offering
+    // it on a bounded proportion would invite a reading of pass rate that a log axis
+    // cannot honestly support -- it has no zero, and half our baseline cells are 0.
+    var cl = document.getElementById('cl'), clw = document.getElementById('clw'),
+        box = document.getElementById('charts');
+    function show() {
+      var any = false;
+      Array.prototype.forEach.call(figs, function (f) {
+        var hit = f.getAttribute('data-task') === ct.value &&
+                  f.getAttribute('data-metric') === cm.value;
+        if (hit) { f.removeAttribute('hidden'); } else { f.setAttribute('hidden', ''); }
+        if (hit && f.getAttribute('data-log') === '1') any = true;
+      });
+      if (clw) {
+        if (any) { clw.removeAttribute('hidden'); } else { clw.setAttribute('hidden', ''); }
+      }
+      if (box) box.classList.toggle('log', !!(any && cl && cl.checked));
+      Array.prototype.forEach.call(
+        document.querySelectorAll('.log-only'), function (e) {
+          var on = !!(any && cl && cl.checked);
+          if (on) { e.removeAttribute('hidden'); } else { e.setAttribute('hidden', ''); }
+        });
+    }
     ct.addEventListener('change', show);
     cm.addEventListener('change', show);
+    if (cl) cl.addEventListener('change', show);
     show();
   })();
 
@@ -611,6 +727,24 @@ SCRIPT = """<script>
 # detail only: nothing here is needed to read a number correctly, because a definition
 # reachable only by hovering is invisible in print and on a touchscreen.
 DEFINITIONS = {
+    "Skills compared": "Each skill on this page, what it is, and the exact file "
+                       "contents it was run from. Arms are lettered rather than named "
+                       "after whoever wrote them, so the board compares skills.",
+    "Neurodesk image": "The container the runs happened inside. Fixes every tool "
+                       "version at once -- FSL, ANTs, FreeSurfer and the rest.",
+    "opencode": "Version of the headless CLI that drove the agent. NOT the model: the "
+                "model is the subject of the experiment and is named in every other "
+                "table. This is the thing holding its hand.",
+    "skill files": "Hash of the skill file contents at run time. Two runs sharing this "
+                   "read the same instructions; two that differ did not, whatever the "
+                   "arm was called.",
+    "task pack": "Version of the graded task definitions: the prompt the agent was "
+                 "given and the criteria it was scored against. If this moves between "
+                 "two runs they are not the same experiment and must not be pooled.",
+    "repeats": "How many times each model-and-arm combination was run. The unit of "
+               "this benchmark is that cell, not the individual run.",
+    "kept": "Runs that survived to be counted, out of runs started. The gap is in the "
+            "excluded table above.",
     "Median runtime": "Wall-clock time for a run, middle value across the cell.",
     "Median tokens": "Input plus output tokens per run. Comparable within a model only: "
                      "providers count reasoning and cache tokens differently.",
@@ -680,7 +814,7 @@ def _num(v, unit="", dp=0):
     return ("%.*f%s" % (dp, v, unit)) if dp else ("%s%s" % ("{:,}".format(int(v)), unit))
 
 
-def detail_panel(summary, model, skill_arm):
+def detail_panel(summary, model, skill_arm, reg=None):
     """Everything the harness measured about this comparison beyond pass rate.
 
     Runtime, token cost, uptake, which tools were reached for, and when the runs
@@ -704,7 +838,7 @@ def detail_panel(summary, model, skill_arm):
                    ' <span class="hint">%s</span>' % html.escape(hint) if hint else "",
                    tds))
 
-    head = "".join('<th>%s</th>' % html.escape(ARM_LABEL.get(a, a)) for a, _ in got)
+    head = "".join('<th>%s</th>' % html.escape(arm_name(reg, a)) for a, _ in got)
     body = [
         row("Median runtime", lambda c: _num(c.get("median_minutes"), " min", 1)),
         row("Median tokens", lambda c: _num(c.get("median_tokens_total")), "per run"),
@@ -739,14 +873,29 @@ def detail_panel(summary, model, skill_arm):
 # make. Scaled within a model, the bar shows what the skill did to that model's bill,
 # which is the comparison that holds. The absolute figure is printed on every bar either
 # way, so nothing is hidden.
+# key, label, value, unit, decimals, scale-within-model, better, log-available.
+#
+# `better` orients the axis so the desirable end is always on the RIGHT, whichever
+# direction the number runs. For runtime and tokens that means zero sits at the right
+# edge and a bar grows leftward as it gets worse. Both ends are labelled, so the
+# mirroring is visible rather than a silent reversal -- reading one of these charts
+# backwards inverts the conclusion, which is the one error a benchmark page must not
+# make easy.
+#
+# `log` is offered only where the quantity spans orders of magnitude. A proportion
+# cannot use it: pass rate and uptake are bounded 0-100 and land on 0 routinely, and
+# a log axis has no zero to draw.
 METRICS = [
     ("pass",   "Pass rate",        lambda c: 100.0 * c.get("passes", 0) / c["n"]
-                                   if c.get("n") else None, "%",     0, False),
-    ("mins",   "Median runtime",   lambda c: c.get("median_minutes"),  " min",  1, False),
-    ("tokens", "Median tokens",    lambda c: c.get("median_tokens_total"), "",  0, True),
+                                   if c.get("n") else None, "%",  0, False, "high", False),
+    ("mins",   "Median runtime",   lambda c: c.get("median_minutes"),
+                                   " min", 1, False, "low", True),
+    ("tokens", "Median tokens",    lambda c: c.get("median_tokens_total"),
+                                   "",     0, True,  "low", True),
     ("uptake", "Opened the skill", lambda c: 100.0 * c.get("uptake", 0) / c["n"]
-                                   if c.get("n") else None, "%",     0, False),
-    ("nf",     "Not-found claims", lambda c: c.get("not_found_claims"), "",     0, False),
+                                   if c.get("n") else None, "%",  0, False, "high", False),
+    ("nf",     "Not-found claims", lambda c: c.get("not_found_claims"),
+                                   "",     0, False, "low", False),
 ]
 
 
@@ -761,17 +910,30 @@ def _compact(v, dp, unit):
     return ("%.*f%s" % (dp, v, unit))
 
 
-def build_charts(entries):
-    """Models across the bottom, a selectable measure up the side, one bar per arm.
+def build_charts(entries, reg=None, roster=None):
+    '''One row per model, one dot per arm, the connector between them being the effect.
 
     Every combination is rendered server-side and all but one hidden, rather than
-    computing bar heights in the browser. The numbers on this chart then come from the
+    computing positions in the browser. The numbers on this chart then come from the
     same place as the numbers in the tables, and a chart cannot quietly disagree with
     the row above it.
 
+    Three things are deliberate:
+
+    * **Better is always to the right.** For pass rate that is the natural direction.
+      For runtime and tokens, where lower is better, the axis is mirrored so zero sits
+      at the right edge, and both ends carry a tick so the mirror is visible.
+    * **Log is a toggle, not a default.** It is offered only on the measures that span
+      orders of magnitude. Turning it on also drops the per-model rescaling, because a
+      log axis is what makes a SHARED axis readable across models, which is the whole
+      reason the rescaling was there.
+    * **Colour comes from the global arm registry**, not from position within a task,
+      so one hue means one arm across every chart on the page.
+
     Bars are CSS boxes, not SVG: an <svg> carries an xmlns URL, and this page is
     required to reach no external host at all.
-    """
+    '''
+    reg = reg if reg is not None else arm_registry(entries)
     charts = []
     for name, s, _ in entries:
         mat = cell_matrix(s)
@@ -784,7 +946,7 @@ def build_charts(entries):
                     arms.append(a)
         if not models:
             continue
-        for key, label, fn, unit, dp, within in METRICS:
+        for key, label, fn, unit, dp, within, better, uselog in METRICS:
             vals = {}
             for m in models:
                 for a in arms:
@@ -799,6 +961,18 @@ def build_charts(entries):
             if not vals:
                 continue
             shared = max(vals.values()) or 1.0
+            pos = [v for v in vals.values() if v > 0]
+            lmin = min(pos) if pos else 1.0
+            lspan = math.log10(shared / lmin) if (uselog and shared > lmin > 0) else 0.0
+
+            def place(v, top, lspan=lspan, lmin=lmin, better=better):
+                lin = (v / top) if top else 0.0
+                lg = (math.log10(v / lmin) / lspan) if (lspan and v > 0) else lin
+                if better == "low":
+                    lin, lg = 1.0 - lin, 1.0 - lg
+                clamp = lambda x: 100.0 * max(0.0, min(1.0, x))
+                return clamp(lin), clamp(lg)
+
             rows_html = []
             for m in models:
                 top = shared
@@ -806,62 +980,100 @@ def build_charts(entries):
                     mine = [vals[(m, a)] for a in arms if (m, a) in vals]
                     top = (max(mine) if mine else 0) or 1.0
                 pts, txt = [], []
-                for i, a in enumerate(arms):
+                for a in arms:
                     v = vals.get((m, a))
-                    lab = ARM_LABEL.get(a, a)
+                    slot = arm_slot(reg, a)
                     if v is None:
-                        txt.append('<span class="dv dim">&mdash;</span>')
+                        txt.append(SPAN_MISSING)
                         continue
-                    x = 100.0 * v / top
-                    pts.append((x, i, lab, v))
-                    txt.append('<span class="dv a%d">%s</span>'
-                               % (min(i, 3), html.escape(_compact(v, dp, unit))))
+                    x, xl = place(v, top)
+                    # In log mode the axis is shared, so a within-model row has to move
+                    # to its shared position or the two modes would plot different data.
+                    if within and lspan:
+                        _, xl = place(v, shared)
+                    pts.append((x, xl, slot, arm_name(reg, a), v))
+                    txt.append(DV % (slot, html.escape(_compact(v, dp, unit))))
                 bar = ""
                 if len(pts) > 1:
-                    lo = min(p[0] for p in pts)
-                    hi = max(p[0] for p in pts)
+                    lo, hi = min(p[0] for p in pts), max(p[0] for p in pts)
+                    llo, lhi = min(p[1] for p in pts), max(p[1] for p in pts)
                     # The connector IS the effect: its length is the change and its
                     # direction is the sign. That is the thing grouped bars make you
                     # work out by eye.
-                    bar += ('<i class="link" style="left:%.2f%%;width:%.2f%%"></i>'
-                            % (lo, max(hi - lo, 0.4)))
-                for x, i, lab, v in pts:
-                    bar += ('<i class="dot a%d" style="left:%.2f%%" title="%s: %s"></i>'
-                            % (min(i, 3), x,
-                               html.escape("%s, %s" % (m, lab)),
-                               html.escape(_compact(v, dp, unit))))
+                    bar += LINK % (lo, max(hi - lo, 0.4), llo, max(lhi - llo, 0.4))
+                for x, xl, slot, lab, v in pts:
+                    bar += DOT % (slot, x, xl, html.escape("%s, %s" % (m, lab)),
+                                  html.escape(_compact(v, dp, unit)))
+                gone = is_retired(m, roster)
                 rows_html.append(
-                    '<div class="drow"><span class="dm">%s</span>'
-                    '<span class="dtrack">%s</span><span class="dvs">%s</span></div>'
-                    % (html.escape(m), bar, "".join(txt)))
-            legend = "".join('<span class="lg"><i class="sw a%d"></i>%s</span>'
-                             % (min(i, 3), html.escape(ARM_LABEL.get(a, a)))
-                             for i, a in enumerate(arms))
+                    DROW % (" retired" if gone else "", html.escape(m),
+                            RTAG if gone else "", bar, "".join(txt)))
+            legend = "".join(LG % (arm_slot(reg, a), html.escape(arm_name(reg, a)))
+                             for a in arms)
             charts.append(
-                '<figure class="chart" data-task="%s" data-metric="%s" hidden>'
-                '<figcaption>%s<span class="unit">%s</span>%s</figcaption>'
-                '<div class="plot">%s</div><div class="lgs">%s</div></figure>'
-                % (html.escape(name), key, html.escape(label),
-                   html.escape(unit.strip() or ""),
-                   '<span class="unit">scaled within each model, not across them</span>'
-                   if within else "",
-                   "".join(rows_html), legend))
+                FIG % (html.escape(name), key, 1 if lspan else 0, html.escape(label),
+                       html.escape(unit.strip() or ""),
+                       OWNMAX if within else "",
+                       "".join(rows_html),
+                       _axis(shared, lmin, lspan, within, better, dp, unit),
+                       legend))
 
     if not charts:
         return ""
 
-    tasks = [name for name, _, _ in entries]
-    tsel = "".join('<option value="%s">%s</option>' % (html.escape(t), html.escape(t))
-                   for t in tasks)
-    msel = "".join('<option value="%s">%s</option>' % (k, html.escape(l))
-                   for k, l, _, _, _, _ in METRICS)
-    return ('<div class="bar"><h2>Compare</h2><span class="tools">'
-            '<select id="ct" aria-label="Task">%s</select>'
-            '<select id="cm" aria-label="Measure">%s</select></span></div>'
-            '<div class="card charts">%s</div>' % (tsel, msel, "".join(charts)))
+    tsel = "".join(OPT % (html.escape(t), html.escape(t)) for t, _, _ in entries)
+    msel = "".join(OPT % (m[0], html.escape(m[1])) for m in METRICS)
+    return COMPARE % (tsel, msel, "".join(charts))
 
 
-def build_effects(entries):
+SPAN_MISSING = '<span class="dv dim">&mdash;</span>'
+DV = '<span class="dv a%d">%s</span>'
+LINK = '<i class="link" style="--x:%.2f%%;--w:%.2f%%;--xl:%.2f%%;--wl:%.2f%%"></i>'
+DOT = '<i class="dot a%d" style="--x:%.2f%%;--xl:%.2f%%" title="%s: %s"></i>'
+RTAG = '<span class="rtag">retired</span>'
+DROW = ('<div class="drow%s"><span class="dm">%s%s</span>'
+        '<span class="dtrack">%s</span><span class="dvs">%s</span></div>')
+LG = '<span class="lg"><i class="sw a%d"></i>%s</span>'
+OWNMAX = '<span class="unit lin-only">each row scaled to its own maximum</span>'
+FIG = ('<figure class="chart" data-task="%s" data-metric="%s" data-log="%d" hidden>'
+       '<figcaption>%s<span class="unit">%s</span>%s</figcaption>'
+       '<div class="plot">%s</div>%s<div class="lgs">%s</div></figure>')
+OPT = '<option value="%s">%s</option>'
+COMPARE = ('<div class="bar"><h2>Compare</h2><span class="tools">'
+           '<select id="ct" aria-label="Task">%s</select>'
+           '<select id="cm" aria-label="Measure">%s</select>'
+           '<label class="tog" id="clw" hidden><input type="checkbox" id="cl">'
+           'log scale</label></span></div>'
+           '<div class="card charts" id="charts">%s</div>')
+
+
+def _axis(top, lmin, lspan, within, better, dp, unit):
+    '''Tick labels at both ends, so a mirrored axis is never a silent reversal.
+
+    Where each row is scaled to its own maximum there is no shared axis to label, and
+    printing numbers would misrepresent what the positions mean. That case says so in
+    words instead.
+    '''
+    def ends(lo_v, hi_v):
+        a, b = _compact(lo_v, dp, unit), _compact(hi_v, dp, unit)
+        return (b, a) if better == "low" else (a, b)
+
+    l, r = ends(0.0, top)
+    if within:
+        l, r = "each row scaled to", "its own maximum"
+    out = (AXIS % ("lin-only", "", html.escape(l), html.escape(r)))
+    if lspan:
+        lg_l, lg_r = ends(lmin, top)
+        out += AXIS % ("log-only", " hidden", html.escape(lg_l), html.escape(lg_r))
+    return out
+
+
+AXIS = ('<div class="caxis %s"%s><span class="cax l">%s</span>'
+        '<span class="cax r">%s</span>'
+        '<span class="cax b">better &rarr;</span></div>')
+
+
+def build_effects(entries, reg=None):
     """Every skill-versus-baseline comparison, ranked by effect size.
 
     Eight columns, two lines each: the headline figure on the first line and the number
@@ -869,6 +1081,7 @@ def build_effects(entries):
     under the verdict). That is the density decision — it pairs each figure with its own
     caveat instead of spreading them across four columns that scroll off the right edge.
     """
+    reg = reg if reg is not None else arm_registry(entries)
     rows = []
     for name, s, href in entries:
         expect = expected_reps(s)
@@ -899,8 +1112,8 @@ def build_effects(entries):
         # than by colour alone: greying was the only signal, which fails anyone who
         # cannot perceive it and disappears entirely in print.
         state = agreement(r["lo"], r["hi"], r["p"])
-        arm = "" if r["arm"] in ("env+skill", "skill") else \
-            '<span class="arm">%s</span>' % html.escape(r["arm"])
+        arm = ('<span class="arm a%d">%s</span>'
+               % (arm_slot(reg, r["arm"]), html.escape(arm_name(reg, r["arm"]))))
         task = ('<a href="%s">%s</a>' % (html.escape(r["href"]), html.escape(r["task"]))
                 if r["href"] else html.escape(r["task"]))
         p = ('<span class="pv dim">&mdash;</span>' if r["p"] is None
@@ -925,7 +1138,7 @@ def build_effects(entries):
                 d=r["delta"], bar=delta_bar(r["delta"], r["lo"], r["hi"]),
                 dtxt=fmt_pp(r["delta"]), ci=fmt_ci(r["lo"], r["hi"]),
                 psort=1.0 if r["p"] is None else r["p"], p=p))
-        panel = detail_panel(r["summary"], r["model"], r["arm"])
+        panel = detail_panel(r["summary"], r["model"], r["arm"], reg)
         if panel:
             body.append('<tr class="det" hidden><td colspan="8">%s</td></tr>' % panel)
 
@@ -1003,13 +1216,14 @@ def is_retired(model, roster):
     return not any(model == r or r.endswith("/" + model) or model in r for r in roster)
 
 
-def build_grid(entries, roster=None):
+def build_grid(entries, roster=None, reg=None):
     """Task × model, arms stacked inside the cell.
 
     The task column is sticky, so at ten models the row you are reading keeps its name
     while the models scroll. Each rate keeps its denominator and its Wilson interval;
     a heatmap would fit more models per screen by throwing both away.
     """
+    reg = reg if reg is not None else arm_registry(entries)
     models = []
     for _, s, _ in entries:
         for m in cell_matrix(s):
@@ -1019,9 +1233,10 @@ def build_grid(entries, roster=None):
     # A retired model keeps its cells forever -- they are evidence of what was true
     # then -- but it must not read as if it could be re-run.
     head = "".join(
-        '<th data-s><span class="model">%s</span>%s</th>'
-        % (html.escape(m),
-           '<span class="sub">retired</span>' if is_retired(m, roster) else "")
+        '<th data-s class="mh%s"><span class="model">%s</span>'
+        '<span class="sub">%s</span></th>'
+        % (" retired" if is_retired(m, roster) else "", html.escape(m),
+           "retired" if is_retired(m, roster) else "&nbsp;")
         for m in models)
     rows = []
     for name, s, href in entries:
@@ -1036,13 +1251,14 @@ def build_grid(entries, roster=None):
             lines, sort_v = [], 0.0
             for arm in sorted(arms, key=lambda a: (is_skill_arm(a), a)):
                 p, n = arms[arm]
-                lab = ARM_LABEL.get(arm, arm)
+                lab = arm_name(reg, arm)
                 skill = is_skill_arm(arm)
                 if skill and not sort_v:
                     sort_v = p / n if n else 0.0
                 lines.append(
-                    '<span class="crow"><span class="clab"><i class="%s"></i>%s</span>%s</span>'
-                    % ("skill" if skill else "base", html.escape(lab),
+                    '<span class="crow"><span class="clab"><i class="%s a%d"></i>%s</span>%s</span>'
+                    % ("skill" if skill else "base", arm_slot(reg, arm),
+                       html.escape(lab),
                        rate_cell(p, n, expect)))
             tds.append('<td data-v="%.4f"><span class="cell">%s</span></td>'
                        % (sort_v, "".join(lines)))
@@ -1095,20 +1311,90 @@ def notices(entries):
         return ""
     return ('<div class="bar"><h2>' + term("Excluded and not pooled") + '</h2>'
             '<span class="count">%d tasks</span></div>'
+            '<p class="lede">Runs we threw away because <em>we</em> broke them, not '
+            'because the model failed &mdash; our timeout killed the agent, or the '
+            'harness gave a run the wrong skill. They are removed from every number '
+            'above rather than counted as failures. <b>Not poolable</b> means results '
+            'for that task must not be added together across models, because something '
+            'meant to be held constant changed partway through.</p>'
             '<div class="card scroll"><table><thead><tr>'
-            '<th class="l">Task</th><th class="l">What summarize flagged</th>'
+            '<th class="l">Task</th><th class="l">What was set aside</th>'
             '</tr></thead><tbody>%s</tbody></table></div>' % (len(rows), "".join(rows)))
 
 
+def attributed_hashes(entries, reg):
+    """Which content hash belongs to which skill arm, where that is a fact.
+
+    summary.json aggregates provenance over a whole task, so a task that ran two skill
+    arms reports two hashes and no record of which arm owns which. That case is left
+    blank. A task with exactly one skill arm and exactly one real hash is unambiguous,
+    and only those are used. The difference matters: a hash printed beside the wrong
+    skill would make an incomparable pair of runs look like a matched one.
+    """
+    out = {}
+    for _, s, _ in entries:
+        arms = {k.partition("|")[2] for k in (s.get("cells") or {})}
+        skill_arms = [a for a in arms if is_skill_arm(a)]
+        counts = ((s.get("provenance") or {}).get("skills_hash") or {})
+        real = [v for v in counts if v not in ("", "unknown", "none", None)]
+        if len(skill_arms) == 1 and len(real) == 1:
+            out.setdefault(skill_arms[0], set()).add(real[0])
+    return {a: sorted(v) for a, v in out.items()}
+
+
+def skills_key(entries, reg):
+    """What Skill A and Skill B actually are: a file, a content hash, a link.
+
+    The arms carry letters everywhere else on the page so the board compares artefacts
+    rather than people. That only works if the letters are defined once, in full, where
+    a reader will meet them before the first table that uses them.
+    """
+    hashes = attributed_hashes(entries, reg)
+    rows = []
+    for arm, meta in reg.items():
+        if not meta.get("skill"):
+            continue
+        got = hashes.get(arm) or []
+        h = (", ".join('<code>%s</code>' % html.escape(x[:12]) for x in got) if got
+             else '<span class="dim">not attributable per arm</span>')
+        label = meta.get("label") or arm
+        label = (('<a href="%s">%s</a>' % (html.escape(meta["href"]), html.escape(label)))
+                 if meta.get("href") else html.escape(label))
+        rows.append('<tr><td class="l"><span class="arm a%d">%s</span></td>'
+                    '<td class="l name">%s</td><td class="l"><code>%s</code></td>'
+                    '<td class="l">%s</td></tr>'
+                    % (meta["slot"], html.escape(meta["name"]), label,
+                       html.escape(arm), h))
+    if not rows:
+        return ""
+    return ('<div class="bar"><h2>' + term("Skills compared") + '</h2>'
+            '<span class="count">%d</span></div>'
+            '<div class="card scroll"><table><thead><tr><th class="l">On this page</th>'
+            '<th class="l">Skill</th><th class="l">Arm</th>'
+            '<th class="l">Content hash</th></tr></thead>'
+            '<tbody>%s</tbody></table></div>' % (len(rows), "".join(rows)))
+
+
 def provenance_table(entries):
-    """What produced each number: image, agent, skill and task versions.
+    """What produced each number: container, driver, skill files and task pack.
 
     A published benchmark that cannot say which version produced a figure is an
     anecdote. Every value is shown with its run count, and "not recorded" is kept
     distinct from a value that differs -- one is a measurement we did not take.
+
+    Column names are the literal things, not roles. "agent" used to head the opencode
+    version, which reads as the model under test; the model is the subject of the
+    experiment and is named in every other table, so the collision made this table
+    look like it contradicted them.
+
+    The skill hash is NOT coloured by arm here, and that is not an oversight.
+    summary.json aggregates provenance per task, so a task running two skill arms
+    reports both hashes in one cell with no record of which arm each belongs to.
+    Painting one of them in an arm colour would be a guess wearing the costume of a
+    measurement. Fix it in summarize.py, not here.
     """
-    keys = [("image_version", "image"), ("opencode_version", "agent"),
-            ("skills_hash", "skill"), ("tasks_sha", "tasks")]
+    keys = [("image_version", "Neurodesk image"), ("opencode_version", "opencode"),
+            ("skills_hash", "skill files"), ("tasks_sha", "task pack")]
     rows = []
     for name, s, _ in entries:
         prov = s.get("provenance") or {}
@@ -1127,6 +1413,14 @@ def provenance_table(entries):
                 bits.append('<span class="dim">not recorded (%d)</span>' % miss)
             tds.append('<td class="n">%s</td>' % (", ".join(bits) or
                                                   '<span class="dim">&mdash;</span>'))
+        reps = expected_reps(s)
+        n_valid, n_runs = s.get("n_valid"), s.get("n_runs")
+        made = ("%s of %s runs" % (n_valid, n_runs)) if n_runs else ""
+        tds.append('<td class="n">%s</td>'
+                   % (html.escape("%d per cell" % reps) if reps
+                      else '<span class="dim">&mdash;</span>'))
+        tds.append('<td class="n">%s</td>'
+                   % (html.escape(made) if made else '<span class="dim">&mdash;</span>'))
         first, last = s.get("first_run"), s.get("last_run")
         when = ("%s to %s" % (first, last)) if first and last and first != last else (first or "")
         tds.append('<td class="n">%s</td>'
@@ -1134,14 +1428,16 @@ def provenance_table(entries):
         rows.append('<tr><td class="l name">%s</td>%s</tr>' % (html.escape(name), "".join(tds)))
     if not rows:
         return ""
-    head = "".join('<th>%s</th>' % lab for _, lab in keys) + "<th>ran</th>"
+    head = ("".join('<th>%s</th>' % term(lab) for _, lab in keys)
+            + "<th>%s</th><th>%s</th><th>ran</th>" % (term("repeats"), term("kept")))
     return ('<div class="bar"><h2>Provenance</h2></div>'
             '<div class="card scroll"><table><thead><tr><th class="l">Task</th>%s</tr>'
             '</thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
 
 
-def build(entries, roster=None):
-    effects, n_sep, n_cmp = build_effects(entries)
+def build(entries, roster=None, skills=None):
+    reg = arm_registry(entries, skills)
+    effects, n_sep, n_cmp = build_effects(entries, reg)
 
     models, runs, reps, n_excluded = set(), 0, set(), 0
     for _, s, _ in entries:
@@ -1176,13 +1472,14 @@ def build(entries, roster=None):
   <h1>Neurodesk agent benchmark</h1>
   <div class="stats">%s</div>
   <p class="key">
-    <span><code>k/n</code> passed / runs</span>
-    <span><span class="swatch"></span>95%% Wilson CI</span>
-    <span><code>&dagger;</code> short cell</span>
-    <span><span class="vd clear"><i></i>clear</span> interval and Fisher agree</span>
-    <span><span class="vd split"><i></i>split</span> they disagree</span>
-    <span><span class="vd unclear"><i></i>unclear</span> neither</span>
+    <span><code>k/n</code> passed out of runs</span>
+    <span><span class="swatch"></span>range the true rate is likely in</span>
+    <span><code>&dagger;</code> fewer runs than planned</span>
+    <span><span class="vd clear"><i></i>clear</span> both checks agree there is an effect</span>
+    <span><span class="vd split"><i></i>split</span> the two checks disagree</span>
+    <span><span class="vd unclear"><i></i>unclear</span> neither check finds one</span>
   </p>
+  %s
   %s
   %s
   %s
@@ -1191,8 +1488,9 @@ def build(entries, roster=None):
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (STYLE, tiles, effects, build_charts(entries),
-                            build_grid(entries, roster),
+</div>%s</body></html>""" % (STYLE, tiles, skills_key(entries, reg), effects,
+                            build_charts(entries, reg, roster),
+                            build_grid(entries, roster, reg),
                             notices(entries), provenance_table(entries), SCRIPT)
 
 
@@ -1225,6 +1523,11 @@ def main():
                     help="models the gateway currently serves: one per line, or its "
                          "/v1/models JSON. Models on the board but absent from it are "
                          "marked retired. Omit it and nothing is marked.")
+    ap.add_argument("--skill", nargs=3, action="append",
+                    metavar=("ARM", "LABEL", "HREF"),
+                    help="repeatable: name a skill arm and link to the file it came "
+                         "from, e.g. --skill env+skill 'brain-extraction' "
+                         "https://... (use '' for no link)")
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
     if not a.entry and not a.report_dir:
@@ -1241,7 +1544,8 @@ def main():
 
     if a.out.parent:
         a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(build(entries, load_roster(a.roster)), encoding="utf-8")
+    skills = {arm: {"label": lab, "href": href} for arm, lab, href in (a.skill or [])}
+    a.out.write_text(build(entries, load_roster(a.roster), skills), encoding="utf-8")
     print("wrote %s (%d KB, %d task(s))"
           % (a.out, a.out.stat().st_size // 1024, len(entries)))
     for name, s, _ in entries:
