@@ -634,6 +634,20 @@ DEFINITIONS = {
               "cannot separate the arms.",
     "Verdict": "clear: interval and Fisher agree. split: they disagree, so the result is "
                "on the boundary of what this many runs resolve. unclear: neither.",
+    "Excluded and not pooled": "What the harness set aside, and where it refused to "
+                               "combine results. The tables above show only runs that "
+                               "survived, so a sweep can look complete while a fifth of "
+                               "it was discarded.",
+    "runs excluded": "Runs dropped because WE broke them, not the model: our timeout "
+                     "killed the agent mid-run, the wrong skill was in place, or the "
+                     "gateway died. Scoring them zero would blame the model for our "
+                     "infrastructure, so they are set aside and re-run instead.",
+    "not poolable": "Results for this task cannot be summed across models. Something "
+                    "that should have been held constant varied inside a single arm: "
+                    "the environment version, or the skill's own content. Per-model "
+                    "comparisons are still sound; only a pooled total is not.",
+    "reason not recorded": "This summary predates the field naming which value caused "
+                           "the flag. Re-run summarize.py and it will say which.",
     "Fisher p": "Fisher exact test on the 2x2 table. Probability of a difference this "
                 "large if the skill did nothing.",
 }
@@ -1062,21 +1076,24 @@ def notices(entries):
             top = sorted(why.items(), key=lambda kv: (-kv[1], kv[0]))
             detail = "; ".join("%s &times;%d" % (html.escape(k.split(":")[0]), v)
                                for k, v in top[:3])
-            bits.append('<b>%d</b> of %d runs excluded%s'
-                        % (n_ex, s.get("n_runs") or n_ex,
-                           " &mdash; " + detail if detail else ""))
+            # No mixing of % with +: the % binds tighter, so its arguments would be
+            # applied to the trailing literal alone rather than the whole string.
+            bits.append("<b>%d</b> of %d " % (n_ex, s.get("n_runs") or n_ex)
+                        + term("runs excluded")
+                        + (" &mdash; " + detail if detail else ""))
         # poolable is absent in older summaries; absent is not the same as false.
         if s.get("poolable") is False:
             because = s.get("not_poolable_because") or s.get("provenance_varies") or []
-            bits.append("not poolable%s"
-                        % (" &mdash; " + ", ".join(html.escape(b) for b in because)
-                           if because else ""))
+            bits.append(term("not poolable")
+                        + (" &mdash; " + ", ".join(html.escape(b) for b in because)
+                           if because
+                           else " &mdash; " + term("reason not recorded")))
         if bits:
             rows.append('<tr><td class="l name">%s</td><td class="l note">%s</td></tr>'
                         % (html.escape(name), " &middot; ".join(bits)))
     if not rows:
         return ""
-    return ('<div class="bar"><h2>Excluded and not pooled</h2>'
+    return ('<div class="bar"><h2>' + term("Excluded and not pooled") + '</h2>'
             '<span class="count">%d tasks</span></div>'
             '<div class="card scroll"><table><thead><tr>'
             '<th class="l">Task</th><th class="l">What summarize flagged</th>'
