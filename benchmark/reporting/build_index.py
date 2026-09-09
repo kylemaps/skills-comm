@@ -409,6 +409,28 @@ tr.unclear .delta{color:var(--ink2);font-weight:560}
 tr.unclear .dbar .fill{opacity:.42}
 tr.split .dbar .fill{opacity:.72}
 
+.charts{padding:20px 22px 16px}
+.chart figcaption{font-size:.7rem;font-weight:700;text-transform:uppercase;
+letter-spacing:.09em;color:var(--ink2);margin:0 0 18px}
+.chart figcaption .unit{font-weight:500;text-transform:none;letter-spacing:0;
+color:var(--ink3);margin-left:6px}
+.plot{display:flex;align-items:flex-end;gap:22px;min-height:210px;overflow-x:auto;
+padding-bottom:4px;border-bottom:1px solid var(--rule2)}
+.col{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:96px;flex:1}
+.bars{display:flex;align-items:flex-end;gap:5px;height:186px;width:100%;justify-content:center}
+.bar{position:relative;width:26px;border-radius:3px 3px 0 0;min-height:2px;
+display:flex;justify-content:center}
+.bar b{position:absolute;top:-16px;font:10px/1 var(--mono);font-weight:600;
+color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bar.none{height:2px;background:var(--track)}
+.bar.a0{background:var(--nil)}.bar.a1{background:var(--pos)}
+.bar.a2{background:var(--warn)}.bar.a3{background:var(--neg)}
+.xl{font:10.5px/1.3 var(--mono);color:var(--ink2);text-align:center;word-break:break-all}
+.lgs{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:.72rem;color:var(--ink2)}
+.lg{display:inline-flex;align-items:center;gap:7px}
+.sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+.sw.a0{background:var(--nil)}.sw.a1{background:var(--pos)}
+.sw.a2{background:var(--warn)}.sw.a3{background:var(--neg)}
 .empty{padding:34px 16px;color:var(--ink2);font-size:.82rem;text-align:center}
 .note{color:var(--ink2)}
 .note b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
@@ -486,6 +508,24 @@ SCRIPT = """<script>
 
   // Text box, two dropdowns and the verdict facets share one pass. The count is
   // always rendered, so a filtered table can never be mistaken for the whole sweep.
+  // Exactly one chart visible. Every combination is already in the DOM, rendered
+  // server-side, so switching never recomputes a number in the browser.
+  (function () {
+    var ct = document.getElementById('ct'), cm = document.getElementById('cm');
+    if (!ct || !cm) return;
+    var figs = document.querySelectorAll('figure.chart');
+    function show() {
+      Array.prototype.forEach.call(figs, function (f) {
+        var hit = f.getAttribute('data-task') === ct.value &&
+                  f.getAttribute('data-metric') === cm.value;
+        if (hit) { f.removeAttribute('hidden'); } else { f.setAttribute('hidden', ''); }
+      });
+    }
+    ct.addEventListener('change', show);
+    cm.addEventListener('change', show);
+    show();
+  })();
+
   document.querySelectorAll('input[data-filter]').forEach(function (box) {
     var id = box.getAttribute('data-filter');
     var tbl = document.getElementById(id);
@@ -649,6 +689,116 @@ def detail_panel(summary, model, skill_arm):
     ]
     return ('<table class="detail"><thead><tr><th scope="col"></th>%s</tr></thead>'
             '<tbody>%s</tbody></table>' % (head, "".join(body)))
+
+
+# What can be plotted per cell, straight from summary.json. Nothing is derived: a
+# figure computed here and also computed by summarize is a figure that eventually
+# disagrees with itself.
+# The last field is `within_model`: scale each model's bars against that model's own
+# maximum rather than a shared axis.
+#
+# Token counts need it. Every report this project produces says absolute counts are
+# NOT comparable across models, because some providers report reasoning and cache
+# tokens and others report zero. qwen3's median is 150x glm's, so a shared axis both
+# flattens glm to nothing AND asserts the cross-model comparison we tell people not to
+# make. Scaled within a model, the bar shows what the skill did to that model's bill,
+# which is the comparison that holds. The absolute figure is printed on every bar either
+# way, so nothing is hidden.
+METRICS = [
+    ("pass",   "Pass rate",        lambda c: 100.0 * c.get("passes", 0) / c["n"]
+                                   if c.get("n") else None, "%",     0, False),
+    ("mins",   "Median runtime",   lambda c: c.get("median_minutes"),  " min",  1, False),
+    ("tokens", "Median tokens",    lambda c: c.get("median_tokens_total"), "",  0, True),
+    ("uptake", "Opened the skill", lambda c: 100.0 * c.get("uptake", 0) / c["n"]
+                                   if c.get("n") else None, "%",     0, False),
+    ("nf",     "Not-found claims", lambda c: c.get("not_found_claims"), "",     0, False),
+]
+
+
+def build_charts(entries):
+    """Models across the bottom, a selectable measure up the side, one bar per arm.
+
+    Every combination is rendered server-side and all but one hidden, rather than
+    computing bar heights in the browser. The numbers on this chart then come from the
+    same place as the numbers in the tables, and a chart cannot quietly disagree with
+    the row above it.
+
+    Bars are CSS boxes, not SVG: an <svg> carries an xmlns URL, and this page is
+    required to reach no external host at all.
+    """
+    charts = []
+    for name, s, _ in entries:
+        mat = cell_matrix(s)
+        cells = s.get("cells", {})
+        models = list(mat)
+        arms = []
+        for m in models:
+            for a in sorted(mat[m], key=lambda x: (is_skill_arm(x), x)):
+                if a not in arms:
+                    arms.append(a)
+        if not models:
+            continue
+        for key, label, fn, unit, dp, within in METRICS:
+            vals = {}
+            for m in models:
+                for a in arms:
+                    c = cells.get("%s|%s" % (m, a))
+                    if c:
+                        try:
+                            v = fn(c)
+                        except (TypeError, ZeroDivisionError, KeyError):
+                            v = None
+                        if v is not None:
+                            vals[(m, a)] = float(v)
+            if not vals:
+                continue
+            shared = max(vals.values()) or 1.0
+            cols = []
+            for m in models:
+                top = shared
+                if within:
+                    mine = [vals[(m, a)] for a in arms if (m, a) in vals]
+                    top = (max(mine) if mine else 0) or 1.0
+                bars = []
+                for i, a in enumerate(arms):
+                    v = vals.get((m, a))
+                    if v is None:
+                        bars.append('<i class="bar none" title="%s: not run"></i>'
+                                    % html.escape(ARM_LABEL.get(a, a)))
+                        continue
+                    tip = "%s, %s: %s%s" % (html.escape(m),
+                                            html.escape(ARM_LABEL.get(a, a)),
+                                            ("%.*f" % (dp, v)), unit)
+                    bars.append('<i class="bar a%d" style="height:%.2f%%" title="%s">'
+                                '<b>%s</b></i>'
+                                % (min(i, 3), 100.0 * v / top, tip, "%.*f" % (dp, v)))
+                cols.append('<span class="col"><span class="bars">%s</span>'
+                            '<span class="xl">%s</span></span>'
+                            % ("".join(bars), html.escape(m)))
+            legend = "".join('<span class="lg"><i class="sw a%d"></i>%s</span>'
+                             % (min(i, 3), html.escape(ARM_LABEL.get(a, a)))
+                             for i, a in enumerate(arms))
+            charts.append(
+                '<figure class="chart" data-task="%s" data-metric="%s" hidden>'
+                '<figcaption>%s<span class="unit">%s</span>%s</figcaption>'
+                '<div class="plot">%s</div><div class="lgs">%s</div></figure>'
+                % (html.escape(name), key, html.escape(label),
+                   html.escape(unit.strip() or ""),
+                   '<span class="unit">scaled within each model, not across them</span>'
+                   if within else "",
+                   "".join(cols), legend))
+    if not charts:
+        return ""
+
+    tasks = [name for name, _, _ in entries]
+    tsel = "".join('<option value="%s">%s</option>' % (html.escape(t), html.escape(t))
+                   for t in tasks)
+    msel = "".join('<option value="%s">%s</option>' % (k, html.escape(l))
+                   for k, l, _, _, _, _ in METRICS)
+    return ('<div class="bar"><h2>Compare</h2><span class="tools">'
+            '<select id="ct" aria-label="Task">%s</select>'
+            '<select id="cm" aria-label="Measure">%s</select></span></div>'
+            '<div class="card charts">%s</div>' % (tsel, msel, "".join(charts)))
 
 
 def build_effects(entries):
@@ -901,10 +1051,12 @@ def build(entries):
   %s
   %s
   %s
+  %s
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (STYLE, tiles, effects, build_grid(entries),
+</div>%s</body></html>""" % (STYLE, tiles, effects, build_charts(entries),
+                            build_grid(entries),
                             notices(entries), SCRIPT)
 
 
