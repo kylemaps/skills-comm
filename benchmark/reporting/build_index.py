@@ -409,28 +409,37 @@ tr.unclear .delta{color:var(--ink2);font-weight:560}
 tr.unclear .dbar .fill{opacity:.42}
 tr.split .dbar .fill{opacity:.72}
 
-.charts{padding:20px 22px 16px}
+figure{margin:0}
+.charts{padding:22px 26px 18px}
+.chart+.chart{margin-top:0}
 .chart figcaption{font-size:.7rem;font-weight:700;text-transform:uppercase;
-letter-spacing:.09em;color:var(--ink2);margin:0 0 18px}
+letter-spacing:.09em;color:var(--ink2);margin:0 0 20px}
 .chart figcaption .unit{font-weight:500;text-transform:none;letter-spacing:0;
-color:var(--ink3);margin-left:6px}
-.plot{display:flex;align-items:flex-end;gap:22px;min-height:210px;overflow-x:auto;
-padding-bottom:4px;border-bottom:1px solid var(--rule2)}
-.col{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:96px;flex:1}
-.bars{display:flex;align-items:flex-end;gap:5px;height:186px;width:100%;justify-content:center}
-.bar{position:relative;width:26px;border-radius:3px 3px 0 0;min-height:2px;
-display:flex;justify-content:center}
-.bar b{position:absolute;top:-16px;font:10px/1 var(--mono);font-weight:600;
-color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
-.bar.none{height:2px;background:var(--track)}
-.bar.a0{background:var(--nil)}.bar.a1{background:var(--pos)}
-.bar.a2{background:var(--warn)}.bar.a3{background:var(--neg)}
-.xl{font:10.5px/1.3 var(--mono);color:var(--ink2);text-align:center;word-break:break-all}
-.lgs{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:.72rem;color:var(--ink2)}
+color:var(--ink3);margin-left:8px}
+.plot{display:flex;flex-direction:column;gap:2px}
+.drow{display:grid;grid-template-columns:132px 1fr 128px;align-items:center;gap:16px;
+padding:9px 0;border-bottom:1px solid var(--rule)}
+.drow:last-child{border-bottom:0}
+.dm{font-family:var(--mono);font-size:.775rem;color:var(--ink);white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+.dtrack{position:relative;height:14px;background:linear-gradient(var(--track),var(--track))
+center/100% 1px no-repeat;border-radius:2px}
+.dtrack i{position:absolute}
+.dtrack .link{top:6px;height:2px;background:var(--ink3);opacity:.5;border-radius:1px}
+.dtrack .dot{top:3px;width:9px;height:9px;margin-left:-4.5px;border-radius:50%;
+box-shadow:0 0 0 2px var(--surface)}
+.dot.a0{background:transparent;box-shadow:0 0 0 2px var(--surface),inset 0 0 0 2px var(--nil)}
+.dot.a1{background:var(--pos)}.dot.a2{background:var(--warn)}.dot.a3{background:var(--neg)}
+.dvs{display:flex;gap:10px;justify-content:flex-end;font-variant-numeric:tabular-nums}
+.dv{font:11px/1.3 var(--mono);color:var(--ink2)}
+.dv.a1{color:var(--pos);font-weight:600}.dv.a2{color:var(--warn);font-weight:600}
+.dv.a3{color:var(--neg);font-weight:600}
+.lgs{display:flex;gap:20px;flex-wrap:wrap;margin-top:16px;font-size:.72rem;color:var(--ink2)}
 .lg{display:inline-flex;align-items:center;gap:7px}
-.sw{width:11px;height:11px;border-radius:3px;display:inline-block}
-.sw.a0{background:var(--nil)}.sw.a1{background:var(--pos)}
-.sw.a2{background:var(--warn)}.sw.a3{background:var(--neg)}
+.sw{width:10px;height:10px;border-radius:50%;display:inline-block}
+.sw.a0{background:transparent;box-shadow:inset 0 0 0 2px var(--nil)}
+.sw.a1{background:var(--pos)}.sw.a2{background:var(--warn)}.sw.a3{background:var(--neg)}
+@media(max-width:720px){.drow{grid-template-columns:96px 1fr 104px;gap:10px}}
 .empty{padding:34px 16px;color:var(--ink2);font-size:.82rem;text-align:center}
 .note{color:var(--ink2)}
 .note b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
@@ -715,6 +724,17 @@ METRICS = [
 ]
 
 
+def _compact(v, dp, unit):
+    """42118 -> 42.1k, 6306539 -> 6.31M. A seven-digit label does not fit a bar."""
+    a = abs(v)
+    if not unit and a >= 1000:
+        for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+            if a >= div:
+                q = v / div
+                return ("%.2f%s" if q < 10 else "%.1f%s") % (q, suf)
+    return ("%.*f%s" % (dp, v, unit))
+
+
 def build_charts(entries):
     """Models across the bottom, a selectable measure up the side, one bar per arm.
 
@@ -753,28 +773,41 @@ def build_charts(entries):
             if not vals:
                 continue
             shared = max(vals.values()) or 1.0
-            cols = []
+            rows_html = []
             for m in models:
                 top = shared
                 if within:
                     mine = [vals[(m, a)] for a in arms if (m, a) in vals]
                     top = (max(mine) if mine else 0) or 1.0
-                bars = []
+                pts, txt = [], []
                 for i, a in enumerate(arms):
                     v = vals.get((m, a))
+                    lab = ARM_LABEL.get(a, a)
                     if v is None:
-                        bars.append('<i class="bar none" title="%s: not run"></i>'
-                                    % html.escape(ARM_LABEL.get(a, a)))
+                        txt.append('<span class="dv dim">&mdash;</span>')
                         continue
-                    tip = "%s, %s: %s%s" % (html.escape(m),
-                                            html.escape(ARM_LABEL.get(a, a)),
-                                            ("%.*f" % (dp, v)), unit)
-                    bars.append('<i class="bar a%d" style="height:%.2f%%" title="%s">'
-                                '<b>%s</b></i>'
-                                % (min(i, 3), 100.0 * v / top, tip, "%.*f" % (dp, v)))
-                cols.append('<span class="col"><span class="bars">%s</span>'
-                            '<span class="xl">%s</span></span>'
-                            % ("".join(bars), html.escape(m)))
+                    x = 100.0 * v / top
+                    pts.append((x, i, lab, v))
+                    txt.append('<span class="dv a%d">%s</span>'
+                               % (min(i, 3), html.escape(_compact(v, dp, unit))))
+                bar = ""
+                if len(pts) > 1:
+                    lo = min(p[0] for p in pts)
+                    hi = max(p[0] for p in pts)
+                    # The connector IS the effect: its length is the change and its
+                    # direction is the sign. That is the thing grouped bars make you
+                    # work out by eye.
+                    bar += ('<i class="link" style="left:%.2f%%;width:%.2f%%"></i>'
+                            % (lo, max(hi - lo, 0.4)))
+                for x, i, lab, v in pts:
+                    bar += ('<i class="dot a%d" style="left:%.2f%%" title="%s: %s"></i>'
+                            % (min(i, 3), x,
+                               html.escape("%s, %s" % (m, lab)),
+                               html.escape(_compact(v, dp, unit))))
+                rows_html.append(
+                    '<div class="drow"><span class="dm">%s</span>'
+                    '<span class="dtrack">%s</span><span class="dvs">%s</span></div>'
+                    % (html.escape(m), bar, "".join(txt)))
             legend = "".join('<span class="lg"><i class="sw a%d"></i>%s</span>'
                              % (min(i, 3), html.escape(ARM_LABEL.get(a, a)))
                              for i, a in enumerate(arms))
@@ -786,7 +819,8 @@ def build_charts(entries):
                    html.escape(unit.strip() or ""),
                    '<span class="unit">scaled within each model, not across them</span>'
                    if within else "",
-                   "".join(cols), legend))
+                   "".join(rows_html), legend))
+
     if not charts:
         return ""
 
