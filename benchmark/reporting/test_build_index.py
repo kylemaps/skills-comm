@@ -507,6 +507,45 @@ class Attribution(unittest.TestCase):
         self.assertIn('href="http://x/"', h)
 
 
+class SuppliedHash(unittest.TestCase):
+    """A hash the summaries cannot attribute, supplied after checking it elsewhere."""
+
+    def _entries(self, hashes):
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9},
+                     "m|env+skill-b": {"n": 10, "passes": 7}})
+        d["provenance"] = {"skills_hash": hashes}
+        return [("t", d, "")]
+
+    def test_supplied_hash_shows_and_is_marked_verified(self):
+        e = self._entries({"aaa": 10, "bbb": 10})
+        reg = bi.arm_registry(e, {"env+skill-b": {"hash": "5ba66f0c7ddf"}})
+        h = bi.skills_key(e, reg)
+        self.assertIn("5ba66f0c7ddf", h)
+        self.assertIn("verified", h)
+        self.assertNotIn("not attributable per arm</span></td><td class=\"l\">"
+                         "<code>5ba66f0c7ddf", h)
+
+    def test_a_supplied_hash_that_contradicts_the_summary_is_flagged(self):
+        """One of the two describes runs that are not the runs on this page."""
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}})
+        d["provenance"] = {"skills_hash": {"291f844a43ec": 20}}
+        e = [("t", d, "")]
+        reg = bi.arm_registry(e, {"env+skill": {"hash": "deadbeef0000"}})
+        h = bi.skills_key(e, reg)
+        self.assertIn("conflicts with", h)
+        self.assertIn("291f844a43ec", h)
+
+    def test_agreement_does_not_flag(self):
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}})
+        d["provenance"] = {"skills_hash": {"291f844a43ec": 20}}
+        e = [("t", d, "")]
+        reg = bi.arm_registry(e, {"env+skill": {"hash": "291f844a43ec"}})
+        self.assertNotIn("conflicts with", bi.skills_key(e, reg))
+
+
 class Registry(unittest.TestCase):
     """The arm registry is what stops two charts disagreeing about a colour."""
 

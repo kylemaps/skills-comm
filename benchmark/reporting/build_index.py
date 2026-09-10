@@ -399,6 +399,7 @@ text-align:center;opacity:.5;vertical-align:1px;cursor:help}
 .dim{color:var(--ink3)}
 .lede{margin:0 0 12px;max-width:74ch;font-size:.775rem;line-height:1.55;color:var(--ink2)}
 .lede b{color:var(--ink);font-weight:600}
+.bad{color:var(--danger);font-weight:600}
 .arm.a0{color:var(--nil)}.arm.a1{color:var(--pos)}
 .arm.a2{color:var(--warn)}.arm.a3{color:var(--neg)}
 .clab i.skill.a2{background:var(--warn)}.clab i.skill.a3{background:var(--neg)}
@@ -1357,8 +1358,23 @@ def skills_key(entries, reg):
         if not meta.get("skill"):
             continue
         got = hashes.get(arm) or []
-        h = (", ".join('<code>%s</code>' % html.escape(x[:12]) for x in got) if got
-             else '<span class="dim">not attributable per arm</span>')
+        told = meta.get("hash")
+        if told and got and told not in got:
+            # A supplied hash that contradicts what the summaries attribute is not a
+            # cosmetic disagreement: one of them describes runs that are not the runs
+            # on this page. Show both rather than picking a winner.
+            h = ('<code>%s</code> <span class="bad">conflicts with %s in summary.json'
+                 '</span>' % (html.escape(told[:12]),
+                              ", ".join(html.escape(x[:12]) for x in got)))
+        elif told:
+            h = ('<code>%s</code> <span class="dim" title="Not read from summary.json, '
+                 'which aggregates provenance per task. Supplied on the command line '
+                 'after checking it against the hash recorded inside the runs.">'
+                 'verified</span>' % html.escape(told[:12]))
+        elif got:
+            h = ", ".join('<code>%s</code>' % html.escape(x[:12]) for x in got)
+        else:
+            h = '<span class="dim">not attributable per arm</span>' 
         label = meta.get("label") or arm
         label = (('<a href="%s">%s</a>' % (html.escape(meta["href"]), html.escape(label)))
                  if meta.get("href") else html.escape(label))
@@ -1530,6 +1546,11 @@ def main():
                     help="repeatable: name a skill arm and link to the file it came "
                          "from, e.g. --skill env+skill 'brain-extraction' "
                          "https://... (use '' for no link)")
+    ap.add_argument("--skill-hash", nargs=2, action="append", metavar=("ARM", "HASH"),
+                    help="repeatable: the skill content hash for an arm, where you have "
+                         "checked it against the runs. summary.json aggregates "
+                         "provenance per task, so a task with two skill arms cannot "
+                         "say which hash is whose; this supplies what it cannot.")
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
     if not a.entry and not a.report_dir:
@@ -1547,6 +1568,8 @@ def main():
     if a.out.parent:
         a.out.parent.mkdir(parents=True, exist_ok=True)
     skills = {arm: {"label": lab, "href": href} for arm, lab, href in (a.skill or [])}
+    for arm, h in (getattr(a, "skill_hash", None) or []):
+        skills.setdefault(arm, {})["hash"] = h
     a.out.write_text(build(entries, load_roster(a.roster), skills), encoding="utf-8")
     print("wrote %s (%d KB, %d task(s))"
           % (a.out, a.out.stat().st_size // 1024, len(entries)))
