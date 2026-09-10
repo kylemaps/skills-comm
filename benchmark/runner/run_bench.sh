@@ -26,6 +26,19 @@ SKILLSRC="${SKILLS_SRC:-$HOME/skills-comm/plugins/brain-extraction}"
 SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
 TIMEOUT="${RUN_TIMEOUT:-2700}"
 
+# A truncated task id (`structural-br-extraction-stroke`) once produced a run
+# directory and fourteen graded outputs under a name no grader pack contains. The
+# runs looked fine and belonged to nothing. The id is the join key between the
+# prompt, the grader and the results, so it is checked before a single token is
+# spent rather than discovered when the results will not line up. Checked only when
+# the pack is readable: an unreadable pack is a different failure, reported later
+# by the code that needs it.
+if [ -f "$TASKS" ] && ! grep -q "\"$TASK\"" "$TASKS"; then
+  echo "ABORT: task id '$TASK' is not in $TASKS." >&2
+  echo "       A near-miss id yields runs that no grader can score." >&2
+  exit 2
+fi
+
 RUN="$BENCH_HOME/runs/${TASK}__${MODEL//\//-}__${COND}__r${REP}"
 
 # --- condition: skills are a GLOBAL path, so set them explicitly every run ---

@@ -1336,7 +1336,22 @@ def attributed_hashes(entries, reg):
     """
     out = {}
     for _, s, _ in entries:
-        arms = {k.partition("|")[2] for k in (s.get("cells") or {})}
+        cells = s.get("cells") or {}
+        # Preferred: the cell says it itself. summarize.py emits per-arm provenance,
+        # so newer summaries settle this with no inference at all.
+        per_arm = False
+        for key, c in cells.items():
+            arm = key.partition("|")[2]
+            counts = ((c.get("provenance") or {}).get("skills_hash") or {})
+            real = [v for v in counts if v not in ("", "unknown", "none", None)]
+            if real and is_skill_arm(arm):
+                per_arm = True
+                out.setdefault(arm, set()).update(real)
+        if per_arm:
+            continue
+        # Older summaries aggregate over the task. Then a single skill arm with a
+        # single real hash is unambiguous and nothing else is.
+        arms = {k.partition("|")[2] for k in cells}
         skill_arms = [a for a in arms if is_skill_arm(a)]
         counts = ((s.get("provenance") or {}).get("skills_hash") or {})
         real = [v for v in counts if v not in ("", "unknown", "none", None)]

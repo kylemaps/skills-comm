@@ -105,11 +105,28 @@ N="$1"; shift
 REQUESTED=("$@")
 
 mkdir -p "$BENCH_HOME"
+# A lock left behind by a killed sweep blocked every later one until someone read
+# the message and removed it by hand -- and the message is only reached by someone
+# already trying to start a sweep, so the cost lands at the worst moment. A lock
+# whose process is gone is not a lock; it is litter. Verified with kill -0 rather
+# than by pid file age, since a long sweep is normal and says nothing.
 if [ -e "$LOCK" ]; then
-  echo "ABORT: a sweep is already running (pid $(cat "$LOCK" 2>/dev/null))."
-  echo "       Two sweeps would contaminate each other's arms."
-  echo "       If that pid is dead: rm $LOCK"
-  exit 1
+  LPID=$(cat "$LOCK" 2>/dev/null | tr -dc '0-9')
+  if [ -n "$LPID" ] && kill -0 "$LPID" 2>/dev/null; then
+    echo "ABORT: a sweep is already running (pid $LPID)."
+    echo "       Two sweeps would contaminate each other's arms."
+    echo "       If you are sure it is finished: rm $LOCK"
+    exit 1
+  fi
+  # Unreadable pid is treated as live, not as stale. An unparseable lock is a state
+  # we do not understand, and guessing "probably dead" is how two sweeps overlap.
+  if [ -z "$LPID" ]; then
+    echo "ABORT: $LOCK exists but holds no readable pid."
+    echo "       Refusing to guess. Check for a live sweep, then: rm $LOCK"
+    exit 1
+  fi
+  echo "note: clearing a stale lock from pid $LPID (no such process)."
+  rm -f "$LOCK"
 fi
 
 # A run_bench.sh that outlived a previous pkill will keep writing into the runs

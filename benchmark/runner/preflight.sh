@@ -35,6 +35,43 @@ else
   echo "ok   gateway 200"
 fi
 
+# Called with no models, this used to run every gateway check, resolve nothing, and
+# print PREFLIGHT FAILED -- which reads as "the gateway is down" when the truth is
+# "you gave me nothing to check". Usage, and exit 2 for a usage error rather than 1,
+# so a caller can tell a mistake from a real failure.
+if [ "$#" -eq 0 ]; then
+  echo "usage: preflight.sh MODEL [MODEL ...]"
+  echo
+  echo "Checks the gateway is reachable and that each model is served, before a"
+  echo "sweep spends tokens discovering otherwise."
+  echo
+  echo "  RESOLVED_OUT=FILE   write the models that resolved, one per line"
+  echo
+  echo "exit 0 all resolved | 1 gateway or key failure | 2 usage, or partial"
+  exit 2
+fi
+
+# opencode.json has been silently reset by a neurodesktop image upgrade once, and
+# nothing held a copy: the config was rebuilt from memory while a sweep waited. It
+# is small, it changes rarely, and preflight is the one place that already knows
+# whether the gateway works -- so a config that has just been proven good is worth
+# keeping. Only written when the gateway answered, so a broken config never
+# overwrites a working snapshot.
+OC="$HOME/.config/opencode/opencode.json"
+KG="${BENCH_HOME:-$HOME/bench}/opencode.json.known-good"
+if [ -f "$OC" ]; then
+  if [ "$code" = "200" ] && ! cmp -s "$OC" "$KG" 2>/dev/null; then
+    mkdir -p "$(dirname "$KG")" && cp "$OC" "$KG" && echo "ok   config snapshotted"
+  fi
+elif [ -f "$KG" ]; then
+  echo "FAIL: $OC is missing. A known-good copy is at $KG"
+  echo "      restore with: cp $KG $OC"
+  ENVFAIL=1
+else
+  echo "FAIL: $OC is missing and no known-good copy exists"
+  ENVFAIL=1
+fi
+
 AVAIL=$(timeout 60 /usr/bin/opencode models 2>/dev/null)
 OK_MODELS=()
 MISSING=()

@@ -546,6 +546,38 @@ class SuppliedHash(unittest.TestCase):
         self.assertNotIn("conflicts with", bi.skills_key(e, reg))
 
 
+class PerArmProvenance(unittest.TestCase):
+    """Newer summaries carry provenance inside each cell, so nothing is inferred."""
+
+    def test_two_skill_arms_are_both_attributed_from_cells(self):
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9},
+                     "m|env+skill-b": {"n": 10, "passes": 7}})
+        d["cells"]["m|env+skill"]["provenance"] = {"skills_hash": {"291f844a43ec": 10}}
+        d["cells"]["m|env+skill-b"]["provenance"] = {"skills_hash": {"5ba66f0c7ddf": 10}}
+        d["provenance"] = {"skills_hash": {"291f844a43ec": 10, "5ba66f0c7ddf": 10}}
+        e = [("t", d, "")]
+        self.assertEqual(bi.attributed_hashes(e, bi.arm_registry(e)),
+                         {"env+skill": ["291f844a43ec"], "env+skill-b": ["5ba66f0c7ddf"]})
+
+    def test_baseline_arm_is_not_given_a_skill_hash(self):
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}})
+        d["cells"]["m|env-only"]["provenance"] = {"skills_hash": {"unknown": 10}}
+        d["cells"]["m|env+skill"]["provenance"] = {"skills_hash": {"291f844a43ec": 10}}
+        e = [("t", d, "")]
+        self.assertNotIn("env-only", bi.attributed_hashes(e, bi.arm_registry(e)))
+
+    def test_old_summaries_still_fall_back(self):
+        """The task-level path must keep working; four published packs use it."""
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill": {"n": 10, "passes": 9}})
+        d["provenance"] = {"skills_hash": {"291f844a43ec": 20, "unknown": 4}}
+        e = [("t", d, "")]
+        self.assertEqual(bi.attributed_hashes(e, bi.arm_registry(e)),
+                         {"env+skill": ["291f844a43ec"]})
+
+
 class Registry(unittest.TestCase):
     """The arm registry is what stops two charts disagreeing about a colour."""
 

@@ -1008,6 +1008,14 @@ def report(runs, task):
                 "decided_not_run": sum(
                     1 for r in rs if r["decided_tools"] and r["methods"]
                     and not set(r["decided_tools"]) & set(r["methods"])),
+                # Provenance was only ever aggregated over the whole task. A task
+                # running two skill arms therefore reported two skill hashes with no
+                # record of which arm owned which -- and the arm IS the treatment, so
+                # that is the one attribution a reader most needs. Anything consuming
+                # it can now say "this arm ran this skill" as a measurement instead of
+                # inferring it from the arm's name.
+                "provenance": {k: dict(Counter(r[k] for r in rs))
+                               for k in PROVENANCE_KEYS},
             } for (model, arm), rs in sorted(cells.items())
         },
         "skill_effect": effects,
