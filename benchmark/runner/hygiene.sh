@@ -26,7 +26,8 @@ echo "=== HYGIENE $(date -u '+%Y-%m-%d %H:%M UTC') on $(hostname)"
 echo
 echo "--- is anything running"
 BUSY=0
-PROCS=$(pgrep -c -f 'opencode|run_bench|run_sweep' 2>/dev/null || echo 0)
+PROCS=$(pgrep -f 'opencode|run_bench|run_sweep' 2>/dev/null | wc -l | tr -dc '0-9')
+PROCS=${PROCS:-0}
 [ "$PROCS" -gt 0 ] && BUSY=1
 echo "  agent/sweep processes : $PROCS"
 for L in "$HOME/bench/.sweep.lock" "$HOME/bench/sweep.lock"; do
@@ -54,8 +55,8 @@ for D in "$SC" "$GR"; do
   [ -d "$D/.git" ] || { echo "  $D: not a git checkout"; continue; }
   B=$(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null)
   H=$(git -C "$D" rev-parse --short HEAD 2>/dev/null)
-  DIRTY=$(git -C "$D" status --porcelain 2>/dev/null | grep -vc '^??' || echo 0)
-  UNTR=$(git -C "$D" status --porcelain 2>/dev/null | grep -c '^??' || echo 0)
+  DIRTY=$(git -C "$D" status --porcelain 2>/dev/null | grep -v '^??' | wc -l | tr -dc '0-9')
+  UNTR=$(git -C "$D" status --porcelain 2>/dev/null | grep '^??' | wc -l | tr -dc '0-9')
   BEHIND=$(git -C "$D" rev-list --count "HEAD..origin/$B" 2>/dev/null || echo "?")
   AHEAD=$(git -C "$D" rev-list --count "origin/$B..HEAD" 2>/dev/null || echo "?")
   echo "  $(basename "$D"): $B @ $H  behind=$BEHIND ahead=$AHEAD  modified=$DIRTY untracked=$UNTR"
@@ -75,9 +76,18 @@ if [ "$BUSY" -eq 1 ]; then
 else
   for P in tmp data; do
     N=$(find "$RUNS" -maxdepth 2 -type d -name "$P" 2>/dev/null | wc -l)
-    [ "$N" -gt 0 ] && echo "  $N x runs/*/$P  $(du -shc $(find "$RUNS" -maxdepth 2 -type d -name "$P" 2>/dev/null) 2>/dev/null | tail -1 | cut -f1)"
+    [ "$N" -gt 0 ] && echo "  $N x runs/*/$P"
   done
   find "$HOME" -maxdepth 1 -name '*.tar.gz' -printf '  %10s  %p\n' 2>/dev/null | sort -rn | head -5
+  if [ "${SIZES:-0}" = "1" ]; then
+    echo "  measuring (slow: these are datalad trees on network storage)..."
+    for P in tmp data; do
+      D=$(find "$RUNS" -maxdepth 2 -type d -name "$P" 2>/dev/null)
+      [ -n "$D" ] && echo "  runs/*/$P: $(du -shc $D 2>/dev/null | tail -1 | cut -f1)"
+    done
+  else
+    echo "  (sizes not measured. SIZES=1 to walk them, minutes on this volume)"
+  fi
 fi
 
 echo
