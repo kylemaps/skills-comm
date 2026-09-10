@@ -578,6 +578,23 @@ class PerArmProvenance(unittest.TestCase):
                          {"env+skill": ["291f844a43ec"]})
 
 
+class NoIndex(unittest.TestCase):
+    def test_absent_by_default(self):
+        s = summary({"m|env-only": {"n": 1, "passes": 1}})
+        self.assertNotIn("noindex", bi.build([("t", s, "")]))
+
+    def test_present_when_asked(self):
+        s = summary({"m|env-only": {"n": 1, "passes": 1}})
+        h = bi.build([("t", s, "")], noindex=True)
+        self.assertIn('<meta name="robots" content="noindex,nofollow">', h)
+
+    def test_page_still_reaches_no_external_host(self):
+        """The tag is the only addition; it must not introduce a URL."""
+        s = summary({"m|env-only": {"n": 1, "passes": 1}})
+        h = bi.build([("t", s, "")], noindex=True)
+        self.assertNotIn("http://", h)
+
+
 class Registry(unittest.TestCase):
     """The arm registry is what stops two charts disagreeing about a colour."""
 

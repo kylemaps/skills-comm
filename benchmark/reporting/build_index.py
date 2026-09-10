@@ -557,6 +557,11 @@ tr{break-inside:avoid}
 .tools{margin-left:0;width:100%}input[type=search]{flex:1;width:auto}}
 </style>"""
 
+# A Pages site published from a private repo is public and its URL is guessable.
+# This keeps it out of search results. It does not restrict access to anyone who
+# has the URL, and must not be described as if it did.
+NOINDEX = '<meta name="robots" content="noindex,nofollow">'
+
 SCRIPT = """<script>
 (function () {
   function val(td) {
@@ -1468,7 +1473,7 @@ def provenance_table(entries):
             '</thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
 
 
-def build(entries, roster=None, skills=None):
+def build(entries, roster=None, skills=None, noindex=False):
     reg = arm_registry(entries, skills)
     effects, n_sep, n_cmp = build_effects(entries, reg)
 
@@ -1501,7 +1506,7 @@ def build(entries, roster=None, skills=None):
     return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Neurodesk agent benchmark</title>
-%s</head><body><div class="wrap">
+%s%s</head><body><div class="wrap">
   <h1>Neurodesk agent benchmark</h1>
   <div class="stats">%s</div>
   <p class="key">
@@ -1521,7 +1526,7 @@ def build(entries, roster=None, skills=None):
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (STYLE, tiles, skills_key(entries, reg), effects,
+</div>%s</body></html>""" % (NOINDEX if noindex else "", STYLE, tiles, skills_key(entries, reg), effects,
                             build_charts(entries, reg, roster),
                             build_grid(entries, roster, reg),
                             notices(entries), provenance_table(entries), SCRIPT)
@@ -1566,6 +1571,10 @@ def main():
                          "checked it against the runs. summary.json aggregates "
                          "provenance per task, so a task with two skill arms cannot "
                          "say which hash is whose; this supplies what it cannot.")
+    ap.add_argument("--noindex", action="store_true",
+                    help="emit a robots noindex meta tag. For a public Pages site "
+                         "whose contents are not meant to be searchable. Does NOT "
+                         "restrict access.")
     ap.add_argument("--out", required=True, type=Path)
     a = ap.parse_args()
     if not a.entry and not a.report_dir:
@@ -1585,7 +1594,8 @@ def main():
     skills = {arm: {"label": lab, "href": href} for arm, lab, href in (a.skill or [])}
     for arm, h in (getattr(a, "skill_hash", None) or []):
         skills.setdefault(arm, {})["hash"] = h
-    a.out.write_text(build(entries, load_roster(a.roster), skills), encoding="utf-8")
+    a.out.write_text(build(entries, load_roster(a.roster), skills, a.noindex),
+                     encoding="utf-8")
     print("wrote %s (%d KB, %d task(s))"
           % (a.out, a.out.stat().st_size // 1024, len(entries)))
     for name, s, _ in entries:
