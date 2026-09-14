@@ -497,6 +497,20 @@ def load_run(run_dir, task, tokens_available=False):
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
     elif r["arm"].startswith("env+skill") and not has_skill_installed:
         r["exclude_reason"] = "misassigned: skill absent in %s run" % r["arm"]
+    elif r["exit_code"] in (None, ""):
+        # run_bench.sh records an exit code for every run that finishes, whatever
+        # the outcome. A blank one means the process never got to report -- the
+        # server was restarted under it, or something killed the tree. The run
+        # then presents as NO-OUTPUT, which is indistinguishable from a model that
+        # delivered nothing, and gets scored against the model.
+        #
+        # This is the same shape as the timeout bug: infrastructure failure wearing
+        # a model failure's clothes. 7 runs across three tasks were being counted
+        # this way, all of them ours. Excluded even if output exists, for the same
+        # reason a timed-out run is: the agent never said it was finished, so the
+        # output is an unknown intermediate.
+        r["exclude_reason"] = ("harness failure: run recorded no exit code, killed "
+                               "before it could report")
     elif r["exit_code"] == RUN_TIMEOUT_EXIT:
         # A timeout is our failure, not the model's: WE killed the run. It is
         # excluded even when it produced output, which is the part that took a

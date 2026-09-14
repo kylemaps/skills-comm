@@ -475,11 +475,43 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         # Mirror of the decision chain in summarize.load_run, in order.
         if r["arm"] == "env-only" and r["skills_seen"]:
             return "contaminated"
+        if r["exit_code"] in (None, ""):
+            return "killed"
         if r["exit_code"] == self.m.RUN_TIMEOUT_EXIT:
             return "timeout"
         if r["infra_error"] and not r["output_present"]:
             return "infra"
         return ""
+
+    def test_a_run_with_no_exit_code_was_killed_by_us(self):
+        """run_bench.sh records an exit code for every run that finishes. A blank
+        one means the process never got to report -- a server restart, or the tree
+        being killed. It then presents as NO-OUTPUT, indistinguishable from a model
+        that delivered nothing, and gets scored against the model. Seven runs across
+        three tasks were counted that way."""
+        self.assertEqual(self.classify(exit_code=""), "killed")
+        self.assertEqual(self.classify(exit_code=None), "killed")
+
+    def test_a_killed_run_with_output_is_still_excluded(self):
+        """Same reasoning as a timeout: the agent never said it was finished, so
+        whatever it wrote is an unknown intermediate."""
+        self.assertEqual(self.classify(exit_code="", output_present=True), "killed")
+
+    def test_contamination_outranks_a_killed_run(self):
+        self.assertEqual(
+            self.classify(exit_code="", skills_seen=["brain-extraction"]),
+            "contaminated")
+
+    def test_the_blank_exit_branch_exists_in_the_real_chain(self):
+        """The mirror above can drift from summarize.py. Pin the real thing, and
+        pin its ORDER: blank must be tested before the timeout comparison, because
+        '' == 124 is False and the run would fall through to NO-OUTPUT."""
+        with open(os.path.join(HERE, "summarize.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        blank = src.index('r["exit_code"] in (None, "")')
+        timeout = src.index('r["exit_code"] == RUN_TIMEOUT_EXIT')
+        self.assertLess(blank, timeout)
+        self.assertIn("harness failure: run recorded no exit code", src)
 
     def test_a_timeout_with_output_is_still_excluded(self):
         """The part that is easy to get wrong. A killed run's mask is an unknown
