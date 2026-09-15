@@ -595,6 +595,38 @@ class NoIndex(unittest.TestCase):
         self.assertNotIn("http://", h)
 
 
+class ArmIds(unittest.TestCase):
+    """Arm ids come from run directory names. Ours contain a contributor's first
+    name, and the page may be published where she has not agreed to appear."""
+
+    def _entries(self):
+        d = summary({"m|env-only": {"n": 10, "passes": 1},
+                     "m|env+skill-michele": {"n": 10, "passes": 9}})
+        d["provenance"] = {"skills_hash": {"5ba66f0c7ddf": 20}}
+        return [("t", d, "")]
+
+    def test_shown_by_default(self):
+        e = self._entries()
+        self.assertIn("env+skill-michele", bi.skills_key(e, bi.arm_registry(e)))
+
+    def test_suppressed_when_asked(self):
+        e = self._entries()
+        h = bi.skills_key(e, bi.arm_registry(e), arm_ids=False)
+        self.assertNotIn("michele", h)
+        self.assertNotIn("<th class=\"l\">Arm</th>", h)
+
+    def test_the_hash_survives_suppression(self):
+        """The hash is the identity a published result names. Dropping it to hide a
+        name would cost the traceability the table exists for."""
+        e = self._entries()
+        self.assertIn("5ba66f0c7ddf", bi.skills_key(e, bi.arm_registry(e), arm_ids=False))
+
+    def test_whole_page_is_clean_of_the_name(self):
+        """skills_key is not the only place an arm could reach the page."""
+        e = self._entries()
+        self.assertNotIn("michele", bi.build(e, arm_ids=False).lower())
+
+
 class Registry(unittest.TestCase):
     """The arm registry is what stops two charts disagreeing about a colour."""
 

@@ -731,9 +731,9 @@ SCRIPT = """<script>
 # detail only: nothing here is needed to read a number correctly, because a definition
 # reachable only by hovering is invisible in print and on a touchscreen.
 DEFINITIONS = {
-    "Skills compared": "Each skill on this page, what it is, and the exact file "
-                       "contents it was run from. Arms are lettered rather than named "
-                       "after whoever wrote them, so the board compares skills.",
+    "Skills compared": "Each skill on this page, what it is, and the content hash "
+                       "of the exact files it was run from. Letters are page "
+                       "positions, not identities: the hash is what a result names.",
     "Neurodesk image": "The container the runs happened inside. Fixes every tool "
                        "version at once -- FSL, ANTs, FreeSurfer and the rest.",
     "opencode": "Version of the headless CLI that drove the agent. NOT the model: the "
@@ -1365,7 +1365,7 @@ def attributed_hashes(entries, reg):
     return {a: sorted(v) for a, v in out.items()}
 
 
-def skills_key(entries, reg):
+def skills_key(entries, reg, arm_ids=True):
     """What Skill A and Skill B actually are: a file, a content hash, a link.
 
     The arms carry letters everywhere else on the page so the board compares artefacts
@@ -1395,22 +1395,32 @@ def skills_key(entries, reg):
             h = ", ".join('<code>%s</code>' % html.escape(x[:12]) for x in got)
         else:
             h = '<span class="dim">not attributable per arm</span>' 
-        label = meta.get("label") or arm
+        # Falling back to the raw arm id would put the thing we just suppressed
+        # into the next column along. With ids off the fallback is the page name.
+        label = meta.get("label") or (arm if arm_ids else meta["name"])
         label = (('<a href="%s">%s</a>' % (html.escape(meta["href"]), html.escape(label)))
                  if meta.get("href") else html.escape(label))
-        rows.append('<tr><td class="l"><span class="arm a%d">%s</span></td>'
-                    '<td class="l name">%s</td><td class="l"><code>%s</code></td>'
-                    '<td class="l">%s</td></tr>'
-                    % (meta["slot"], html.escape(meta["name"]), label,
-                       html.escape(arm), h))
+        # The raw arm id is an internal label taken from the run directory names,
+        # and ours carry a contributor's first name. On a page that may be public
+        # that is a person attached to a result they have not agreed to publish, so
+        # it is suppressible. The hash stays either way: that is the identity a
+        # result actually names, and dropping it would cost traceability.
+        cells = ['<td class="l"><span class="arm a%d">%s</span></td>'
+                 % (meta["slot"], html.escape(meta["name"])),
+                 '<td class="l name">%s</td>' % label]
+        if arm_ids:
+            cells.append('<td class="l"><code>%s</code></td>' % html.escape(arm))
+        cells.append('<td class="l">%s</td>' % h)
+        rows.append("<tr>%s</tr>" % "".join(cells))
     if not rows:
         return ""
     return ('<div class="bar"><h2>' + term("Skills compared") + '</h2>'
             '<span class="count">%d</span></div>'
             '<div class="card scroll"><table><thead><tr><th class="l">On this page</th>'
-            '<th class="l">Skill</th><th class="l">Arm</th>'
+            '<th class="l">Skill</th>%s'
             '<th class="l">Content hash</th></tr></thead>'
-            '<tbody>%s</tbody></table></div>' % (len(rows), "".join(rows)))
+            '<tbody>%s</tbody></table></div>'
+            % (len(rows), '<th class="l">Arm</th>' if arm_ids else "", "".join(rows)))
 
 
 def provenance_table(entries):
@@ -1473,7 +1483,7 @@ def provenance_table(entries):
             '</thead><tbody>%s</tbody></table></div>' % (head, "".join(rows)))
 
 
-def build(entries, roster=None, skills=None, noindex=False):
+def build(entries, roster=None, skills=None, noindex=False, arm_ids=True):
     reg = arm_registry(entries, skills)
     effects, n_sep, n_cmp = build_effects(entries, reg)
 
@@ -1526,7 +1536,8 @@ def build(entries, roster=None, skills=None, noindex=False):
   <p class="foot">Pass = valid output and verdict at or above acceptable.
   Built by <code>build_index.py</code> from each task's <code>summary.json</code>;
   effects read from <code>skill_effect</code>.</p>
-</div>%s</body></html>""" % (NOINDEX if noindex else "", STYLE, tiles, skills_key(entries, reg), effects,
+</div>%s</body></html>""" % (NOINDEX if noindex else "", STYLE, tiles,
+                            skills_key(entries, reg, arm_ids), effects,
                             build_charts(entries, reg, roster),
                             build_grid(entries, roster, reg),
                             notices(entries), provenance_table(entries), SCRIPT)
@@ -1571,6 +1582,10 @@ def main():
                          "checked it against the runs. summary.json aggregates "
                          "provenance per task, so a task with two skill arms cannot "
                          "say which hash is whose; this supplies what it cannot.")
+    ap.add_argument("--no-arm-ids", action="store_true",
+                    help="omit the raw arm identifier column. Arm ids come from run "
+                         "directory names and can contain a contributor's name; on a "
+                         "public page that publishes a person alongside a result.")
     ap.add_argument("--noindex", action="store_true",
                     help="emit a robots noindex meta tag. For a public Pages site "
                          "whose contents are not meant to be searchable. Does NOT "
@@ -1594,8 +1609,9 @@ def main():
     skills = {arm: {"label": lab, "href": href} for arm, lab, href in (a.skill or [])}
     for arm, h in (getattr(a, "skill_hash", None) or []):
         skills.setdefault(arm, {})["hash"] = h
-    a.out.write_text(build(entries, load_roster(a.roster), skills, a.noindex),
-                     encoding="utf-8")
+    a.out.write_text(
+        build(entries, load_roster(a.roster), skills, a.noindex, not a.no_arm_ids),
+        encoding="utf-8")
     print("wrote %s (%d KB, %d task(s))"
           % (a.out, a.out.stat().st_size // 1024, len(entries)))
     for name, s, _ in entries:
