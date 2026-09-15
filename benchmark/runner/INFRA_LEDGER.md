@@ -13,7 +13,8 @@ was initially read as "the model did badly".
 corrupted nothing are not here.
 
 The count was informally quoted as five, then six, then nine while this list lived in
-memory. Writing it out gives twelve. That gap is the reason for the file.
+memory. Writing it out gave twelve, and a thirteenth was diagnosed the same afternoon.
+That gap is the reason for the file.
 
 ---
 
@@ -122,15 +123,36 @@ memory. Writing it out gives twelve. That gap is the reason for the file.
   every login, taking about 7 minutes against a 2-minute startup limit.
 - **Prevented by:** `OPENCODE_ISOLATE=1` by default, one DB per run.
 
+### 13. An image upgrade reset `opencode.json`
+
+- **Presented as:** every run from 14 September dying in seconds. `exit=1`, no output,
+  no logs. 10 runs across two arms, all classified as our harness failing.
+- **Actually:** the `2026-09-01` image upgrade reset `~/.config/opencode/opencode.json`.
+  The `neurodesk` provider was left declaring one placeholder model called `neurodesk`,
+  so `-m neurodesk/glm-5.2` resolved to nothing and the gateway answered
+  `Model '' was not found`.
+- **This is a recurrence.** `preflight.sh` has carried a comment about exactly this
+  since it was written. A backup step was added on 10 September and had never run,
+  because preflight had never been run.
+- **Cost:** a day of runs, and an hour chasing the gateway. The 404 names an empty
+  string, so the error points at the server rather than at the client's config.
+- **Found by:** `preflight.sh`, again in one line, again after the spend.
+- **Prevented by:** the config snapshot now happens **after** the model checks pass,
+  at the end of the script. It previously gated on the gateway returning 200, so its
+  first run saved the broken config as "known-good". A backup of a broken state,
+  labelled good, is worse than no backup.
+
 ---
 
 ## What the list says
 
-- **Six of the twelve changed a published number.** Entries 1, 2, 3, 4, 5 and 6.
+- **Six of the thirteen changed a published number.** Entries 1, 2, 3, 4, 5 and 6.
 - **Entry 3 alone moved 51 runs**, and moved them unevenly between arms, which is worse
   than moving them all one way.
-- **Three were caught by a tool that already existed** (3, 6, 11) but was not run, or was
-  run after the spend rather than before.
+- **Four were caught by a tool that already existed** (3, 6, 11, 13) but was not run, or
+  was run after the spend rather than before. Entry 13 is the sharpest case: the fault,
+  the warning comment, and the backup that would have fixed it were all already in
+  `preflight.sh`.
 - **Two were caught only because someone looked at timestamps** (9) or at a duration
   distribution (3). Nothing would have flagged them.
 

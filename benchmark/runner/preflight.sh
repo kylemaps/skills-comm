@@ -51,24 +51,15 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-# opencode.json has been silently reset by a neurodesktop image upgrade once, and
-# nothing held a copy: the config was rebuilt from memory while a sweep waited. It
-# is small, it changes rarely, and preflight is the one place that already knows
-# whether the gateway works -- so a config that has just been proven good is worth
-# keeping. Only written when the gateway answered, so a broken config never
-# overwrites a working snapshot.
-OC="$HOME/.config/opencode/opencode.json"
-KG="${BENCH_HOME:-$HOME/bench}/opencode.json.known-good"
-if [ -f "$OC" ]; then
-  if [ "$code" = "200" ] && ! cmp -s "$OC" "$KG" 2>/dev/null; then
-    mkdir -p "$(dirname "$KG")" && cp "$OC" "$KG" && echo "ok   config snapshotted"
+OC_CHECK="$HOME/.config/opencode/opencode.json"
+KG_CHECK="${BENCH_HOME:-$HOME/bench}/opencode.json.known-good"
+if [ ! -f "$OC_CHECK" ]; then
+  if [ -f "$KG_CHECK" ]; then
+    echo "FAIL: $OC_CHECK is missing. A known-good copy is at $KG_CHECK"
+    echo "      restore with: cp $KG_CHECK $OC_CHECK"
+  else
+    echo "FAIL: $OC_CHECK is missing and no known-good copy exists"
   fi
-elif [ -f "$KG" ]; then
-  echo "FAIL: $OC is missing. A known-good copy is at $KG"
-  echo "      restore with: cp $KG $OC"
-  ENVFAIL=1
-else
-  echo "FAIL: $OC is missing and no known-good copy exists"
   ENVFAIL=1
 fi
 
@@ -105,5 +96,21 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "PREFLIGHT PARTIAL — ${#OK_MODELS[@]} of $# models resolved"
   exit 2
 fi
+# Snapshot LAST, and only on a clean pass.
+#
+# This block used to sit before the model checks and gate on the gateway returning
+# 200. A neurodesktop image upgrade reset opencode.json, wiping every model
+# definition; the gateway still answered 200, so the first run of this script saved
+# the broken config as "known-good". A backup of a broken state, labelled good, is
+# worse than no backup.
+#
+# 200 from /models says the host is up. It says nothing about whether the configured
+# model names resolve, which is the thing that actually broke.
+OC="$HOME/.config/opencode/opencode.json"
+KG="${BENCH_HOME:-$HOME/bench}/opencode.json.known-good"
+if [ -f "$OC" ] && ! cmp -s "$OC" "$KG" 2>/dev/null; then
+  mkdir -p "$(dirname "$KG")" && cp "$OC" "$KG" && echo "ok   config snapshotted"
+fi
+
 echo "PREFLIGHT OK"
 exit 0
