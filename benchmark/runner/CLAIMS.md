@@ -245,7 +245,7 @@ Source: recorded in `_local/SUCCESS.md`; re-runnable from the runs directory.
 4. **Token counts compare within a model only.** Cross-model rankings invert
    once prompt-cache reads are counted; use `41_tokens.txt`, which reports both.
 5. **No statistics below n=5.**
-6. **Thirteen infrastructure faults have produced data reading as model failure**, six of
+6. **Twelve infrastructure faults have produced data reading as model failure**, five of
    which changed a published number. The register is
    [INFRA_LEDGER.md](INFRA_LEDGER.md). Caveat 3 above is entry 3 of that list, and the
    timeout correction has since moved kimi's 7t baseline from 2/5 to 9/10 -- so that

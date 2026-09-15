@@ -13,8 +13,9 @@ was initially read as "the model did badly".
 corrupted nothing are not here.
 
 The count was informally quoted as five, then six, then nine while this list lived in
-memory. Writing it out gave twelve, and a thirteenth was diagnosed the same afternoon.
-That gap is the reason for the file.
+memory. Writing it out gave twelve, a thirteenth was diagnosed the same afternoon, and
+one of the twelve was then withdrawn as a duplicate of it. Twelve stands. That churn,
+inside one day, is the reason for the file.
 
 ---
 
@@ -65,16 +66,20 @@ That gap is the reason for the file.
 - **Prevented by:** blank exit code excluded, checked **before** the `== 124`
   comparison, since `"" == 124` is false and the run would otherwise fall through.
 
-### 6. The gateway dropped the `neurodesk/` prefix
+### 6. WITHDRAWN - "the gateway dropped the `neurodesk/` prefix"
 
-- **Presented as:** every run since 14 September dying instantly with no output. 10 runs
-  across two arms, all counted as our harness failing.
-- **Actually:** gateway model ids became bare (`glm-5.2`, not `neurodesk/glm-5.2`).
-  A prefixed name is rejected as `Model ''`, a 404 that names nothing recognisable.
-- **Found by:** `preflight.sh`, in one line, after the runs had already been spent.
-  The tool existed and worked. It was not run before launching.
-- **Prevented by:** running preflight before every sweep. This is a process fix, not a
-  code fix.
+Not a separate fault. This was entry 13 misdiagnosed, and the misdiagnosis is kept
+because it is the instructive part.
+
+The gateway's `/v1` route lists bare ids (`glm-5.2`). Posting `neurodesk/glm-5.2` there
+returns `Model '' was not found`, which reads as the gateway having renamed everything.
+It had not. `neurodesk/` is an **opencode provider prefix**, not a gateway one, and
+opencode talks to the `/openai` route, not `/v1`. The probe was aimed at the wrong
+endpoint and its answer was taken as a finding.
+
+**The lesson:** an error naming an empty string points at whatever parsed the request,
+and the first instinct is to blame the far side. Check what the client is actually
+configured to send, and to where, before concluding the server changed.
 
 ### 7. The gateway behind an oauth2 proxy
 
@@ -146,13 +151,14 @@ That gap is the reason for the file.
 
 ## What the list says
 
-- **Six of the thirteen changed a published number.** Entries 1, 2, 3, 4, 5 and 6.
+- **Twelve faults, not thirteen.** Entry 6 was withdrawn on the day it was written: it
+  was entry 13 misdiagnosed. Five changed a published number - entries 1, 2, 3, 4 and 5.
 - **Entry 3 alone moved 51 runs**, and moved them unevenly between arms, which is worse
   than moving them all one way.
-- **Four were caught by a tool that already existed** (3, 6, 11, 13) but was not run, or
+- **Three were caught by a tool that already existed** (3, 11, 13) but was not run, or
   was run after the spend rather than before. Entry 13 is the sharpest case: the fault,
-  the warning comment, and the backup that would have fixed it were all already in
-  `preflight.sh`.
+  a comment warning about that exact fault, and the backup that would have fixed it were
+  all already in `preflight.sh`.
 - **Two were caught only because someone looked at timestamps** (9) or at a duration
   distribution (3). Nothing would have flagged them.
 
