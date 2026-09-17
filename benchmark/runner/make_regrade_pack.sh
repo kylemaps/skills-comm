@@ -45,8 +45,6 @@ for t in $TASKS; do
     done
   done
 
-  [ -f "$REPORT/summary_$t.json" ] && cp "$REPORT/summary_$t.json" "$OUT/expected/"
-  [ -f "$REPORT/runs_$t.csv" ] && cp "$REPORT/runs_$t.csv" "$OUT/expected/"
 
 done
 
@@ -116,6 +114,31 @@ if find "$OUT/runs" -name envelope.json | grep -q .; then
   exit 1
 fi
 
+# Expected output, computed over EXACTLY the runs in this pack.
+#
+# Copying the full sweep's summary was wrong: the pack is a 10-run sample, so its
+# cells hold 1-3 runs against an expected n=10. Every cell would mismatch on every
+# field, on a correct machine, and the documented reading of a mismatch is "the
+# grading environment is not equivalent".
+#
+# Generated in a throwaway copy, because grading writes envelope.json into each run
+# directory and an envelope inside the pack would make collect_results report every
+# run as cached -- the diff would then pass without grading anything.
+TMP=$(mktemp -d)
+mkdir -p "$TMP/runs"
+cp -r "$OUT/runs/." "$TMP/runs/"
+for t in $TASKS; do
+  BENCH_HOME="$TMP" HARNESS_DIR="$OUT/code/harness" FORCE_REGRADE=1 \
+    "$OUT/code/collect_results.sh" "$t" >/dev/null 2>&1 || {
+      echo "FAIL: could not grade the sample to produce expected/" >&2; rm -rf "$TMP"; exit 1; }
+  python3 "$OUT/code/summarize.py" "$TMP/runs" "$t" --out-dir "$OUT/expected" >/dev/null
+done
+rm -rf "$TMP"
+for t in $TASKS; do
+  [ -f "$OUT/expected/summary_$t.json" ] || { echo "FAIL: no expected output for $t" >&2; exit 1; }
+done
+echo "  expected/ computed over the sampled runs, not the full sweep"
+
 cat > "$OUT/MANIFEST.md" <<MANIFEST
 # Re-grade pack
 
@@ -154,13 +177,23 @@ download and nothing reaches the network.
 
 ## Compare these fields, and only these
 
-Per run, from \`runs.csv\`:
+Per run, from \`runs.csv\`, joined on (model, arm, rep). Note the run directory name
+carries a \`neurodesk-\` prefix on the model that the csv does not:
 
 - \`verdict\` \`score\` \`dice\` \`passed\`
+
+This is the test that matters: independent gradings against known-correct answers,
+covering both the pass and the fail path.
 
 Per cell, from \`summary.json\`:
 
 - \`n\` \`passes\` \`mean\` \`sd\` \`median\`
+
+\`expected/\` is computed over EXACTLY the runs in this pack, not over the full sweep,
+so cells hold 1-3 runs and those are the numbers to expect. An earlier version shipped
+the full sweep's summary against a 10-run sample: every cell mismatched on every field
+on a correct machine, which manufactured the false positive these criteria exist to
+prevent.
 
 Everything else in those files is environment-dependent and will differ on any
 machine: durations, timestamps, token counts, session ids, paths. A difference
