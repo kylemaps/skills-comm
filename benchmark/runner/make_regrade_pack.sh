@@ -85,6 +85,57 @@ PY
 cp -r "$GRADER/benchmark/harness" "$OUT/code/harness"
 cp "$HERE/summarize.py" "$HERE/collect_results.sh" "$HERE/finalize_run.py" "$OUT/code/"
 
+# A dependency check, shipped, because the pack's headline claim is that it is
+# offline and the way it fails when a dependency is absent contradicts that claim.
+#
+# collect_results.sh runs fetch_reference.py unconditionally, and that module does
+# `from huggingface_hub import hf_hub_download` at import time -- BEFORE the
+# already-present check that would otherwise skip every download. So on a machine
+# without the package, a fully offline re-grade against references that are all
+# sitting on disk still dies, and it dies as:
+#
+#     ABORT: could not fetch the reference. Nothing has been graded.
+#
+# On a cluster with an egress policy in front of it that reads as the policy
+# blocking huggingface.co. It is a missing pip package. Someone would spend a day
+# on the firewall. Found by cluster-explorer, 2026-09-17.
+#
+# Deliberately NOT fixed by patching the vendored grader. A pack that ships a
+# modified scorer is no longer validating the grader that produced our results,
+# and the real fix is a one-line move upstream in nipreps/skills-comm.
+cat > "$OUT/check_deps.sh" <<'DEPS'
+#!/bin/sh
+# Run this FIRST. Every import grading needs, named, before anything is graded.
+echo "python3: $(python3 --version 2>&1)"
+miss=0
+for m in numpy scipy nibabel huggingface_hub; do
+  if python3 -c "import $m" 2>/dev/null; then
+    echo "  ok       $m"
+  else
+    echo "  MISSING  $m"
+    miss=1
+  fi
+done
+# Optional. summarize.py reports "(ASTRA records present but unread: PyYAML not
+# installed)" rather than failing, and only when a run carries an astra.yaml, so
+# its absence costs one analysis column and nothing else.
+python3 -c "import yaml" 2>/dev/null \
+  && echo "  ok       PyYAML (optional)" \
+  || echo "  absent   PyYAML (optional: costs the ASTRA column, grades fine)"
+if [ "$miss" != 0 ]; then
+  echo
+  echo "STOP. A missing package here surfaces later as"
+  echo "  ABORT: could not fetch the reference. Nothing has been graded."
+  echo "which reads as a network or egress problem and is not one. huggingface_hub"
+  echo "is imported by fetch_reference.py at module load, before the check that"
+  echo "would skip the download -- so it is required even though this pack is"
+  echo "offline and every reference is already in place."
+  exit 1
+fi
+echo "deps ok"
+DEPS
+chmod +x "$OUT/check_deps.sh"
+
 # Fail loudly rather than ship a pack that cannot grade. Every one of these was
 # a real omission in the first version.
 python3 - "$OUT" $TASKS <<'PY'
@@ -163,10 +214,23 @@ graded anything.
 ## Run it
 
 \`\`\`sh
+sh check_deps.sh                       # first, always
+
 BENCH_HOME=\$PWD HARNESS_DIR=\$PWD/code/harness FORCE_REGRADE=1 \\
   code/collect_results.sh <task>
 python3 code/summarize.py runs <task> --out-dir out
 \`\`\`
+
+\`check_deps.sh\` is not a formality. \`collect_results.sh\` runs
+\`fetch_reference.py\` unconditionally, and that module imports \`huggingface_hub\`
+at load time -- before the already-present check that would skip every download.
+So this pack is offline and still hard-requires the package, and without it the
+failure you see is:
+
+    ABORT: could not fetch the reference. Nothing has been graded.
+
+On a cluster with an egress policy in front of it, that reads as the policy
+blocking huggingface.co. It is a missing pip package.
 
 \`BENCH_HOME\` is required. It defaults to \`\$HOME/bench\`, which exists only on the
 machine that built this; unset, collect_results now stops rather than grading zero
