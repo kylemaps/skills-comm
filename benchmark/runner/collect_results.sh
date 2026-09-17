@@ -42,6 +42,16 @@ else
 fi
 
 TOTAL=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
+# Zero runs is not a valid grading job, it is a wrong path. Without this the loop
+# body never executes, the script prints "graded 0, reused 0 cached" and exits 0,
+# and summarize then writes a summary of an empty set. That is the exit-0-with-no-
+# artefact shape this tool exists to catch, in the tool itself. Found by someone
+# reading the script before running it, which is the only reason it was found.
+if [ "$TOTAL" -eq 0 ]; then
+  echo "FAIL: no run directories match $BENCH_HOME/runs/${TASK}__*" >&2
+  echo "      BENCH_HOME is ${BENCH_HOME}. Set it to the directory CONTAINING runs/." >&2
+  exit 1
+fi
 GRADED=0
 CACHED=0
 NOOUT=0
