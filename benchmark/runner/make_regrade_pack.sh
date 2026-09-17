@@ -48,21 +48,39 @@ for t in $TASKS; do
   [ -f "$REPORT/summary_$t.json" ] && cp "$REPORT/summary_$t.json" "$OUT/expected/"
   [ -f "$REPORT/runs_$t.csv" ] && cp "$REPORT/runs_$t.csv" "$OUT/expected/"
 
-  # grade_wrapper resolves graders_root as the manifest's parent.parent, then reads
-  # <root>/graders/<task>/. So the pack layout is dictated by that, not chosen:
-  # code/graders/<task>/{rubric.json, score_*.py, reference/*.nii.gz}
-  mkdir -p "$OUT/code/graders/$t/reference"
-  cp "$GRADER/benchmark/graders/$t/rubric.json" "$OUT/code/graders/$t/" 2>/dev/null || true
-  # The scorers. Omitting these was the blocker: grade_wrapper hard-exits with
-  # "scorer not found" before it touches a submission, so the pack could not grade
-  # at all. run_manifest names them per task and they are not interchangeable.
-  cp "$GRADER/benchmark/graders/$t/"*.py "$OUT/code/graders/$t/" 2>/dev/null || true
-  # References go where fetch_reference would have put them, so it finds them
-  # present and skips the download. Without this the re-grade reaches
-  # huggingface.co, which makes an "offline" validation not offline.
-  cp "$GRADER/benchmark/graders/$t/reference/"*.nii.gz \
-     "$OUT/code/graders/$t/reference/" 2>/dev/null || true
 done
+
+# Copy the grader files run_manifest NAMES, at the paths it names them, rather than
+# guessing the layout. Two things make guessing wrong:
+#   - `scorer` and `pack_dir` are separate. 7t and motion both score with
+#     graders/structural-brain-extraction/score_brain_mask.py, which is not in
+#     either task's own directory.
+#   - grade_wrapper resolves graders_root as the manifest's parent.parent and then
+#     joins these paths verbatim, so they have to land exactly where it looks.
+python3 - "$GRADER" "$OUT" $TASKS <<'PY'
+import json, os, shutil, sys
+grader, out = sys.argv[1], sys.argv[2]
+tasks = sys.argv[3:]
+man = json.load(open(os.path.join(grader, "benchmark/harness/run_manifest.json")))
+for t in tasks:
+    spec = man["tasks"][t]
+    # The scorer, at the manifest's own relative path.
+    src = os.path.join(grader, "benchmark", spec["scorer"])
+    dst = os.path.join(out, "code", spec["scorer"])
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+    # The pack: rubric, and the references where fetch_reference would have left
+    # them, so it finds them present and skips the download. Without that the
+    # re-grade reaches huggingface.co and an offline validation is not offline.
+    pack = spec["pack_dir"]
+    os.makedirs(os.path.join(out, "code", pack, "reference"), exist_ok=True)
+    shutil.copy2(os.path.join(grader, "benchmark", pack, "rubric.json"),
+                 os.path.join(out, "code", pack, "rubric.json"))
+    for f in spec.get("reference_files", []):
+        shutil.copy2(os.path.join(grader, "benchmark", pack, "reference", f),
+                     os.path.join(out, "code", pack, "reference", f))
+    print("  %-34s scorer=%s" % (t, spec["scorer"]))
+PY
 
 # Self-contained: the grader and the summariser travel with the data, so the pack
 # does not depend on cloning two repos at the right refs to be usable.
@@ -71,12 +89,24 @@ cp "$HERE/summarize.py" "$HERE/collect_results.sh" "$HERE/finalize_run.py" "$OUT
 
 # Fail loudly rather than ship a pack that cannot grade. Every one of these was
 # a real omission in the first version.
-for t in $TASKS; do
-  [ -f "$OUT/code/graders/$t/rubric.json" ] || { echo "FAIL: no rubric for $t" >&2; exit 1; }
-  ls "$OUT/code/graders/$t/"*.py >/dev/null 2>&1 || { echo "FAIL: no scorer for $t" >&2; exit 1; }
-  ls "$OUT/code/graders/$t/reference/"*.nii.gz >/dev/null 2>&1 \
-    || { echo "FAIL: no reference for $t" >&2; exit 1; }
-done
+python3 - "$OUT" $TASKS <<'PY'
+import json, os, sys
+out = sys.argv[1]
+man = json.load(open(os.path.join(out, "code/harness/run_manifest.json")))
+bad = []
+for t in sys.argv[2:]:
+    spec = man["tasks"][t]
+    need = [spec["scorer"],
+            os.path.join(spec["pack_dir"], "rubric.json")]
+    need += [os.path.join(spec["pack_dir"], "reference", f)
+             for f in spec.get("reference_files", [])]
+    for rel in need:
+        if not os.path.exists(os.path.join(out, "code", rel)):
+            bad.append("%s: missing %s" % (t, rel))
+if bad:
+    sys.exit("PACK IS NOT GRADEABLE:\n  " + "\n  ".join(bad))
+print("  verified: every path run_manifest names is present")
+PY
 # An envelope.json inside a run directory makes collect_results report "cached" and
 # skip the work, so every run would agree with the expected output BY CONSTRUCTION
 # and the diff would pass without grading anything. The copy list above excludes it;
