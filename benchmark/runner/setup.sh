@@ -26,7 +26,22 @@ echo "=== 3. working dirs ==="
 mkdir -p "$HOME/bench/runs" "$HOME/.config/opencode/skills"
 echo "  ok"
 
-echo "=== 4. environment ==="
+echo "=== 4. opencode provider config ==="
+# Nothing else writes this. On the Play server it was written once, interactively,
+# by the neurodesktop image's own opencode wrapper; a CI pod never gets an
+# interactive first run, and an image upgrade already reset it once and cost a day
+# of runs classified as our harness failing.
+#
+# Safe to re-run: it merges, so ollama and jetstream survive, and it refuses to
+# write an empty or placeholder model list rather than replacing a working config
+# with a broken one.
+if [ -n "${NEURODESK_API_KEY:-}" ]; then
+  python3 "$(dirname "$0")/write_opencode_config.py" || echo "  (config unchanged)"
+else
+  echo "  skipped: NEURODESK_API_KEY is unset, see below"
+fi
+
+echo "=== 5. environment ==="
 echo "  image:    ${NEURODESKTOP_VERSION:-unknown}"
 echo "  opencode: $(/usr/bin/opencode --version 2>/dev/null || echo MISSING)"
 echo "  sbatch:   $(command -v sbatch || echo MISSING)"

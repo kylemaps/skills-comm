@@ -132,13 +132,32 @@ def classify(run_dir, task, margin_s):
     tail, located = tail_after_output(txt, task)
     d["tail_located"] = located
     d["tail"] = tail
-    d["methods_after"] = sorted({n for n, r in METHOD_RES if r.search(tail)})
-    d["settling"] = bool(DONE_RE.search(tail))
+    # Only meaningful when there IS a write to be after. With no output the slice
+    # falls back to the whole transcript, so these would be the methods the run
+    # tried at all -- a different question, printed in the same column, which read
+    # as "it extracted after writing nothing".
+    if d["output_present"]:
+        d["methods_after"] = sorted({n for n, r in METHOD_RES if r.search(tail)})
+        d["settling"] = bool(DONE_RE.search(tail))
+    else:
+        d["methods_after"], d["settling"] = [], False
+
+    # A negative margin means the mask's mtime is LATER than the run's end, which
+    # cannot happen and means one of the two numbers is not describing this run.
+    # `seconds_to_output` is derived from the file's mtime, and an mtime is mutable
+    # -- anything that rewrote or restored that file since moves it. Flagged rather
+    # than silently used, because it is the single input the `marginal` test rests on.
+    d["timing_suspect"] = d["margin_s"] is not None and d["margin_s"] < 0
 
     if not d["output_present"]:
         d["verdict"] = "no-output"
     elif d["methods_after"]:
         d["verdict"] = "intermediate"
+    elif d["timing_suspect"]:
+        d["verdict"] = "marginal"
+        d["note"] = ("GUESS: margin is negative (%ss), so the mask's mtime is later "
+                     "than the run's end and the timing cannot be trusted"
+                     % d["margin_s"])
     elif d["margin_s"] is not None and d["margin_s"] < margin_s:
         d["verdict"] = "marginal"
     elif d["margin_s"] is None:
@@ -216,6 +235,17 @@ def main():
                   % (len(nf), " is" if len(nf) == 1 else "s are"))
             print("  them, read the tails: --tails. A regex cannot tell a genuine")
             print("  sign-off from the agent narrating what it was about to do.")
+        bad = [r for r in rows if r.get("timing_suspect")]
+        if bad:
+            print("\n  %d run(s) report a mask written AFTER the run ended, which is"
+                  % len(bad))
+            print("  impossible: %s"
+                  % ", ".join("%s/%s/r%s margin=%ss"
+                              % (r["model"], r["arm"], r["rep"], r["margin_s"])
+                              for r in bad))
+            print("  seconds_to_output comes from the file's mtime and an mtime is")
+            print("  mutable, so something rewrote or restored those files after the")
+            print("  run. Their verdicts stand only where the transcript decided them.")
         unloc = [r for r in rows if r["output_present"] and not r["tail_located"]]
         if unloc:
             print("\n  GUESS on %d run(s): the output path is never named in the"
