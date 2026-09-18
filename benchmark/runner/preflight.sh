@@ -88,6 +88,23 @@ if [ -n "${RESOLVED_OUT:-}" ]; then
   for m in ${OK_MODELS+"${OK_MODELS[@]}"}; do echo "$m" >> "$RESOLVED_OUT"; done
 fi
 
+# Can we still reach the hosts a measurement depends on.
+#
+# This one DOES fail preflight. A blocked host does not stop a run: the agent falls
+# back to another tool and produces a gradeable result, so the sweep exits 0 with
+# clean logs and a worse number. And the loss is not uniform -- it lands on whichever
+# arm reaches the host, and for SynthStrip weights that is the treated arm, the one
+# whose improvement is the published claim.
+#
+# ABOVE the ENVFAIL evaluation, not below it. I first put this after the model checks
+# alongside the wrapper check, where ENVFAIL has already been read -- so the
+# assignment was dead and a blocked host would have printed BLOCKED and then
+# PREFLIGHT OK. A check whose result is never consumed is the null-route failure
+# again, in the same file where I had just fixed one.
+if [ -x "$(dirname "$0")/egress_assert.sh" ]; then
+  sh "$(dirname "$0")/egress_assert.sh" || ENVFAIL=1
+fi
+
 if [ "$ENVFAIL" != 0 ] || [ "${#OK_MODELS[@]}" -eq 0 ]; then
   echo "PREFLIGHT FAILED"
   exit 1
