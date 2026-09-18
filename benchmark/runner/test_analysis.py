@@ -513,6 +513,63 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         self.assertLess(blank, timeout)
         self.assertIn("harness failure: run recorded no exit code", src)
 
+    def test_the_whole_exclusion_chain_is_pinned_in_order(self):
+        """A run is VALID by matching none of these. That is a fall-through, and a
+        fall-through is only as safe as everything above it.
+
+        The test above pins one pair -- blank before timeout -- because getting that
+        pair wrong cost us 7 runs. But nothing pinned the rest, so inserting a new
+        branch, or moving one, changes what counts as valid without touching
+        anything named "valid" and without failing a test.
+
+        cluster-prod hit the same structure in an Alertmanager route tree: their
+        critical alert is delivered by falling through every null branch rather than
+        by matching a positive rule, so a future route inserted above it with
+        continue:false would capture it silently and nothing about the alert would
+        change. Same fragility, different system.
+
+        So: pin every branch, pin the order, and pin the COUNT. An eighth branch
+        should fail this test and make whoever added it decide where it goes.
+        """
+        with open(os.path.join(HERE, "summarize.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        ordered = [
+            'contaminated: env-only run loaded the skill',
+            'misassigned: skill installed in env-only run',
+            'misassigned: skill absent in',
+            'harness failure: run recorded no exit code',
+            'harness failure: run timed out',
+            'harness failure: %s" % r["infra_error"]',
+            'harness failure: no model call was ever made',
+            # Full text, not "not graded yet": that phrase also appears in a comment
+            # at the top of the file, and str.index finds the FIRST occurrence -- so
+            # the shorter marker resolved to line 117 and the order check failed
+            # against a position that has nothing to do with the chain.
+            'not graded yet -- run the grader on this task',
+        ]
+        at = []
+        for marker in ordered:
+            self.assertIn(marker, src, "exclusion branch vanished: %s" % marker)
+            at.append(src.index(marker))
+        self.assertEqual(at, sorted(at),
+                         "the exclusion branches are no longer in the documented "
+                         "order. A run is valid by falling through all of them, so "
+                         "reordering silently changes what counts as valid.")
+        # Every branch assigns exclude_reason. Counting the assignments catches a
+        # new one added anywhere, including below the last marker above -- which is
+        # the position someone appending a branch would naturally choose.
+        # This number was wrong the first time I wrote it -- I said 8, meaning seven
+        # branches, and there are eight. The test failed on its first run and named
+        # the two I had missed. Leaving that here because it is the argument for the
+        # assertion: I had just read the chain closely enough to pin its order and
+        # still could not count it.
+        n = src.count('r["exclude_reason"] = ')
+        self.assertEqual(
+            n, 9,
+            "the chain has %d exclude_reason assignments, expected 9 (one reset to "
+            "empty plus eight branches). If you added a branch, decide where it "
+            "belongs in the order and update this number deliberately." % n)
+
     def test_a_timeout_with_output_is_still_excluded(self):
         """The part that is easy to get wrong. A killed run's mask is an unknown
         intermediate: the agent never said it was finished."""
