@@ -96,6 +96,35 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "PREFLIGHT PARTIAL — ${#OK_MODELS[@]} of $# models resolved"
   exit 2
 fi
+# What the container wrappers pass to apptainer.
+#
+# NOT a pass/fail for this machine. The VM runs setuid apptainer, so an --overlay
+# wrapper works fine here and failing preflight over it would be crying wolf.
+#
+# It runs here because this is the only script that executes before every sweep, and
+# because the thing being checked is a property of the NEURODESK IMAGES rather than
+# of our code -- it can change under us with nobody doing anything, exactly as the
+# 2026-09-01 image upgrade reset opencode.json. If it changes, we have told the
+# cluster team something that is no longer true, and the place to find that out is
+# here rather than from a tool's pass rate on a pool that runs userns.
+#
+# Wired in deliberately. I wrote this check, described it as "meant for preflight",
+# and left preflight not calling it -- which is cluster-prod's null-route lesson
+# verbatim: proving the pipe works is not proving anything is in the pipe.
+if [ -x "$(dirname "$0")/container_opts_check.sh" ]; then
+  if ! sh "$(dirname "$0")/container_opts_check.sh" >/tmp/.copts.$$ 2>&1; then
+    echo
+    cat /tmp/.copts.$$
+    echo "NOTE: this does not block a sweep on this machine -- apptainer is setuid"
+    echo "      here. It DOES invalidate what we told the cluster team, which is"
+    echo "      that these wrappers are plain read-only SIF execs and their pool"
+    echo "      could therefore run userns. Tell them before they build."
+  else
+    echo "ok   container wrappers: plain read-only exec"
+  fi
+  rm -f /tmp/.copts.$$
+fi
+
 # Snapshot LAST, and only on a clean pass.
 #
 # This block used to sit before the model checks and gate on the gateway returning
