@@ -4,10 +4,29 @@ Every fault in our environment or our harness that produced data reading as a mo
 performing badly, or that silently changed what a number meant.
 
 **Why this file exists.** Each of these was diagnosed once, fixed, and then recalled
-only approximately. Written down, the pattern is the argument: an agent benchmark
-measures the environment as much as the agent, and a failure in the environment is
-indistinguishable from incompetence unless something separates them. Every entry below
-was initially read as "the model did badly".
+only approximately. Written down, the pattern is the argument: **a failure in the
+environment is indistinguishable from the system's ordinary good state unless
+something separates them.** Every entry below was initially read as "the model did
+badly".
+
+Which good state it hides in depends on what the system emits. Ours emits
+measurements, so an environment failure looks like incompetence. A system that emits
+dashboards has the same faults looking like health — cluster-prod's list this month
+includes an alert that fired thirteen times into a null receiver, a storage setting
+that doubled every build while every dashboard stayed green, and a drift check that
+compared a field which never changes. Same root, opposite-looking symptom, and the
+two lists are legible to each other once that is said.
+
+**The load-bearing clause is "unless something separates them."** Most of the entries
+below are not cases where a separator failed. They are cases where none existed. That
+is the argument for the file, and it is stronger than any individual entry.
+
+And knowing the class does not protect you. Three of the checks written to catch
+these were themselves written broken on the day of writing — one never called, one
+whose result was discarded, one matching prose — by someone who could name the
+failure mode while doing it. The only technique that caught any of them was
+deliberately breaking the thing under test to confirm the check went red. That is now
+`test_checks.sh`.
 
 **Inclusion rule.** The fault had to reach the data. Outages that cost time but
 corrupted nothing are not here.
