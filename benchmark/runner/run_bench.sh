@@ -24,7 +24,19 @@ BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 TASKS="${TASKS_JSON:-$HOME/grader-repo/benchmark/tasks.json}"
 SKILLSRC="${SKILLS_SRC:-$HOME/skills-comm/plugins/brain-extraction}"
 SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
-TIMEOUT="${RUN_TIMEOUT:-2700}"
+# The wall. It was 2700 by default, and that default was a trap: the working value
+# lives in ~/bench/.env on the VM, which exists on exactly one machine. A fresh pod
+# has no .env, so CI would have fallen back to 45 minutes -- the wall that sat INSIDE
+# the run-time distribution and scored 51 runs across four tasks as model failures.
+# The fix that lasts is a default above the distribution, not a note telling people
+# to set it.
+#
+# Measured over 409 completed runs: median 13.2 min, p90 37.5, p99 56.2, max 82.5.
+# 5400 clears every run we have ever completed. A wall is only safe when it sits
+# outside the distribution -- inside it, it censors, and the censoring is invisible
+# because a truncated run looks exactly like a model that produced nothing.
+TIMEOUT="${RUN_TIMEOUT:-5400}"
+[ -n "${RUN_TIMEOUT:-}" ] || echo "note: RUN_TIMEOUT unset, using the ${TIMEOUT}s default" >&2
 
 # A truncated task id (`structural-br-extraction-stroke`) once produced a run
 # directory and fourteen graded outputs under a name no grader pack contains. The
