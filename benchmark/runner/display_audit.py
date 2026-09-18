@@ -38,17 +38,44 @@ import re
 import sys
 from collections import Counter, defaultdict
 
-# Tools that cannot work without a display or a GL context. `render` is fsleyes'
-# offscreen subcommand and is included deliberately: it still initialises GL and
-# still fails here, which is the whole point of the finding above.
-GL_TOOLS = ["fsleyes", "fslview", "freeview", "mricrogl", "mricron", "itksnap",
-            "vglrun", "tkmedit", "tksurfer", "3dedge3", "afni ", "suma"]
+# Tools that cannot work without a display or a GL context.
+#
+# (name, case_sensitive). Case matters for the ones that are also acronyms or English
+# words. The first version of this list had a bare `afni`, and on the real corpus it
+# produced 96 hits of which almost none were invocations: "AFNI prescribes 3dcalc",
+# "AFNI version available lacks", "AFNI QUITTs!". Prose writes AFNI, a shell writes
+# afni, and matching case-insensitively turned an acronym into a finding.
+#
+# `suma` and `3dedge3` are dropped. 3dedge3 is a compute tool, not a viewer -- it was
+# in the list by association with AFNI rather than for a reason.
+GL_TOOLS = [
+    ("fsleyes", False),
+    ("fslview", False),
+    ("freeview", False),
+    ("mricrogl", False),
+    ("mricron", False),
+    ("itksnap", False),
+    ("vglrun", False),
+    ("tkmedit", False),
+    ("tksurfer", False),
+    ("afni", True),      # the GUI. Lowercase only -- see above.
+    ("suma", True),
+]
 
 # Command form: at a command position -- line start, or after && || ; | ( or $( --
 # and followed by something that looks like an argument rather than punctuation or
 # end of line. This is what separates `fsleyes render foo.nii.gz` from a module
 # listing that happens to contain the word.
-CMD = r"(?:^|[\n;&|(`]|\$\()\s*%s(?=\s+[-\w./$'\"])"
+#
+# The tool name is a capture group so the reported line starts at the COMMAND and not
+# at the newline the pattern had to consume to prove it was at a command position.
+# Without that, most reported lines came back empty.
+#
+# The trailing (?![\w_]) rejects afni_outline_qc, which is the documented matplotlib
+# QC step and the opposite of a GL invocation -- it was the single largest false
+# positive, and it was concentrated in one arm, which is exactly how a detector
+# manufactures an arm difference.
+CMD = r"(?:^|[\n;&|(`]|\$\()\s*(%s)(?![\w_])(?=\s+[-\w./$'\"])"
 
 # How the invocation's failure was handled. Order matters: the more specific
 # discard patterns are tested before the general ones.
@@ -88,16 +115,15 @@ def audit_run(run_dir, task_hint=None):
     except Exception:
         return out
 
-    for tool in GL_TOOLS:
-        name = tool.strip()
-        pat = re.compile(CMD % re.escape(name), re.I)
+    for name, case_sensitive in GL_TOOLS:
+        flags = 0 if case_sensitive else re.I
+        pat = re.compile(CMD % re.escape(name), flags)
         for m in pat.finditer(txt):
-            # The command is the rest of that logical line. Good enough to read the
-            # redirection off, and it is what a person would look at.
-            eol = txt.find("\n", m.end())
-            # lstrip the delimiter the command-position pattern had to match, so the
-            # printed line starts at the command rather than at a stray `&` or `|`.
-            line = txt[m.start():eol if eol > 0 else len(txt)].strip(" \t;&|(`")
+            # From the start of the CAPTURED tool name to end of line. Slicing from
+            # m.start() instead put the newline the pattern had to consume at the
+            # front, and most reported lines came back empty.
+            eol = txt.find("\n", m.end(1))
+            line = txt[m.start(1):eol if eol > 0 else len(txt)].strip()
             if MENTION_CONTEXT.search(line):
                 out["mentions"][name] += 1
                 continue
@@ -110,7 +136,7 @@ def audit_run(run_dir, task_hint=None):
                 "offset": m.start(),
             })
         # Mentions: the tool named anywhere, minus what we counted as an invocation.
-        total = len(re.findall(re.escape(name), txt, re.I))
+        total = len(re.findall(re.escape(name), txt, flags))
         out["mentions"][name] += max(
             0, total - sum(1 for i in out["invocations"] if i["tool"] == name)
             - out["mentions"][name])
