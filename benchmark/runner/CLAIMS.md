@@ -227,6 +227,39 @@ Source: recorded in `_local/SUCCESS.md`; re-runnable from the runs directory.
 | Fisher implementation | matches scipy to 1e-9 on all 10 reported tables, and 3 textbook cases with published values |
 | Wilson implementation | matches 3 hand-computed references |
 
+### 4b. Grading is environment-independent — reproduced on a second machine
+
+**The claim we can now make:** re-grading the same run directories on unrelated
+hardware, with a different OS and unpinned dependencies, returns byte-identical
+graded fields. Grading is a pure function of the runs.
+
+Checked 2026-09-18 by an independent operator against the re-grade pack
+(`make_regrade_pack.sh`), 20 runs over `structural-brain-extraction-7t` and
+`diffusion-brain-mask`:
+
+| | producing machine | reproducing machine |
+|---|---|---|
+| OS | Ubuntu 24.04.4, kernel 6.8 | Windows 11, Git Bash |
+| python | 3.13.14 (conda) | 3.13.9 (fresh venv) |
+| deps | image-provided | numpy 2.5.3, scipy 1.18.1, nibabel 5.4.2, hf\_hub 1.32.0, unpinned |
+
+**20 of 20 identical on `verdict`, `score`, `dice`, `passed`.** Dice exact, not
+close — no fourth-decimal drift between BLAS builds. `FORCE_REGRADE=1` throughout,
+so nothing came from a cached envelope; `fetch_reference` reported "0 fetched, 2
+already present", so it was offline by construction rather than by assertion. The
+9-graded/1-`no output` split on 7t means the **failure path is exercised too**, not
+only the happy path. 192 s wall for 9 gradings, ~21 s per 7T volume, single-threaded.
+
+**What it does not cover, and the gap is the larger half.** Nothing here touches
+CVMFS, `module load`, Apptainer, the gateway or the agent. The *grading* plane is
+now the validated one; the *execution* plane is untested and every remaining unknown
+lives there.
+
+**Why this is worth more than a passing check.** These 20 runs now have a
+known-good answer confirmed on two independent environments. If a future grader
+change moves any of them, that is a regression in the grader and not a question
+about someone's machine — which is a distinction we previously could not make.
+
 ---
 
 ## 5. Standing caveats that must travel with any result
