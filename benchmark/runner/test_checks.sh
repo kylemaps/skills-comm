@@ -226,6 +226,53 @@ rm -rf "$T/runs"; for r in 1 2; do mkh $r 291f844a43ec; done; mkh 3 unknown
 expect 1 $? "but PARTIAL recording is refused: two harness versions in one cell"
 rm -rf "$T"
 
+
+echo
+echo "=== regrade_diff: the comparison MANIFEST.md described and nobody implemented"
+T=$(mktemp -d); mkdir -p "$T/exp" "$T/got"
+hdr="task,model,arm,rep,verdict,score,dice,passed,duration_s,tokens_total"
+mkcsv() { printf '%s\n' "$hdr" > "$1/runs_t.csv"
+  printf 't,kimi-k3,env-only,1,PASS,%s,%s,True,600,1000\n' "$2" "$3" >> "$1/runs_t.csv"
+  printf 't,neurodesk-glm-5.2,env+skill,1,PASS,100,0.98,True,700,2000\n' >> "$1/runs_t.csv"; }
+mkcsv "$T/exp" 100 0.9812
+mkcsv "$T/got" 100 0.9812
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >/dev/null 2>&1
+expect 0 $? "identical grading passes"
+
+# Fields that differ on every machine must NOT be a finding.
+sed -i 's/,600,1000/,9999,4242/' "$T/got/runs_t.csv"
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >/dev/null 2>&1
+expect 0 $? "duration and tokens differing is not a finding"
+
+# The neurodesk- prefix appears in run dirs and not the csv; both sides must join.
+mkcsv "$T/got" 100 0.9812
+sed -i 's/^t,kimi-k3,/t,neurodesk-kimi-k3,/' "$T/got/runs_t.csv"
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >/dev/null 2>&1
+expect 0 $? "the neurodesk- prefix does not break the join"
+
+mkcsv "$T/got" 100 0.98121      # 4th-decimal drift
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >"$T/o" 2>&1
+expect 0 $? "fourth-decimal dice drift is noise, not failure"
+grep -q "noise" "$T/o" && ok "  and is reported rather than hidden" || bad "  silently ignored"
+
+mkcsv "$T/got" 100 0.55         # a real difference
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >/dev/null 2>&1
+expect 1 $? "a real dice difference fails"
+
+mkcsv "$T/got" 0 0.9812; sed -i 's/,PASS,0,/,FAIL,0,/' "$T/got/runs_t.csv"
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >/dev/null 2>&1
+expect 1 $? "a flipped verdict fails"
+
+# The one a field-by-field diff skips: nine runs compared, all equal, ten expected.
+mkcsv "$T/got" 100 0.9812; sed -i '/env+skill/d' "$T/got/runs_t.csv"
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T/got" --task t >"$T/o" 2>&1
+expect 1 $? "a MISSING run fails rather than comparing the intersection"
+grep -q "MISSING" "$T/o" && ok "  and says which" || bad "  did not name it"
+
+"$PY" "$HERE/regrade_diff.py" --expected "$T/exp" --got "$T" --task t >/dev/null 2>&1
+expect 1 $? "a missing csv fails instead of comparing nothing"
+rm -rf "$T"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1
