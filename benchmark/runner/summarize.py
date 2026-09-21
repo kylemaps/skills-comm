@@ -595,6 +595,9 @@ def report(runs, task):
     DECIDES_POOLING = [k for k in PROVENANCE_KEYS if k != "skills_sha"]
     not_poolable = []
     heterogeneous = []
+    # Defined here, not inside the `if heterogeneous:` below, because the
+    # return statement reads them whether or not anything varied.
+    within_cell, mixing_cells = [], []
     for k in PROVENANCE_KEYS:
         vals = [r[k] for r in runs]
         known = [v for v in vals if v not in UNRECORDED]
@@ -622,6 +625,25 @@ def report(runs, task):
                            if r["arm"] == a and r[k] not in UNRECORDED} for a in arms}
             (across_arms if all(len(v) == 1 for v in per_arm.values())
              else within_arm).append(k)
+
+        # The same question one level finer: within a CELL, model x arm, which is the
+        # unit we publish a number for. `within_arm` pools every model in an arm, so
+        # it cannot tell "kimi and glm ran on different images" from "kimi's own ten
+        # runs did" -- and only the second makes a published n=10 an average over two
+        # environments with nothing saying so.
+        #
+        # Emitted because the distinction was computed here, printed to a terminal,
+        # and then flattened out of the JSON, so the dashboard could only say
+        # "image_version varies" and a reader had no way to tell which. That is the
+        # weaker of the two claims and it was the only one we shipped.
+        cells = sorted({(r["model"], r["arm"]) for r in runs})
+        for k in heterogeneous:
+            hits = [c for c in cells
+                    if len({r[k] for r in runs
+                            if (r["model"], r["arm"]) == c and r[k] not in UNRECORDED}) > 1]
+            if hits:
+                within_cell.append(k)
+                mixing_cells += ["%s|%s" % c for c in hits]
 
         if within_arm:
             # The printed warning has to agree with the flag. Filtering only what set
@@ -1000,6 +1022,12 @@ def report(runs, task):
         "not_poolable_because": sorted(set(not_poolable)),
         # Anything that varied at all, including harmlessly across arms.
         "provenance_varies": sorted(heterogeneous),
+        # The stronger statement, and the one a reader of a single cell needs:
+        # these fields differ between runs INSIDE at least one model|arm cell, so
+        # that cell's n is an average over more than one environment. Varying
+        # across cells is a pooling caveat; varying within one is a broken cell.
+        "varies_within_cell": sorted(set(within_cell)),
+        "cells_mixing": sorted(set(mixing_cells)),
         "cells": {
             "%s|%s" % (model, arm): {
                 "n": len(rs),

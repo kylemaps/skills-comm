@@ -784,6 +784,14 @@ DEFINITIONS = {
                     "that should have been held constant varied inside a single arm: "
                     "the environment version, or the skill's own content. Per-model "
                     "comparisons are still sound; only a pooled total is not.",
+    "cells not homogeneous": "A cell is one model in one arm, and its number is a "
+                             "rate over its own repeats. In these cells the repeats "
+                             "were NOT all made in the same environment -- the "
+                             "container image changed partway through, usually "
+                             "because runs we had to discard were re-run weeks "
+                             "later. The cell's own figure therefore averages over "
+                             "that change. This is a stronger warning than 'not "
+                             "poolable', which is only about adding cells together.",
     "reason not recorded": "This summary predates the field naming which value caused "
                            "the flag. Re-run summarize.py and it will say which.",
     "Fisher p": "Fisher exact test on the 2x2 table. Probability of a difference this "
@@ -1312,6 +1320,23 @@ def notices(entries):
                         + (" &mdash; " + ", ".join(html.escape(b) for b in because)
                            if because
                            else " &mdash; " + term("reason not recorded")))
+        # The stronger and more specific statement, kept separate from the pooling
+        # caveat above because it says something different. "not poolable" warns
+        # against ADDING cells together. This warns about a single cell: its runs
+        # were not all made in the same environment, so its own n averages over the
+        # difference. A reader looking at one number needs this and the pooling
+        # caveat does not give it to them.
+        #
+        # Absent in older summaries. Absent is not false -- say nothing rather than
+        # implying we checked.
+        wc = s.get("varies_within_cell") or []
+        if wc:
+            ncells = len(s.get("cells_mixing") or [])
+            bits.append(term("cells not homogeneous")
+                        + " &mdash; %d cell%s whose own repeats were not all made "
+                          "in one environment (%s differs inside the cell)"
+                        % (ncells, "" if ncells == 1 else "s",
+                           ", ".join(html.escape(b) for b in wc)))
         if bits:
             rows.append('<tr><td class="l name">%s</td><td class="l note">%s</td></tr>'
                         % (html.escape(name), " &middot; ".join(bits)))
