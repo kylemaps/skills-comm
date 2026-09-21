@@ -197,6 +197,35 @@ expect 1 $? "refuses a task nobody declared"
 expect 1 $? "refuses an arm nobody declared"
 rm -rf "$T"
 
+
+# The distinction the gate got wrong on its first real run: unrecorded is not wrong.
+T=$(mktemp -d); TASK=structural-brain-extraction-7t; SW="$T/sweep.json"
+cat > "$SW" <<J
+{"reps":3,"arms":{"env+skill":{"skills_hash":"291f844a43ec"}},
+ "tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env+skill"]}}}
+J
+mkh() { d="$T/runs/${TASK}__kimi-k3__env+skill__r$1"; mkdir -p "$d/submissions/$TASK"
+  echo x > "$d/submissions/$TASK/output.nii.gz"
+  echo '{"score":100}' > "$d/envelope.json"
+  cat > "$d/run.json" <<J
+{"task_id":"$TASK","model":"kimi-k3","condition":"env+skill","repeat":"$1","exit_code":0,
+ "output_present":true,"skills_seen":[],"skills_installed":"brain-extraction",
+ "image_version":"2026-08-05","opencode_version":"1.18.7","skills_sha":"a",
+ "skills_hash":"$2","prompt_hash":"p","tasks_sha":"t"}
+J
+}
+for r in 1 2 3; do mkh $r unknown; done
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 \
+  --arm env+skill --sweep "$SW" >"$T/o" 2>&1
+expect 0 $? "a cell predating skills_hash is unverifiable, not refused"
+grep -q "UNVERIFIABLE" "$T/o" && ok "  and says so rather than passing silently" \
+                              || bad "  passed with no note"
+rm -rf "$T/runs"; for r in 1 2; do mkh $r 291f844a43ec; done; mkh 3 unknown
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 \
+  --arm env+skill --sweep "$SW" >"$T/o" 2>&1
+expect 1 $? "but PARTIAL recording is refused: two harness versions in one cell"
+rm -rf "$T"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1

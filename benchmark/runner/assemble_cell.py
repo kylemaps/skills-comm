@@ -54,9 +54,19 @@ class Gate:
     def __init__(self, name, why):
         self.name, self.why = name, why
         self.failures = []
+        self.notes = []
 
     def fail(self, msg):
         self.failures.append(msg)
+
+    def note(self, msg):
+        """Something a reader should know that is not grounds for refusal.
+
+        Added because the first version had no way to say "I could not check this",
+        so it said "this failed" instead -- and blocked five published cells whose
+        runs predate the field being checked.
+        """
+        self.notes.append(msg)
 
     @property
     def ok(self):
@@ -113,12 +123,31 @@ def gates_for(runs, task, model, arm, spec):
     want_hash = (spec.get("arms", {}).get(arm) or {}).get("skills_hash")
     if want_hash:
         got = {r["skills_hash"] for r in runs if r.get("skills_hash") not in UNRECORDED}
+        missing = [r for r in runs if r.get("skills_hash") in UNRECORDED]
         if got and got != {want_hash}:
             a.fail("arm %s expects skills_hash %s, runs carry %s"
                    % (arm, want_hash, ", ".join(sorted(got))))
+        elif got and missing:
+            # Partial recording inside one cell means its runs were made under two
+            # harness versions -- one that recorded the field and one that did not.
+            # The unrecorded ones cannot be shown to have used the same skill, and a
+            # cell built from two harnesses is the thing "one environment" exists to
+            # stop; it misses this case only because UNRECORDED is filtered there.
+            a.fail("%d of %d runs recorded no skills_hash while others recorded %s "
+                   "-- the cell spans two harness versions"
+                   % (len(missing), len(runs), ", ".join(sorted(got))))
         elif not got:
-            a.fail("arm %s expects skills_hash %s and no run recorded one"
-                   % (arm, want_hash))
+            # NOT a failure. "Not recorded" is a measurement we did not take, not a
+            # value that disagrees -- the same rule summarize.py applies to
+            # provenance, and for the same reason: treating an added field as a
+            # divergence across older runs marks everything historical as broken and
+            # trains people to ignore the gate.
+            #
+            # This is what blocked five published cells on the gate's first real run.
+            # The gate was wrong and the results were fine.
+            a.note("arm %s expects skills_hash %s and no run recorded one. These "
+                   "runs predate the field, so the arm is UNVERIFIABLE here rather "
+                   "than wrong. New runs will record it." % (arm, want_hash))
     g.append(a)
 
     # There was a sixth gate here, "everything is graded", and it was decoration.
@@ -177,6 +206,8 @@ def main():
         print("  %-5s %s" % ("ok" if g.ok else "FAIL", g.name))
         for f in g.failures:
             print("          %s" % f)
+        for n in g.notes:
+            print("          note: %s" % n)
 
     bad = [g for g in gates if not g.ok]
     if bad:

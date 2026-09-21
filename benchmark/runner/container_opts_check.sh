@@ -129,9 +129,31 @@ for d in $dirs; do
   # is the worst failure this one could have, and only the negative control caught
   # it: the fixture with a known --overlay stopped failing.
   if [ "${SAMPLE:-12}" = all ]; then
-    files=$(ls "${d%/}" 2>/dev/null | sed "s|^|${d%/}/|")
+    cand=$(ls "${d%/}" 2>/dev/null | sed "s|^|${d%/}/|")
   else
-    files=$(ls "${d%/}" 2>/dev/null | head -"${SAMPLE:-12}" | sed "s|^|${d%/}/|")
+    cand=$(ls "${d%/}" 2>/dev/null | head -"${SAMPLE:-12}" | sed "s|^|${d%/}/|")
+  fi
+  # A COMMAND WRAPPER, not everything in the directory. These dirs also hold the
+  # installer, activate/deactivate scripts, an uninstaller, README, LICENSE and
+  # commands.txt -- and the installer legitimately mentions options the wrappers
+  # never pass. On the real CVMFS this reported synthstrip as passing --nv; the hit
+  # was run_transparent_singularity.sh, and the actual mri_synthstrip wrapper is a
+  # plain read-only exec identical to fsl's. A false positive on the one tool whose
+  # behaviour the whole benchmark's mechanism claim rests on.
+  #
+  # A wrapper is defined by what it does: exec the SIF. That is the file whose
+  # options reach apptainer at run time, and nothing else in the directory does.
+  # Two filters, because neither alone is enough. The installer GENERATES wrappers,
+  # so it contains a `singularity exec` template and passes the content test; and a
+  # name test alone would break the moment a container ships a differently-named
+  # helper. Exclude the known non-wrappers by name, then require the exec line.
+  cand=$(printf '%s\n' $cand | grep -vE \
+    '/(run_transparent_singularity\.sh|ts_[^/]*|activate_[^/]*|deactivate_[^/]*|LICENSE|README\.md|[^/]*\.(txt|md|simg|json)|manual_module_files)$')
+  files=$(grep -lE 'singularity[^|]*exec|apptainer[^|]*exec' $cand 2>/dev/null)
+  if [ -z "$files" ]; then
+    echo "  ?? $name  (no command wrapper among $(printf '%s\n' $cand | wc -l) sampled"
+    echo "            files -- raise SAMPLE, the wrappers may sort later)"
+    continue
   fi
   hits=$(grep -lE -- "$RISKY" $files 2>/dev/null | head -5)
   if [ -n "$hits" ]; then
