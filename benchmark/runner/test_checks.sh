@@ -134,6 +134,69 @@ expect 0 $? "passes when the environment is constant"
 expect 1 $? "refuses a single task rather than calling it poolable"
 rm -rf "$T"
 
+
+echo
+echo "=== assemble_cell: every gate must be able to REFUSE"
+# The gate exists to say no. Each block below makes exactly one thing wrong and
+# asserts the refusal, because a gate only shown to pass is a transport step.
+T=$(mktemp -d); TASK=structural-brain-extraction-7t; SW="$T/sweep.json"
+cat > "$SW" <<J
+{"reps":3,
+ "arms":{"env-only":{"skills_hash":null},"env+skill":{"skills_hash":"291f844a43ec"}},
+ "tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only","env+skill"]}}}
+J
+# One run. `over` is a JSON fragment merged in to break exactly one field.
+mkrun() { d="$T/runs/${TASK}__kimi-k3__$1__r$2"; mkdir -p "$d/submissions/$TASK"
+  echo x > "$d/submissions/$TASK/output.nii.gz"
+  [ "${3:-graded}" = graded ] && echo '{"score":100,"verdict":"PASS"}' > "$d/envelope.json"
+  cat > "$d/run.json" <<J
+{"task_id":"$TASK","model":"kimi-k3","condition":"$1","repeat":"$2","exit_code":0,
+ "output_present":true,"skills_seen":[],"skills_installed":"$4",
+ "image_version":"${5:-2026-08-05}","opencode_version":"1.18.7","skills_sha":"a",
+ "skills_hash":"${6:-291f844a43ec}","prompt_hash":"p","tasks_sha":"t"}
+J
+}
+run_gate() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" \
+  --model kimi-k3 --arm "$1" --sweep "$SW" >"$T/out" 2>&1; }
+
+rm -rf "$T/runs"; for r in 1 2 3; do mkrun env+skill $r graded brain-extraction; done
+run_gate env+skill; expect 0 $? "passes a clean, complete cell"
+
+rm -rf "$T/runs"; for r in 1 2; do mkrun env+skill $r graded brain-extraction; done
+run_gate env+skill; expect 1 $? "refuses 2 of 3 runs"
+grep -q "complete" "$T/out" && ok "  and names the 'complete' gate" || bad "  wrong gate named"
+
+rm -rf "$T/runs"; for r in 1 2 3; do mkrun env+skill $r ungraded brain-extraction; done
+run_gate env+skill; expect 1 $? "refuses an ungraded run"
+# Via the exclusions gate, not a separate "graded" one. summarize.py already marks
+# an ungraded run with output as "not graded yet", so a dedicated gate could only
+# fire where this one already had. Asserting the gate NAME is what exposed that.
+grep -q "not graded yet" "$T/out" && ok "  via the exclusions gate, naming why" || bad "  refused by the wrong gate"
+
+rm -rf "$T/runs"; for r in 1 2; do mkrun env+skill $r graded brain-extraction; done
+mkrun env+skill 3 graded brain-extraction 2026-09-01
+run_gate env+skill; expect 1 $? "refuses a cell spanning two images"
+grep -q "FAIL  one environment" "$T/out" && ok "  via the 'one environment' gate" || bad "  refused by the wrong gate"
+
+rm -rf "$T/runs"; for r in 1 2; do mkrun env+skill $r graded brain-extraction; done
+mkrun env+skill 3 graded brain-extraction 2026-08-05 deadbeefcafe
+run_gate env+skill; expect 1 $? "refuses runs whose skills_hash is not the arm's"
+grep -q "FAIL  the arm is what it claims" "$T/out" && ok "  via the 'arm is what it claims' gate" || bad "  refused by the wrong gate"
+
+# An env+skill run with no skill installed is misassigned -- summarize excludes it,
+# so this also exercises the unresolved-exclusion gate.
+rm -rf "$T/runs"; for r in 1 2 3; do mkrun env+skill $r graded ""; done
+run_gate env+skill; expect 1 $? "refuses a skill arm with no skill installed"
+
+rm -rf "$T/runs"; for r in 1 2 3; do mkrun env-only $r graded ""; done
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task not-a-task --model kimi-k3 \
+  --arm env-only --sweep "$SW" >/dev/null 2>&1
+expect 1 $? "refuses a task nobody declared"
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 \
+  --arm env+skill-nonexistent --sweep "$SW" >/dev/null 2>&1
+expect 1 $? "refuses an arm nobody declared"
+rm -rf "$T"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1

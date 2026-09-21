@@ -1,0 +1,52 @@
+{
+  "_comment": [
+    "The sweep we intend to run. This file is the EXPECTED state; results/ is the",
+    "observed state. Nothing else in the pipeline knows what a complete sweep is.",
+    "",
+    "Two problems it exists to solve, both from benchmark/ci/AUTOMATION.md §4:",
+    "",
+    "1. A cell that never reports publishes nothing and complains about nothing.",
+    "   Absence is invisible on a dashboard that renders what exists, so a missing",
+    "   cell is indistinguishable from one nobody asked for. Diff observed against",
+    "   this to tell them apart.",
+    "2. A cell that reports n=10 against an expected count taken from its own job",
+    "   input is self-certifying. The expected count has to come from here.",
+    "",
+    "skills_hash per arm is the content hash the arm is DEFINED by. A run whose",
+    "recorded hash differs did not test the thing this arm claims to test, whatever",
+    "its directory was called. null means unchecked, not unimportant: env-only runs",
+    "record the hash of the snapshot that was present but not installed, which is",
+    "correct provenance and not something to assert on."
+  ],
+
+  "reps": 10,
+
+  "arms": {
+    "env-only": { "skills_hash": null },
+    "env+skill": { "skills_hash": "291f844a43ec" },
+    "env+skill-michele": { "skills_hash": "5ba66f0c7ddf" }
+  },
+
+  "tasks": {
+    "structural-brain-extraction-7t": {
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "arms": ["env-only", "env+skill", "env+skill-michele"]
+    },
+    "structural-brain-extraction-7t-nodura": {
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "arms": ["env-only", "env+skill"]
+    },
+    "structural-brain-extraction-motion": {
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "arms": ["env-only", "env+skill"]
+    },
+    "diffusion-brain-mask": {
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3"],
+      "arms": ["env-only", "env+skill"]
+    }
+  },
+
+  "_retired_models": {
+    "qwen3.5-122b": "Retired from the gateway 2026-09. 9 runs (7 stroke, 2 nodura) can never be re-run, so those cells are permanently short. Not listed above: a cell we cannot complete must not be reported as missing every time the diff runs."
+  }
+}
