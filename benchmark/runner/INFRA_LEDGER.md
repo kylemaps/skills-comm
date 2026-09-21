@@ -189,5 +189,18 @@ configured to send, and to where, before concluding the server changed.
   are indistinguishable in the data, the run is excluded and re-run, not graded.
 - **Provenance has to be recorded per run and checked before pooling.** Entries 3, 5 and
   6 were all detectable in `run.json` before anyone looked at a pass rate.
+- **Agreement between our checks is weaker evidence than it looks, because they share a
+  source.** `run_bench.sh` writes every provenance field in one `printf` from the
+  environment. `summarize.py`, `pool_check.py`, `assemble_cell.py`, `build_index.py` and
+  `pack_manifest.py` then all read that one file. Five checks, one origin: if
+  `run_bench.sh` records the wrong `image_version`, all five agree and none can notice.
+  Only `output_present` is cross-checked against a second source — the disk — and only
+  because it once reported 0/70 with 50 masks present.
+  cluster-prod supplied the sharpest version of this failing: they reported a job wedged
+  on three pieces of evidence — pod age, last-output timestamp, daemon CPU — all three
+  wrong, all pointing the same way, producing one internally consistent story with
+  nothing inside it to contradict. It broke only when a different session brought a
+  different data source. **Corroboration between correlated measurements is not
+  corroboration.**
 - **Split the planes.** The agent and the grader share a filesystem on the Play server.
   CI separates them, which removes a whole class of this.
