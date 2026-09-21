@@ -183,6 +183,17 @@ configured to send, and to where, before concluding the server changed.
 
 ## What follows from it
 
+- **To catch an absence, assert an expected COUNT. Inspecting what is present cannot
+  do it.** Three misses this week at three unrelated layers: a run row missing from a
+  re-graded pack, where diffing the intersection compares nine runs, finds them
+  identical and reports success about a ten-run set; a rep missing from a cell, where
+  one-rep-per-job turns a short loop into an absent artifact; and a workflow missing
+  entirely, where "the re-grade is the first workload" was asserted for days by two
+  people about a thing no file could dispatch. Nothing was WRONG in any of the three.
+  Something was absent, and absence does not announce itself to a check that iterates
+  over what it found. This is why `sweep.json` declares the expected cells, and why
+  `assemble_cell.py` takes its rep count from there rather than from the job that ran.
+
 - **Preflight before every sweep**, hygiene at the top of every session. Most of the cost
   above is not missing tooling, it is tooling not run.
 - **An infrastructure failure must never be scorable as a model result.** Where the two

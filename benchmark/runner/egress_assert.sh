@@ -53,6 +53,25 @@ WARN=0
 HOSTS="${HOSTS:-surfer.nmr.mgh.harvard.edu huggingface.co llm.neurodesk.org \
 github.com files.pythonhosted.org}"
 
+# LOAD-BEARING FOR OTHER JOBS, deliberately not asserted here. A sweep does not need
+# these, and asserting a host this job has no use for is how a check starts failing
+# for reasons nobody acts on. Named because whoever writes the egress allowlist needs
+# them, and because they are invisible to any transcript sweep:
+#
+#   objects.githubusercontent.com   a GitHub release download 302s here. It is NOT
+#                                   github.com, and it is in none of our 24 observed
+#                                   hosts because nothing has ever downloaded a
+#                                   release asset. regrade.yml will.
+#
+# That third case is the one worth understanding. The 24 came from transcripts, so
+# they miss things by three different mechanisms: huggingface.co because GRADING runs
+# after the transcript is written; llm.neurodesk.org because it is the HARNESS rather
+# than the agent; and this one because the infrastructure that uses it did not exist
+# when we measured. The list is a floor in a stronger sense than "we might have missed
+# one" -- NEW INFRASTRUCTURE CREATES NEW HOSTS, and no measurement taken before it
+# exists can contain them. Re-derive whenever how-we-fetch-anything changes.
+# Raised by cluster-explorer, 2026-09-21.
+
 # Defined once, not inside the loop where it was first written.
 _resolve_py() { python3 -c "import socket,sys;socket.gethostbyname(sys.argv[1])" "$1"; }
 
