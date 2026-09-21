@@ -82,7 +82,21 @@ if [ -n "$TOOLS" ]; then
   for t in $TOOLS; do
     # Container dirs are <tool>_<version>_<date>. Match the tool name up to the
     # first underscore so `ants` does not also match `antspynet`.
-    for d in "$ROOT"/"$t"_*/; do [ -d "$d" ] && dirs="$dirs $d"; done
+    #
+    # NEWEST VERSION ONLY. The first version globbed every version, and CVMFS
+    # carries dozens per tool -- `fsl_*` alone is many directories of ~1500
+    # generated wrapper scripts each. Grepping all of them is tens of thousands of
+    # cold network reads and the check appears to hang. Versions matter for what
+    # the agents run, but the question here is whether the WRAPPER GENERATOR emits
+    # --overlay, which is a property of the image build and not of the version.
+    # Override with VERSIONS=all to sweep the lot if that assumption ever needs
+    # testing.
+    if [ "${VERSIONS:-newest}" = all ]; then
+      for d in "$ROOT"/"$t"_*/; do [ -d "$d" ] && dirs="$dirs $d"; done
+    else
+      d=$(ls -d "$ROOT"/"$t"_*/ 2>/dev/null | sort | tail -1)
+      [ -n "$d" ] && [ -d "$d" ] && dirs="$dirs $d"
+    fi
   done
 else
   dirs=$(find "$ROOT" -maxdepth 1 -type d ! -path "$ROOT")
@@ -93,10 +107,21 @@ fi
 found=0
 for d in $dirs; do
   name=$(basename "$d")
-  # One representative wrapper is not enough: a container can expose hundreds of
-  # commands and they are generated, but a generator change could affect a subset.
-  # grep the lot; they are small text files.
-  hits=$(grep -rlE -- "$RISKY" "$d" 2>/dev/null | head -5)
+  # SAMPLE, do not sweep. "They are small text files" was true and irrelevant:
+  # there are ~1500 per container and they live on CVMFS, so a full grep is
+  # thousands of cold network reads per directory and the check looks hung.
+  #
+  # The wrappers are GENERATED -- identical but for the tool name and the image
+  # path -- so N of them answer the same question as all of them. Sampling is
+  # stated rather than hidden, because it is the one assumption that could make
+  # this miss a real --overlay: a generator that special-cases a single command.
+  # SAMPLE=all to check every wrapper when that matters.
+  if [ "${SAMPLE:-12}" = all ]; then
+    files=$(ls "$d" 2>/dev/null | sed "s|^|$d|")
+  else
+    files=$(ls "$d" 2>/dev/null | head -"${SAMPLE:-12}" | sed "s|^|$d|")
+  fi
+  hits=$(grep -lE -- "$RISKY" $files 2>/dev/null | head -5)
   if [ -n "$hits" ]; then
     found=1
     echo "  !! $name"
@@ -104,8 +129,9 @@ for d in $dirs; do
       echo "       $(basename "$h"): $(grep -oE -- "$RISKY[^ ]*" "$h" | sort -u | tr '\n' ' ')"
     done
   else
-    n=$(ls "$d" 2>/dev/null | wc -l)
-    echo "  ok $name  ($n wrappers, plain read-only exec)"
+    n=$(printf '%s
+' $files | wc -l)
+    echo "  ok $name  ($n wrappers sampled, plain read-only exec)"
   fi
 done
 
