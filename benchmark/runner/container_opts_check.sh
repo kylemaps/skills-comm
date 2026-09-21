@@ -94,7 +94,13 @@ if [ -n "$TOOLS" ]; then
     if [ "${VERSIONS:-newest}" = all ]; then
       for d in "$ROOT"/"$t"_*/; do [ -d "$d" ] && dirs="$dirs $d"; done
     else
-      d=$(ls -d "$ROOT"/"$t"_*/ 2>/dev/null | sort | tail -1)
+      # Sort on the trailing _YYYYMMDD, not on the whole name. A plain sort is
+      # LEXICAL, so fsl_6.0.7.8_20240913 sorts after fsl_6.0.7.22_20260416 -- "8"
+      # beats "2" as a character. The first run of this on real CVMFS duly checked
+      # a 2024 image while we pin 6.0.7.22, and reported "ok" about a container no
+      # agent has ever used. The date field is fixed-width and sorts correctly.
+      d=$(ls -d "$ROOT"/"$t"_*/ 2>/dev/null \
+          | sed 's|/$||' | awk -F_ '{print $NF, $0}' | sort | tail -1 | cut -d' ' -f2-)
       [ -n "$d" ] && [ -d "$d" ] && dirs="$dirs $d"
     fi
   done
@@ -116,10 +122,16 @@ for d in $dirs; do
   # stated rather than hidden, because it is the one assumption that could make
   # this miss a real --overlay: a generator that special-cases a single command.
   # SAMPLE=all to check every wrapper when that matters.
+  # ${d%/}/ normalises the separator. The two ways $d is produced disagree about
+  # the trailing slash -- the glob keeps it, the newest-version selection strips it
+  # -- and "$d" alone built paths like .../hdbet_1_xhd-bet. grep then matched
+  # nothing and every container reported "ok". A check that silently reports clean
+  # is the worst failure this one could have, and only the negative control caught
+  # it: the fixture with a known --overlay stopped failing.
   if [ "${SAMPLE:-12}" = all ]; then
-    files=$(ls "$d" 2>/dev/null | sed "s|^|$d|")
+    files=$(ls "${d%/}" 2>/dev/null | sed "s|^|${d%/}/|")
   else
-    files=$(ls "$d" 2>/dev/null | head -"${SAMPLE:-12}" | sed "s|^|$d|")
+    files=$(ls "${d%/}" 2>/dev/null | head -"${SAMPLE:-12}" | sed "s|^|${d%/}/|")
   fi
   hits=$(grep -lE -- "$RISKY" $files 2>/dev/null | head -5)
   if [ -n "$hits" ]; then
