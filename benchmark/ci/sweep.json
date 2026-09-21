@@ -12,6 +12,17 @@
     "2. A cell that reports n=10 against an expected count taken from its own job",
     "   input is self-certifying. The expected count has to come from here.",
     "",
+    "CORRECTED 2026-09-21 against the actual run data, having first been written",
+    "from memory. Three errors, and the pattern in all three is that a declared-truth",
+    "file written from recollection is worse than no file, because the gate that",
+    "reads it then produces confident wrong answers:",
+    "  - qwen3.5-122b was omitted as 'retired', but it has 10/10 runs in seven",
+    "    PUBLISHED cells. The gate would never have examined them -- a published",
+    "    cell the gate cannot see is a hole in the only thing the gate is for.",
+    "  - neurodesk-qwen3 was declared for 7t and motion and has never run there.",
+    "    Permanent false 'missing cell' every time the audit runs.",
+    "  - stroke was missing entirely despite 150 runs.",
+    "",
     "skills_hash per arm is the content hash the arm is DEFINED by. A run whose",
     "recorded hash differs did not test the thing this arm claims to test, whatever",
     "its directory was called. null means unchecked, not unimportant: env-only runs",
@@ -29,15 +40,15 @@
 
   "tasks": {
     "structural-brain-extraction-7t": {
-      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "qwen3.5-122b"],
       "arms": ["env-only", "env+skill", "env+skill-michele"]
     },
     "structural-brain-extraction-7t-nodura": {
-      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "qwen3.5-122b"],
       "arms": ["env-only", "env+skill"]
     },
     "structural-brain-extraction-motion": {
-      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "neurodesk-qwen3"],
+      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "qwen3.5-122b"],
       "arms": ["env-only", "env+skill"]
     },
     "diffusion-brain-mask": {
@@ -46,7 +57,45 @@
     }
   },
 
-  "_retired_models": {
-    "qwen3.5-122b": "Retired from the gateway 2026-09. 9 runs (7 stroke, 2 nodura) can never be re-run, so those cells are permanently short. Not listed above: a cell we cannot complete must not be reported as missing every time the diff runs."
+  "_not_yet_declared": {
+    "structural-brain-extraction-stroke": [
+      "150 runs exist on the VM and none are published. Its model and arm list",
+      "cannot be read from results/, so declaring it here would mean guessing --",
+      "which is exactly how the three errors above got in. Populate it from the",
+      "run data, not from memory: run assemble_audit once the stroke summary is",
+      "published, or read the cell list off ~/bench/runs."
+    ]
+  },
+
+  "_known_permanently_short": {
+    "_comment": [
+      "Cells that can NEVER pass the 'no unresolved exclusions' gate, because the",
+      "runs needing re-run cannot be re-run. Recorded so the audit can separate",
+      "'nobody has got to this' from 'this is as good as it will ever get'.",
+      "",
+      "These are not short on COUNT -- all are n=10. They are short on VALID runs:",
+      "some of the ten are excluded and the model that produced them is gone, so",
+      "the exclusion can never be resolved. A cell that will fail a gate forever",
+      "needs to be distinguishable from one that will pass once someone acts."
+    ],
+    "reason": "qwen3.5-122b was retired from the gateway in September 2026. 9 excluded runs (7 stroke, 2 nodura) can never be re-run.",
+    "cells": [
+      "structural-brain-extraction-7t-nodura|qwen3.5-122b|env-only",
+      "structural-brain-extraction-7t-nodura|qwen3.5-122b|env+skill"
+    ]
+  },
+
+  "_anomalies": {
+    "neurodesk-qwen3": [
+      "One run exists: structural-brain-extraction-7t-nodura | env+skill | n=1.",
+      "A model id that should not exist -- almost certainly a double-prefixed",
+      "`neurodesk/neurodesk-qwen3` from a mistyped dispatch. Deliberately NOT",
+      "declared as a model: declaring it creates a cell that can never be complete,",
+      "and not declaring it leaves one published run the gate never examines.",
+      "Neither is right, which is the point -- it is the same shape as the",
+      "truncated task id in INFRA_LEDGER entry 10, where fourteen graded outputs",
+      "belonged to nothing. Resolve by deciding whether that run is a qwen3 run",
+      "mislabelled, or junk to be removed."
+    ]
   }
 }
