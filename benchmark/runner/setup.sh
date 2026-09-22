@@ -43,7 +43,7 @@ fi
 
 echo "=== 5. environment ==="
 echo "  image:    ${NEURODESKTOP_VERSION:-unknown}"
-echo "  opencode: $(/usr/bin/opencode --version 2>/dev/null || echo MISSING)"
+echo "  opencode: $("${OPENCODE_BIN:-/usr/bin/opencode}" --version 2>/dev/null || echo MISSING)"
 echo "  sbatch:   $(command -v sbatch || echo MISSING)"
 for m in numpy nibabel scipy; do
   python -c "import $m" 2>/dev/null && echo "  python:   $m ok" || echo "  python:   $m MISSING"

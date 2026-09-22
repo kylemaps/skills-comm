@@ -63,7 +63,13 @@ if [ ! -f "$OC_CHECK" ]; then
   ENVFAIL=1
 fi
 
-AVAIL=$(timeout 60 /usr/bin/opencode models 2>/dev/null)
+# The agent binary. Absolute on the VM because the neurodesktop image ships a
+# wrapper called `opencode` earlier on PATH that is not the CLI. In CI there is
+# no such wrapper and npm -g installs to the node toolchain, so /usr/bin/opencode
+# does not exist -- the first real cluster run died with exit=127 out=MISSING.
+# Overridable, defaulting to the VM behaviour so that machine is unaffected.
+OPENCODE_BIN="${OPENCODE_BIN:-/usr/bin/opencode}"
+AVAIL=$(timeout 60 "$OPENCODE_BIN" models 2>/dev/null)
 OK_MODELS=()
 MISSING=()
 for m in "$@"; do

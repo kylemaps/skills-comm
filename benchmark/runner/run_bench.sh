@@ -35,8 +35,16 @@ SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
 # 5400 clears every run we have ever completed. A wall is only safe when it sits
 # outside the distribution -- inside it, it censors, and the censoring is invisible
 # because a truncated run looks exactly like a model that produced nothing.
+
 TIMEOUT="${RUN_TIMEOUT:-5400}"
 [ -n "${RUN_TIMEOUT:-}" ] || echo "note: RUN_TIMEOUT unset, using the ${TIMEOUT}s default" >&2
+
+# The agent binary. Absolute on the VM because the neurodesktop image ships a
+# wrapper called `opencode` earlier on PATH that is not the CLI. In CI there is
+# no such wrapper and npm -g installs to the node toolchain, so /usr/bin/opencode
+# does not exist -- the first real cluster run died with exit=127 out=MISSING.
+# Overridable, defaulting to the VM behaviour so that machine is unaffected.
+OPENCODE_BIN="${OPENCODE_BIN:-/usr/bin/opencode}"
 
 # A truncated task id (`structural-br-extraction-stroke`) once produced a run
 # directory and fourteen graded outputs under a name no grader pack contains. The
@@ -106,7 +114,7 @@ PROMPT_HASH=$(md5sum "$RUN/prompt.txt" 2>/dev/null | cut -c1-12)
 # the cluster's own per-node logs when a result looks strange.
 printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","prompt_hash":"%s","tasks_sha":"%s","skills_installed":"%s","node":"%s","start":"%s"}\n' \
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
-  "$(/usr/bin/opencode --version 2>/dev/null)" \
+  "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "${SKILLS_HASH:-none}" "${PROMPT_HASH:-none}" \
   "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
@@ -148,7 +156,7 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 #   /tmp, is refused, and gives up). A benchmark agent must be able to run tools.
 #   Only safe because each run is a disposable sandbox -- do NOT carry this to shared
 #   infrastructure without an isolated runner pool.
-timeout "$TIMEOUT" /usr/bin/opencode run --dir "$RUN" -m "$MODEL" --auto "$(cat "$RUN/prompt.txt")" \
+timeout "$TIMEOUT" "$OPENCODE_BIN" run --dir "$RUN" -m "$MODEL" --auto "$(cat "$RUN/prompt.txt")" \
   < /dev/null > "$RUN/transcript.txt" 2>&1
 RC=$?
 # run.json is written before the agent starts, so it cannot know which tools the
