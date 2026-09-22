@@ -93,6 +93,16 @@ cat "$HERE/wrapper.txt" >> "$RUN/prompt.txt"
 # experiments would be indistinguishable in the record. Hash the skill files as well.
 SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -name '*.py' \
   -o -name '*.sh' \) 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+# d41d8cd98f00 is the md5 of nothing, which is what the above produces when
+# SKILLS_SRC is empty or absent -- as it is for env-only in CI. It LOOKS like a
+# hash, so it reads as a real and different skill rather than as no skill, and the
+# first cluster run duly recorded it. On the VM the control arm inherited a default
+# SKILLS_SRC and recorded the snapshot that was present but not installed, so the
+# same condition would carry two different values and CI control runs would never
+# pool with VM ones.
+case "$SKILLS_HASH" in
+  d41d8cd98f00|"") SKILLS_HASH=none ;;
+esac
 
 # "The prompt is byte-identical across arms" is the central claim of the whole
 # comparison, and until now we asserted it rather than checked it. Hashing it
