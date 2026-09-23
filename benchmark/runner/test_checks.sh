@@ -195,6 +195,29 @@ expect 1 $? "refuses a task nobody declared"
 "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 \
   --arm env+skill-nonexistent --sweep "$SW" >/dev/null 2>&1
 expect 1 $? "refuses an arm nobody declared"
+
+# Staging over a cell that is already published. Run directories are named
+# <task>__<model>__<arm>__rN and carry no date and no node, so a CI re-run of any
+# declared cell produces exactly the ten names already in results/runs/.
+rm -rf "$T/runs" "$T/stage"; mkdir -p "$T/stage"
+for r in 1 2 3; do mkrun env+skill $r graded brain-extraction; done
+stage_gate() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" \
+  --model kimi-k3 --arm env+skill --sweep "$SW" --stage "$T/stage" \
+  ${1:+--replace} >"$T/out" 2>&1; }
+stage_gate; expect 0 $? "stages into an empty tree"
+
+rm -rf "$T/runs"
+for r in 1 2 3; do mkrun env+skill $r graded brain-extraction 2026-09-01; done
+stage_gate; expect 1 $? "refuses to overwrite a published cell"
+grep -q "FAIL  not a replacement" "$T/out" && ok "  via the 'not a replacement' gate" || bad "  refused by the wrong gate"
+grep -q "image_version 2026-08-05 -> 2026-09-01" "$T/out" && ok "  and names what would change" || bad "  does not say what would change"
+
+stage_gate yes; expect 0 $? "--replace allows it"
+grep -q "3 published run(s) will be overwritten" "$T/out" && ok "  and says how many" || bad "  silent about the overwrite"
+
+# Identical provenance is still a replacement: the score and the transcript that
+# produced it are gone, and n=10 before and after says nothing happened.
+stage_gate; expect 1 $? "refuses even when the environment is unchanged"
 rm -rf "$T"
 
 

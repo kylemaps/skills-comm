@@ -73,7 +73,36 @@ class Gate:
         return not self.failures
 
 
-def gates_for(runs, task, model, arm, spec):
+def collisions(runs, task, stage):
+    """Run directories in `stage` that these runs would write over, and what changes.
+
+    Run directories are named <task>__<model>__<arm>__rN and carry nothing about WHEN
+    or WHERE they ran, so a cell re-run in a new environment produces the same ten
+    names as the one already published. Copying over them is a replacement that looks
+    like an addition: the tree still has ten runs, the summary still says n=10, and
+    the environment the cell was measured in has changed with nothing recording that
+    it did.
+    """
+    out = []
+    for r in runs:
+        cur = os.path.join(stage, task,
+                           os.path.basename(r["dir"].rstrip("/\\")), "run.json")
+        if not os.path.exists(cur):
+            continue
+        try:
+            old = json.load(open(cur, encoding="utf-8"))
+        except ValueError:
+            out.append((os.path.basename(os.path.dirname(cur)),
+                        "the published run.json is unreadable"))
+            continue
+        moved = ["%s %s -> %s" % (k, old.get(k), r.get(k)) for k in DECIDES
+                 if old.get(k) not in UNRECORDED and old.get(k) != r.get(k)]
+        out.append((os.path.basename(os.path.dirname(cur)),
+                    "; ".join(moved) or "same environment, different run"))
+    return out
+
+
+def gates_for(runs, task, model, arm, spec, stage=None, replace=False):
     g = []
 
     # ---- complete ----------------------------------------------------------
@@ -171,6 +200,21 @@ def gates_for(runs, task, model, arm, spec):
                  % labels[""])
     g.append(lbl)
 
+    # ---- not a silent replacement ------------------------------------------
+    if stage is not None:
+        rep = Gate("not a replacement",
+                   "Every declared cell already has ten published runs, and a CI "
+                   "re-run writes the same ten directory names. Overwriting them "
+                   "swaps the environment a published cell was measured in and "
+                   "leaves the count unchanged, so nothing downstream can see it.")
+        hits = collisions(runs, task, stage)
+        for name, what in hits:
+            (rep.note if replace else rep.fail)("%s: %s" % (name, what))
+        if hits and replace:
+            rep.note("--replace given: %d published run(s) will be overwritten"
+                     % len(hits))
+        g.append(rep)
+
     # There was a sixth gate here, "everything is graded", and it was decoration.
     # summarize.py already excludes an ungraded run that produced output, with the
     # reason "not graded yet -- run the grader on this task", so the exclusions gate
@@ -194,13 +238,17 @@ def main():
     ap.add_argument("--arm", required=True)
     ap.add_argument("--sweep", default=os.path.join(HERE, "..", "ci", "sweep.json"))
     ap.add_argument("--stage", help="if the gates pass, copy the graded facts here")
+    ap.add_argument("--replace", action="store_true",
+                    help="allow overwriting published runs of this cell. Say it out "
+                         "loud: the old measurement is gone and git is the only "
+                         "record that it was different.")
     ap.add_argument("--explain", action="store_true",
                     help="print what each gate protects against, and stop")
     a = ap.parse_args()
 
     spec = json.load(open(a.sweep, encoding="utf-8"))
     if a.explain:
-        for g in gates_for([], a.task, a.model, a.arm, spec):
+        for g in gates_for([], a.task, a.model, a.arm, spec, a.stage, a.replace):
             print("%-28s %s" % (g.name, g.why))
         return 0
 
@@ -222,7 +270,7 @@ def main():
         raise SystemExit("REFUSED: no runs matched this cell. An empty cell is not a "
                          "complete one -- check the model prefix and the arm label.")
 
-    gates = gates_for(runs, a.task, model, a.arm, spec)
+    gates = gates_for(runs, a.task, model, a.arm, spec, a.stage, a.replace)
     for g in gates:
         print("  %-5s %s" % ("ok" if g.ok else "FAIL", g.name))
         for f in g.failures:
