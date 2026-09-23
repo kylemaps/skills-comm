@@ -641,6 +641,14 @@ def report(runs, task):
         # weaker of the two claims and it was the only one we shipped.
         cells = sorted({(r["model"], r["arm"]) for r in runs})
         for k in heterogeneous:
+            # DECIDES_POOLING only. skills_sha is the repo commit, so it moves
+            # whenever the RUNNER changes and not only when the skill does --
+            # summarize already excludes it from the poolable flag for that reason,
+            # and this warning ignoring it would have put "cells not homogeneous" on
+            # diffusion, which is single-image 80/80 and our load-bearing result. A
+            # warning that fires on our cleanest data is one people learn to ignore.
+            if k not in DECIDES_POOLING:
+                continue
             hits = [c for c in cells
                     if len({r[k] for r in runs
                             if (r["model"], r["arm"]) == c and r[k] not in UNRECORDED}) > 1]
