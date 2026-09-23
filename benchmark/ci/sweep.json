@@ -39,6 +39,22 @@
   },
 
   "tasks": {
+    "structural-brain-extraction": {
+      "_comment": [
+        "The first cells measured on the cluster rather than the VM. A new task on",
+        "purpose: every cell declared below already has its full ten runs, so a",
+        "cluster re-run of any of them would overwrite a VM measurement under the",
+        "same ten directory names.",
+        "",
+        "One model, not five. Declaring the other four would create eight cells that",
+        "are missing from the moment this file is saved, and a permanent false",
+        "'missing cell' is the third of the three errors corrected above. glm-5.2 is",
+        "the only model that has completed a cluster job. Add models here as they",
+        "are actually scheduled."
+      ],
+      "models": ["glm-5.2"],
+      "arms": ["env-only", "env+skill"]
+    },
     "structural-brain-extraction-7t": {
       "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3", "qwen3.5-122b"],
       "arms": ["env-only", "env+skill", "env+skill-michele"]
