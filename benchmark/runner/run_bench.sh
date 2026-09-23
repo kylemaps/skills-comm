@@ -122,14 +122,23 @@ PROMPT_HASH=$(md5sum "$RUN/prompt.txt" 2>/dev/null | cut -c1-12)
 # NOT in PROVENANCE_KEYS. Scheduling is not ours to control, so making a multi-node
 # cell un-poolable would fire constantly and be ignored. This exists to join against
 # the cluster's own per-node logs when a result looks strange.
-printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","prompt_hash":"%s","tasks_sha":"%s","skills_installed":"%s","node":"%s","start":"%s"}\n' \
+# label: benchmark | exploratory. run.yml has offered this as a dispatch input from
+# the start and NOTHING recorded it -- the value was passed into this script as
+# RUN_LABEL and dropped. So "exploratory" was a promise made at dispatch and absent
+# from the data, and the only thing keeping a test run off the dashboard was a human
+# choosing commit: false. That is exactly the kind of protection the publication
+# gate exists to replace.
+#
+# Defaults to benchmark, so runs that predate this field read as real runs -- which
+# they were.
+printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","prompt_hash":"%s","tasks_sha":"%s","skills_installed":"%s","node":"%s","label":"%s","start":"%s"}\n' \
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
   "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "${SKILLS_HASH:-none}" "${PROMPT_HASH:-none}" \
   "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
-  "${NODE_NAME:-}" \
+  "${NODE_NAME:-}" "${RUN_LABEL:-benchmark}" \
   "$(date -u +%FT%TZ)" > "$RUN/run.json"
 
 # Keep tool scratch inside the run dir so it is cleaned with everything else.

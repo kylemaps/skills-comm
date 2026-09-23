@@ -150,6 +150,27 @@ def gates_for(runs, task, model, arm, spec):
                    "than wrong. New runs will record it." % (arm, want_hash))
     g.append(a)
 
+    # ---- these runs were meant to count -----------------------------------
+    lbl = Gate("meant for publication",
+               "run.yml has offered a benchmark/exploratory input from the start "
+               "and nothing recorded it, so `exploratory` was a promise made at "
+               "dispatch and absent from the data. The only thing keeping a test "
+               "run off the dashboard was a human choosing not to commit -- which "
+               "is the protection this gate exists to replace.")
+    labels = Counter(r.get("label") or "" for r in runs)
+    other = {k: n for k, n in labels.items() if k not in ("", "benchmark")}
+    if other:
+        lbl.fail("%s run(s) are not benchmark runs: %s"
+                 % (sum(other.values()),
+                    ", ".join("%s x%d" % (k, n) for k, n in sorted(other.items()))))
+    if labels.get(""):
+        # Absent is not wrong: every run made before the field existed was a real
+        # benchmark run. Same rule as unrecorded provenance -- treating an added
+        # field as a divergence marks all history broken.
+        lbl.note("%d run(s) predate the label field; read as benchmark"
+                 % labels[""])
+    g.append(lbl)
+
     # There was a sixth gate here, "everything is graded", and it was decoration.
     # summarize.py already excludes an ungraded run that produced output, with the
     # reason "not graded yet -- run the grader on this task", so the exclusions gate

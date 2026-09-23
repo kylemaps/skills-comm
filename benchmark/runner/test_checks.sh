@@ -273,6 +273,38 @@ grep -q "MISSING" "$T/o" && ok "  and says which" || bad "  did not name it"
 expect 1 $? "a missing csv fails instead of comparing nothing"
 rm -rf "$T"
 
+
+# The gate that did not exist until a test run nearly reached the dashboard.
+T=$(mktemp -d); TASK=structural-brain-extraction-7t; SW="$T/sweep.json"
+cat > "$SW" <<J
+{"reps":2,"arms":{"env-only":{"skills_hash":null}},
+ "tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}}
+J
+mklab() { d="$T/runs/${TASK}__kimi-k3__env-only__r$1"; mkdir -p "$d/submissions/$TASK"
+  echo x > "$d/submissions/$TASK/output.nii.gz"; echo '{"score":100}' > "$d/envelope.json"
+  cat > "$d/run.json" <<J
+{"task_id":"$TASK","model":"kimi-k3","condition":"env-only","repeat":"$1","exit_code":0,
+ "output_present":true,"skills_seen":[],"skills_installed":"","image_version":"i",
+ "opencode_version":"o","skills_sha":"a","skills_hash":"none","prompt_hash":"p",
+ "tasks_sha":"t"$2}
+J
+}
+gate_lab() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" \
+  --model kimi-k3 --arm env-only --sweep "$SW" >"$T/o" 2>&1; }
+
+rm -rf "$T/runs"; mklab 1 ',"label":"benchmark"'; mklab 2 ',"label":"benchmark"'
+gate_lab; expect 0 $? "a cell of benchmark runs passes"
+
+rm -rf "$T/runs"; mklab 1 ',"label":"benchmark"'; mklab 2 ',"label":"exploratory"'
+gate_lab; expect 1 $? "ONE exploratory run refuses the whole cell"
+grep -q "meant for publication" "$T/o" && ok "  via the publication gate" || bad "  wrong gate"
+
+# Absent is not wrong: every run made before the field existed was real.
+rm -rf "$T/runs"; mklab 1 ''; mklab 2 ''
+gate_lab; expect 0 $? "runs predating the label field still pass"
+grep -q "predate the label field" "$T/o" && ok "  and say so" || bad "  passed silently"
+rm -rf "$T"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1

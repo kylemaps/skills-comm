@@ -408,6 +408,9 @@ def load_run(run_dir, task, tokens_available=False):
         "tools_loaded": rec.get("tools_loaded") or [],
         "dataset_pin": rec.get("dataset_pin") or [],
         "start": rec.get("start", ""),
+        # benchmark | exploratory. Empty for runs predating the field, which
+        # were all real. assemble_cell refuses a cell containing anything else.
+        "label": rec.get("label", ""),
         "end": rec.get("end", ""),
     }
     for k in PROVENANCE_KEYS:
