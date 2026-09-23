@@ -91,8 +91,13 @@ cat "$HERE/wrapper.txt" >> "$RUN/prompt.txt"
 # test a skill delivered some other way -- an unzipped drop from a collaborator, say --
 # the commit is unchanged while the skill content is completely different, so the two
 # experiments would be indistinguishable in the record. Hash the skill files as well.
-SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -name '*.py' \
-  -o -name '*.sh' \) 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+# LC_ALL=C on BOTH find and sort. run.yml verifies the snapshot's hash with a
+# C-collated sort and this recomputes it for the record; under a UTF-8 locale sort
+# orders `brain-extraction/references/...` differently and the two disagree. The
+# verification would still pass, the record would carry a different hash, and the
+# arm gate would refuse all ten runs after they were paid for.
+SKILLS_HASH=$(LC_ALL=C find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -name '*.py' \
+  -o -name '*.sh' \) 2>/dev/null | LC_ALL=C sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
 # d41d8cd98f00 is the md5 of nothing, which is what the above produces when
 # SKILLS_SRC is empty or absent -- as it is for env-only in CI. It LOOKS like a
 # hash, so it reads as a real and different skill rather than as no skill, and the
@@ -100,8 +105,17 @@ SKILLS_HASH=$(find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json' -o -nam
 # SKILLS_SRC and recorded the snapshot that was present but not installed, so the
 # same condition would carry two different values and CI control runs would never
 # pool with VM ones.
+#
+# `noskill`, NOT `none`. `none` is in summarize.py's UNRECORDED set, where it means
+# "this run predates the field" -- and it has to stay there, because `none` is also
+# what prompt_hash carries when md5sum fails. Writing it here would file a
+# measurement we deliberately took under "we did not take this measurement", and
+# every gate that skips UNRECORDED values would skip it: a cell mixing skill-present
+# and skill-absent control runs would pass `one environment` silently, and the arm
+# gate cannot catch it because env-only declares no expected hash. No published run
+# carries `none`, so there is no history to migrate.
 case "$SKILLS_HASH" in
-  d41d8cd98f00|"") SKILLS_HASH=none ;;
+  d41d8cd98f00|"") SKILLS_HASH=noskill ;;
 esac
 
 # "The prompt is byte-identical across arms" is the central claim of the whole
@@ -135,7 +149,7 @@ printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version
   "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
   "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
-  "$SKILLSRC" "${SKILLS_HASH:-none}" "${PROMPT_HASH:-none}" \
+  "$SKILLSRC" "$SKILLS_HASH" "${PROMPT_HASH:-none}" \
   "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "${NODE_NAME:-}" "${RUN_LABEL:-benchmark}" \

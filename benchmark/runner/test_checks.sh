@@ -211,13 +211,62 @@ for r in 1 2 3; do mkrun env+skill $r graded brain-extraction 2026-09-01; done
 stage_gate; expect 1 $? "refuses to overwrite a published cell"
 grep -q "FAIL  not a replacement" "$T/out" && ok "  via the 'not a replacement' gate" || bad "  refused by the wrong gate"
 grep -q "image_version 2026-08-05 -> 2026-09-01" "$T/out" && ok "  and names what would change" || bad "  does not say what would change"
+# A gate that stages and then refuses has published the thing it refused. Nothing
+# asserted this, and the ordering is exactly the class of bug this file exists for.
+grep -q 2026-08-05 "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1/run.json" \
+  && ok "  and the published tree is untouched by a refusal" \
+  || bad "  a REFUSED cell still modified results/"
 
 stage_gate yes; expect 0 $? "--replace allows it"
 grep -q "3 published run(s) will be overwritten" "$T/out" && ok "  and says how many" || bad "  silent about the overwrite"
+grep -q 2026-09-01 "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1/run.json" \
+  && ok "  and the published run really is the new one" \
+  || bad "  --replace reported success and wrote nothing"
+# The file the NEW run does not have must not survive from the old one. A no-output
+# run has no envelope and is scored 0 rather than excluded, so it reaches staging;
+# copying file-by-file would leave the previous run's passing grade attached to it
+# and summarize.py would read the pair as a pass.
+d="$T/runs/${TASK}__kimi-k3__env+skill__r1"; rm -rf "$d"; mkdir -p "$d"
+cat > "$d/run.json" <<J
+{"task_id":"$TASK","model":"kimi-k3","condition":"env+skill","repeat":"1","exit_code":1,
+ "output_present":false,"skills_seen":[],"skills_installed":"brain-extraction",
+ "image_version":"2026-09-01","opencode_version":"1.18.7","skills_sha":"a",
+ "skills_hash":"291f844a43ec","prompt_hash":"p","tasks_sha":"t"}
+J
+stage_gate yes
+[ -e "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1/envelope.json" ] \
+  && bad "  a replaced run kept the previous run's grade" \
+  || ok "  and a run with no envelope does not inherit the old one's"
 
 # Identical provenance is still a replacement: the score and the transcript that
 # produced it are gone, and n=10 before and after says nothing happened.
 stage_gate; expect 1 $? "refuses even when the environment is unchanged"
+grep -q "same environment, different run" "$T/out" \
+  && ok "  and says so, rather than naming a difference there isn't" \
+  || bad "  refused for an unstated reason"
+
+# A published directory holding only envelope.json. The staging loop produces these
+# itself -- it copies each file only if the source has one -- so this is reachable,
+# and keying the collision check on run.json missed it entirely: a published PASS
+# was overwritten by a FAIL with the gate reporting ok.
+rm -rf "$T/runs" "$T/stage"
+mkdir -p "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1"
+echo '{"score":100,"verdict":"PASS"}' > "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1/envelope.json"
+for r in 1 2 3; do mkrun env+skill $r graded brain-extraction; done
+stage_gate; expect 1 $? "refuses a published directory with no run.json"
+grep -q "missing or unreadable" "$T/out" && ok "  and says it cannot show what changes" || bad "  wrong reason"
+
+# `noskill` is a measurement: the skill directory was checked and was empty. If it
+# is filtered as UNRECORDED then a control cell mixing skill-present and
+# skill-absent runs passes silently, and the arm gate cannot catch it because
+# env-only declares no expected hash.
+rm -rf "$T/runs" "$T/stage"
+for r in 1 2; do mkrun env-only $r graded "" 2026-08-05 noskill; done
+mkrun env-only 3 graded "" 2026-08-05 291f844a43ec
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 \
+  --arm env-only --sweep "$SW" >"$T/out" 2>&1
+expect 1 $? "refuses a control cell where one run had a skill present"
+grep -q "skills_hash varies within the cell" "$T/out" && ok "  via 'one environment'" || bad "  refused by the wrong gate"
 rm -rf "$T"
 
 

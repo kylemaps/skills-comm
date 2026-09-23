@@ -85,20 +85,36 @@ def collisions(runs, task, stage):
     """
     out = []
     for r in runs:
-        cur = os.path.join(stage, task,
-                           os.path.basename(r["dir"].rstrip("/\\")), "run.json")
-        if not os.path.exists(cur):
+        # The DIRECTORY is the unit that gets written over, so its existence is what
+        # decides a collision. Keying on run.json instead missed the case where a
+        # published directory holds only envelope.json -- which the staging loop can
+        # itself produce, since it copies each file only if the source has it -- and
+        # a passing grade was then replaced by a failing one with the gate saying ok.
+        d = os.path.join(stage, task, os.path.basename(r["dir"].rstrip("/\\")))
+        if not os.path.isdir(d):
             continue
+        name = os.path.basename(d)
+        cur = os.path.join(d, "run.json")
         try:
             old = json.load(open(cur, encoding="utf-8"))
-        except ValueError:
-            out.append((os.path.basename(os.path.dirname(cur)),
-                        "the published run.json is unreadable"))
+        except (IOError, OSError, ValueError):
+            out.append((name, "the published run.json is missing or unreadable, so "
+                              "what would change cannot be shown"))
             continue
-        moved = ["%s %s -> %s" % (k, old.get(k), r.get(k)) for k in DECIDES
-                 if old.get(k) not in UNRECORDED and old.get(k) != r.get(k)]
-        out.append((os.path.basename(os.path.dirname(cur)),
-                    "; ".join(moved) or "same environment, different run"))
+        moved = []
+        for k in DECIDES:
+            o, new = old.get(k), r.get(k)
+            if o == new:
+                continue
+            if o in UNRECORDED:
+                # Not a divergence in the value, but still a replacement, and saying
+                # "same environment" here would be false: the published run recorded
+                # no environment at all.
+                moved.append("%s: the published run recorded none, this one records "
+                             "%s" % (k, new))
+            else:
+                moved.append("%s %s -> %s" % (k, o, new))
+        out.append((name, "; ".join(moved) or "same environment, different run"))
     return out
 
 
@@ -297,6 +313,13 @@ def main():
         n = 0
         for r in runs:
             d = os.path.join(dest, os.path.basename(r["dir"].rstrip("/\\")))
+            # Clear first. Copying file-by-file into a directory that already exists
+            # MERGES: a new run with no envelope (a no-output run is scored 0, not
+            # excluded, so it reaches here) leaves the previous run's envelope in
+            # place, and the published record becomes a failed run's provenance
+            # wearing the old run's passing grade. summarize.py reads that as a pass.
+            if os.path.isdir(d):
+                shutil.rmtree(d)
             os.makedirs(d, exist_ok=True)
             for f in ("run.json", "envelope.json"):
                 src = os.path.join(r["dir"], f)
