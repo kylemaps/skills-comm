@@ -232,6 +232,10 @@ python "$HERE/agent_view.py" --skills "$META/$NAME.skills.json" \
   echo "ABORT: what opencode offers the agent does not match the arm. No tokens spent." >&2
   exit 3; }
 
+# The gateway's roster and what it reports serving for this model, recorded before
+# the agent starts: gateway_roster, model_served, model_fingerprint. Record only.
+python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" || true
+
 timeout "$TIMEOUT" "${AGENT_ENV[@]}" \
   "$OPENCODE_BIN" run --dir "$RUN" -m "$MODEL" --auto "$(cat "$PROMPT")" \
   < /dev/null > "$RUN/transcript.txt" 2>&1
