@@ -22,7 +22,8 @@ TASK="$1"; MODEL="$2"; COND="$3"; REP="$4"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 TASKS="${TASKS_JSON:-$HOME/grader-repo/benchmark/tasks.json}"
-SKILLSRC="${SKILLS_SRC:-$HOME/skills-comm/plugins/brain-extraction}"
+# Default only when unset. Empty means no skill source (env-only in CI).
+SKILLSRC="${SKILLS_SRC-$HOME/skills-comm/plugins/brain-extraction}"
 SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
 # The wall. It was 2700 by default, and that default was a trap: the working value
 # lives in ~/bench/.env on the VM, which exists on exactly one machine. A fresh pod
@@ -83,9 +84,29 @@ rm -rf "$RUN" 2>/dev/null
 if [ -e "$RUN" ]; then echo "FATAL: could not clean $RUN" >&2; exit 1; fi
 mkdir -p "$RUN"
 
-python "$HERE/mkprompt.py" "$TASKS" "$TASK" > "$RUN/prompt.txt"
-if [ ! -s "$RUN/prompt.txt" ]; then echo "FATAL: empty prompt for $TASK" >&2; exit 1; fi
-cat "$HERE/wrapper.txt" >> "$RUN/prompt.txt"
+# The run record and prompt are kept outside the agent's working directory while it
+# runs, and moved into $RUN when it exits. The record contains the skill source
+# path. (The working directory's name still contains the arm.)
+META="$BENCH_HOME/.meta"
+mkdir -p "$META"
+NAME=$(basename "$RUN")
+PROMPT="$META/$NAME.prompt.txt"
+RECORD="$META/$NAME.run.json"
+rm -f "$META/$NAME".*
+# If the run ends early (abort or signal), the record and prompt still land in $RUN.
+# On any exit (normal, abort or signal): the record and prompt land in $RUN, the
+# opencode debug output (which contains the resolved gateway key) is deleted, and
+# the arm's skill links are removed so the skills directory is empty again.
+trap '[ -f "$RECORD" ] && mv -f "$RECORD" "$RUN/run.json"
+      [ -f "$PROMPT" ] && mv -f "$PROMPT" "$RUN/prompt.txt"
+      rm -f "$META/$NAME.skills.json" "$META/$NAME.config.json"
+      rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+python "$HERE/mkprompt.py" "$TASKS" "$TASK" > "$PROMPT"
+if [ ! -s "$PROMPT" ]; then echo "FATAL: empty prompt for $TASK" >&2; exit 1; fi
+cat "$HERE/wrapper.txt" >> "$PROMPT"
 
 # skills_sha only means anything when SKILLS_SRC is inside our git checkout. When we
 # test a skill delivered some other way -- an unzipped drop from a collaborator, say --
@@ -121,7 +142,7 @@ esac
 # "The prompt is byte-identical across arms" is the central claim of the whole
 # comparison, and until now we asserted it rather than checked it. Hashing it
 # means a divergence shows up in the report instead of being assumed away.
-PROMPT_HASH=$(md5sum "$RUN/prompt.txt" 2>/dev/null | cut -c1-12)
+PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 
 # node: which machine this ran on. Empty on the VM, where there is one host and it
 # never changes; set in CI from the downward API, where it does not.
@@ -150,10 +171,10 @@ printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version
   "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "$SKILLS_HASH" "${PROMPT_HASH:-none}" \
-  "$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)" \
+  "${TASKS_SHA:-$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)}" \
   "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "${NODE_NAME:-}" "${RUN_LABEL:-benchmark}" \
-  "$(date -u +%FT%TZ)" > "$RUN/run.json"
+  "$(date -u +%FT%TZ)" > "$RECORD"
 
 # Keep tool scratch inside the run dir so it is cleaned with everything else.
 export TMPDIR="$RUN/tmp"; mkdir -p "$TMPDIR"
@@ -189,9 +210,39 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 #   /tmp, is refused, and gives up). A benchmark agent must be able to run tools.
 #   Only safe because each run is a disposable sandbox -- do NOT carry this to shared
 #   infrastructure without an isolated runner pool.
-timeout "$TIMEOUT" "$OPENCODE_BIN" run --dir "$RUN" -m "$MODEL" --auto "$(cat "$RUN/prompt.txt")" \
+# Harness variables are removed from the agent's environment: they name the skill
+# source and the arm. NEURODESK_API_KEY stays; opencode reads it.
+AGENT_ENV=(env -u SKILLS_SRC -u SKILLS_DST -u RUN_LABEL -u ARM -u TASK
+           -u MODEL -u REP -u TASKS_JSON -u BENCH_HOME)
+
+# What opencode will give the agent, resolved by opencode itself from the agent's
+# working directory and environment: the skills it offers, and any instructions,
+# skill paths or references in its config. Recorded as skills_offered. With
+# AGENT_VIEW_CHECK=1 the run stops here, before any tokens are spent, unless the
+# skills offered are exactly the arm's and none of those config keys are set.
+case "$COND" in
+  env+skill*) EXPECT="brain-extraction,brain-extraction-qc" ;;
+  *)          EXPECT="" ;;
+esac
+(cd "$RUN" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug skill)  > "$META/$NAME.skills.json" 2>/dev/null
+(cd "$RUN" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug config) > "$META/$NAME.config.json" 2>/dev/null
+ENFORCE=""; [ "${AGENT_VIEW_CHECK:-0}" = 1 ] && ENFORCE=--enforce
+python "$HERE/agent_view.py" --skills "$META/$NAME.skills.json" \
+  --config "$META/$NAME.config.json" --record "$RECORD" --expect "$EXPECT" $ENFORCE || {
+  echo "ABORT: what opencode offers the agent does not match the arm. No tokens spent." >&2
+  exit 3; }
+
+timeout "$TIMEOUT" "${AGENT_ENV[@]}" \
+  "$OPENCODE_BIN" run --dir "$RUN" -m "$MODEL" --auto "$(cat "$PROMPT")" \
   < /dev/null > "$RUN/transcript.txt" 2>&1
 RC=$?
+# Fold opencode's write-ahead log into the database, so the database is one file
+# and masking a value inside it (redact.py) cannot break WAL frame checksums.
+DB="$RUN/.xdg-data/opencode/opencode.db"
+[ -f "$DB" ] && python -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('PRAGMA wal_checkpoint(TRUNCATE)')" \
+  "$DB" 2>/dev/null
+mv "$RECORD" "$RUN/run.json"
+mv "$PROMPT" "$RUN/prompt.txt"
 # run.json is written before the agent starts, so it cannot know which tools the
 # agent picked. Read them back out of the transcript now.
 python "$HERE/finalize_run.py" "$RUN" "$RC" 2>/dev/null
