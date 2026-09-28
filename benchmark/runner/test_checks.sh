@@ -463,6 +463,15 @@ Error: Skill "brain-extraction" not found. Available skills: customize-opencode'
   && ok "the ✗ marker is a failure without the word failed" || bad "an ✗ line not counted as a failure"
 [ "$(fk e4 skills_available 'Error: Skill "x" not found. Available skills:')" = "[]" ] \
   && ok "an empty offered list is [] (offered nothing), not None" || bad "an empty offered list read as unknown"
+[ "$(fk m1 tools_loaded '$ module load fsl/6.0.7.22 && bet in.nii out')" = "['fsl/6.0.7.22']" ] \
+  && ok "tools_loaded: a module loaded in a command counts" || bad "tools_loaded missed a real module load"
+[ "$(fk m2 tools_loaded '-#   the container replaces `module load synthstrip/7.4.1`)')" = "[]" ] \
+  && ok "  a module named in a printed diff does not" || bad "  a diff line counted as a load"
+mkdir -p "$T/m3"; printf '# module load old/1.0\nmodule load ants/2.5.4 fsl/6.0.7.22\n' > "$T/m3/a.sh"
+[ "$(fk m3 tools_loaded '$ bash a.sh')" = "['ants/2.5.4', 'fsl/6.0.7.22']" ] \
+  && ok "  a script's load line counts, every module on it, and its comments do not" || bad "  script modules wrong: $(fk m3 tools_loaded '$ bash a.sh')"
+[ "$(fk m4 tools_loaded '$ ml synthstrip/7.4.1')" = "['synthstrip/7.4.1']" ] \
+  && ok "  so does the ml shorthand" || bad "  ml shorthand missed"
 o=$(fk f skill_files_read '→ Read /w/skills/brain-extraction/291f844a/brain-extraction/SKILL.md')
 has "a Read of SKILL.md is a direct skill-file read" "$o" "SKILL.md"
 o=$(fk g skill_files_read '$ cat /w/plugins/brain-extraction/brain-extraction/references/fsl-bet.md')
@@ -528,7 +537,8 @@ EOF
 rb() { a=$1; shift; rm -rf "$T/bench" "$T/skills"
   env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
     SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 NEURODESK_API_KEY=k-present \
-    ARM="$a" RUN_LABEL=exploratory OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 "$@" \
+    ARM="$a" RUN_LABEL=exploratory OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 \
+    NEURODESK_GATEWAY=http://127.0.0.1:9 "$@" \
     bash "$HERE/run_bench.sh" t-x neurodesk/m "$a" 1 >/dev/null 2>&1; }
 rb env-only; rc=$?
 R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
@@ -561,6 +571,31 @@ rb env-only FAKE_CONFIG='{"instructions":["/opt/AGENTS.md"]}'
 expect 3 $? "a run whose resolved config declares instructions stops"
 rb env-only FAKE_OFFER="astra" AGENT_VIEW_CHECK=0
 expect 0 $? "without AGENT_VIEW_CHECK the mismatch is recorded, not enforced"
+rm -rf "$T"
+
+echo
+echo "=== model_probe: what the gateway serves, recorded per run"
+T=$(mktemp -d)
+echo '{"data":[{"id":"qwen3"},{"id":"kimi-k3"}]}' > "$T/roster.json"
+echo '{"model":"Qwen/Qwen3-235B","system_fingerprint":"fp_1"}' > "$T/resp.json"
+echo '{"model":"Qwen/Qwen3-235B","system_fingerprint":"fp_2"}' > "$T/resp2.json"
+echo '{"x-litellm-model-group":"qwen3","x-litellm-model-api-base":"http://10.0.0.5:8000","x-request-id":"a1","x-litellm-response-duration-ms":"123"}' > "$T/hdr.json"
+echo '{"x-litellm-model-group":"qwen3","x-litellm-model-api-base":"http://10.0.0.5:8000","x-request-id":"b2","x-litellm-response-duration-ms":"456"}' > "$T/hdr2.json"
+mp() { echo '{"task_id":"t"}' > "$T/r.json"
+  "$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" --offline "$T/roster.json" "$1" "$2" >/dev/null 2>&1
+  "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r[sys.argv[2]])" "$T/r.json" "$3" | tr -d '\r'; }
+[ "$(mp "$T/resp.json" "$T/hdr.json" gateway_roster)" = "['kimi-k3', 'qwen3']" ] && ok "records the roster" || bad "roster not recorded"
+[ "$(mp "$T/resp.json" "$T/hdr.json" model_served)" = "Qwen/Qwen3-235B" ] && ok "records what the gateway served" || bad "model_served not recorded"
+f1=$(mp "$T/resp.json" "$T/hdr.json" model_fingerprint); f2=$(mp "$T/resp.json" "$T/hdr2.json" model_fingerprint)
+f3=$(mp "$T/resp2.json" "$T/hdr.json" model_fingerprint)
+[ -n "$f1" ] && [ "$f1" = "$f2" ] && ok "per-request headers do not change the fingerprint" || bad "fingerprint varies per request: $f1 $f2"
+[ "$f1" != "$f3" ] && ok "a changed system_fingerprint does" || bad "fingerprint blind to system_fingerprint"
+o=$(mp "$T/resp.json" "$T/hdr.json" model_probe)
+hasnt "a backend address is not stored in the clear" "$o" "10.0.0.5"
+[ "$(mp "$T/missing.json" "$T/hdr.json" model_fingerprint)" = "None" ] && ok "no response: null, not a guess" || bad "fingerprint from nothing"
+echo '{"task_id":"t"}' > "$T/r.json"
+"$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" --gateway http://127.0.0.1:9 >/dev/null 2>&1
+expect 0 $? "an unreachable gateway records nulls and does not stop the run"
 rm -rf "$T"
 
 echo
