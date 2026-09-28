@@ -794,8 +794,9 @@ o=$(fa as2 arm_seen '$ cat /home/runner/_work/_temp/_github_workflow/event.json
 {"inputs": {"arm": "env+skill", "snapshot": "291f844a"}}')
 has   "  so is the dispatch payload" "$o" "env+skill"
 o=$(fa as3 arm_seen '$ ls
-data  scripts  submissions')
-[ "$o" = "[]" ] && ok "a transcript without an arm label is clean" || bad "clean transcript flagged: $o"
+data  scripts  submissions
+$ python3 -m venv venv-only && ls .venv-skill')
+[ "$o" = "[]" ] && ok "a transcript without an arm label is clean, words like venv-only too" || bad "clean transcript flagged: $o"
 
 echo
 echo "=== finalize_run: tokens found after the working directory was renamed"
@@ -967,13 +968,20 @@ echo
 echo "=== wave_check: a run that assemble would refuse is stopped before it is paid for"
 T=$(mktemp -d); SW="$T/sweep.json"
 cat > "$SW" <<'J'
-{"waves":{"1":{"pins":{"image_version":"ci-env2-x","tasks_sha":"e98e3b6"},
+{"arms":{"env-only":{"skills_hash":null},"env+skill":{"skills_hash":"291f844a43ec"}},
+ "waves":{"1":{"pins":{"image_version":"ci-env2-x","tasks_sha":"e98e3b6"},
   "tasks":{"diffusion-brain-mask":{"models":["qwen3"],"arms":["env-only","env+skill"]}}}}}
 J
 wc_() { "$PY" "$HERE/wave_check.py" --sweep "$SW" "$@" >"$T/o" 2>&1; }
 wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
-  image_version=ci-env2-x tasks_sha=e98e3b6
+  --skills-hash 291f844a43ec image_version=ci-env2-x tasks_sha=e98e3b6
 expect 0 $? "a declared cell in the pinned environment passes"
+wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
+  --skills-hash 5ba66f0c7ddf image_version=ci-env2-x tasks_sha=e98e3b6
+expect 1 $? "a skill arm dispatched with another snapshot is stopped"
+wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env-only \
+  --skills-hash "" image_version=ci-env2-x tasks_sha=e98e3b6
+expect 0 $? "  the control arm needs no snapshot"
 wc_ --wave 1 image_version=ci-env1-x tasks_sha=e98e3b6
 expect 1 $? "another environment is stopped"
 wc_ --wave 1 image_version=ci-env2-x
@@ -988,7 +996,7 @@ wc_ --wave 1 --label exploratory --task other-task --model neurodesk/kimi-k3 --a
   image_version=ci-env2-x tasks_sha=e98e3b6
 expect 0 $? "an exploratory run needs only the pins"
 "$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 1 --label benchmark \
-  --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
+  --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill --skills-hash 291f844a43ec \
   image_version=ci-env2-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
 expect 0 $? "the real sweep accepts the environment run.yml declares for wave 1"
 rm -rf "$T"
@@ -1050,6 +1058,7 @@ if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
 echo "DIR: $3"
 echo "CWD: $(ls -A "$3" | tr '\n' ' ')"
 echo "META: $(ls -A "$(dirname "$(dirname "$3")")/.meta" | tr '\n' ' ')"
+echo "RECORD: $(cat "$(dirname "$(dirname "$3")")"/.meta/*.run.json)"
 echo "ENV: SID=${BENCH_SESSION_ID-unset} HARNESS_SHA=${HARNESS_SHA-unset} TASKS_SHA=${TASKS_SHA-unset} GRADER_REPO=${GRADER_REPO-unset} HARNESS_REF=${HARNESS_REF-unset} GITHUB_EVENT_PATH=${GITHUB_EVENT_PATH-unset} RUNNER_TEMP=${RUNNER_TEMP-unset}"
 echo made > "$3/out.txt"; ln -s "$3/out.txt" "$3/link.txt"
 # Left running after the agent exits, in the working directory.
@@ -1075,6 +1084,12 @@ meta_=$(echo "$tr_" | sed -n 's/^META: //p')
 case "$meta_" in *run-*.transcript.txt*) ok "the files kept aside during the run are there under the neutral name";; *) bad "meta listing: $meta_";; esac
 hasnt "  and their names do not name the arm" "$meta_" "env-only"
 hasnt "  or the task" "$meta_" "t-x"
+hasnt "  opencode's debug output is gone before the agent starts" "$meta_" "config.json"
+rec_=$(echo "$tr_" | sed -n 's/^RECORD: //p')
+case "$rec_" in *'"workdir"'*) ok "the record the agent could find holds the environment";; *) bad "record not readable in the test: $rec_";; esac
+hasnt "  but not the arm" "$rec_" "env-only"
+hasnt "  the task" "$rec_" "t-x"
+hasnt "  or the model" "$rec_" "neurodesk/m"
 has   "harness and CI variables are removed from the agent's environment" "$tr_" \
       "HARNESS_SHA=unset TASKS_SHA=unset GRADER_REPO=unset HARNESS_REF=unset GITHUB_EVENT_PATH=unset RUNNER_TEMP=unset"
 sid=$(echo "$tr_" | sed -n 's/.*SID=\([^ ]*\).*/\1/p')
@@ -1094,8 +1109,10 @@ if [ -L "$R/link.txt" ]; then
 else
   echo "  skip  symlink check: ln -s does not make symlinks here"
 fi
-"$PY" -c "import json,sys; assert json.load(open(sys.argv[1]))['wave']=='1'" "$R/run.json" 2>/dev/null \
-  && ok "  the record names the wave" || bad "  wave not recorded"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['wave']=='1' and r['condition']=='env-only' and r['task_id']=='t-x' and r['model']=='neurodesk/m'
+assert r['skills_hash']=='noskill' and r['skills_offered']==[]" "$R/run.json" 2>/dev/null \
+  && ok "  the landed record names the run: task, model, arm, wave" || bad "  identity fields missing after landing: $(cat "$R/run.json")"
 sleep 4
 [ ! -e "$R/late.txt" ] && ok "a process the agent left running is stopped when it exits" \
                        || bad "a background process kept writing after the run"

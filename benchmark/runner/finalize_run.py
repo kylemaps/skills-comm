@@ -306,7 +306,7 @@ rec["answer_key_reads"] = _key_hits() if txt else None
 # A transcript line containing an arm label (env-only, env+skill...) means the agent
 # came across it: in the process list, the environment, the runner's event file, or
 # the harness's own files. Recorded as those lines; [] is clean.
-_ARM_RE = re.compile(r"env[-+](?:only|skill)")
+_ARM_RE = re.compile(r"(?<![\w.])env[-+](?:only|skill)")
 rec["arm_seen"] = ([l[:160] for l in plain.splitlines() if _ARM_RE.search(l)][:10]
                    if txt else None)
 

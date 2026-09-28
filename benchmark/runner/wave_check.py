@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Check, before any tokens are spent, that a run belongs to the wave it is for.
 
-    wave_check.py --sweep sweep.json --wave 1 [--label benchmark --task T --model M --arm A] \\
-        image_version=ci-env2-... tasks_sha=e98e3b6
+    wave_check.py --sweep sweep.json --wave 1 [--label benchmark --task T --model M --arm A \\
+        --skills-hash H] image_version=ci-env2-... tasks_sha=e98e3b6
 
 Fails (exit 1) when:
   - the wave is not declared in sweep.json;
   - a pinned field (`waves.<n>.pins`) is not given, or differs from the value given;
-  - the label is `benchmark` and the task, model or arm is not declared for the wave.
+  - the label is `benchmark` and the task, model or arm is not declared for the wave,
+    or the arm declares a skills_hash (`arms.<arm>`) and --skills-hash differs.
 
 assemble_cell.py applies the same pins and declarations when a cell is published; this
 stops a run that would be refused there from being paid for.
@@ -17,7 +18,8 @@ import json
 import sys
 
 
-def check(sweep, wave, given, label=None, task=None, model=None, arm=None):
+def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
+          skills_hash=None):
     """A list of problems; empty when the run belongs to the wave."""
     w = (sweep.get("waves") or {}).get(str(wave))
     if not isinstance(w, dict):
@@ -38,6 +40,10 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None):
                 out.append("model %s is not declared for %s in wave %s" % (bare, task, wave))
             if arm not in t.get("arms", []):
                 out.append("arm %s is not declared for %s in wave %s" % (arm, task, wave))
+        want = ((sweep.get("arms") or {}).get(arm) or {}).get("skills_hash")
+        if want and skills_hash != want:
+            out.append("arm %s is defined by skills_hash %s; the snapshot hashes to %s"
+                       % (arm, want, skills_hash or "nothing"))
     return out
 
 
@@ -50,6 +56,7 @@ def main():
     ap.add_argument("--task")
     ap.add_argument("--model")
     ap.add_argument("--arm")
+    ap.add_argument("--skills-hash", help="content hash of the arm's snapshot; empty for none")
     ap.add_argument("fields", nargs="*", metavar="KEY=VALUE")
     a = ap.parse_args()
     given = {}
@@ -59,7 +66,7 @@ def main():
             ap.error("expected KEY=VALUE, got %r" % f)
         given[k] = v
     problems = check(json.load(open(a.sweep, encoding="utf-8")), a.wave, given,
-                     a.label, a.task, a.model, a.arm)
+                     a.label, a.task, a.model, a.arm, a.skills_hash)
     for p in problems:
         print("FAIL: " + p)
     if problems:

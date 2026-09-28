@@ -54,7 +54,7 @@
         ]
       },
       "_known_permanently_short": {
-        "reason": "qwen3.5-122b left the gateway in September 2026. 9 excluded runs (7 stroke, 2 nodura) cannot be re-run.",
+        "reason": "qwen3.5-122b is no longer offered by the gateway, so its 9 excluded runs (7 stroke, 2 nodura) cannot be re-run.",
         "cells": [
           "structural-brain-extraction-7t-nodura|qwen3.5-122b|env-only",
           "structural-brain-extraction-7t-nodura|qwen3.5-122b|env+skill"
@@ -62,9 +62,8 @@
       },
       "_anomalies": {
         "neurodesk-qwen3": [
-          "One run: structural-brain-extraction-7t-nodura | env+skill | n=1, under a",
-          "double-prefixed model id. Not declared. Undecided whether it is a qwen3 run",
-          "or to be removed."
+          "One published run (structural-brain-extraction-7t-nodura, env+skill) carries",
+          "this model id. It is not declared, so no cell includes it."
         ]
       }
     },

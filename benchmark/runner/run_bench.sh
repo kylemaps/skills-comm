@@ -86,24 +86,34 @@ if [ -e "$RUN" ]; then echo "FATAL: could not clean $RUN" >&2; exit 1; fi
 mkdir -p "$BENCH_HOME/runs" "$BENCH_HOME/work"
 # The agent works in a directory whose name says nothing about the run (not the arm,
 # model or task). It is renamed to $RUN when the run ends.
-WORK=$(mktemp -d "$BENCH_HOME/work/run-XXXXXX") || {
+# Resolved, as opencode records it.
+WORK=$(mktemp -d "$BENCH_HOME/work/run-XXXXXX") && WORK=$(cd "$WORK" && pwd -P) \
+  && [ -n "$WORK" ] || {
   echo "FATAL: could not create a working directory under $BENCH_HOME/work" >&2; exit 1; }
 
 # The run record, prompt and transcript are kept outside the agent's working
 # directory while it runs, under the working directory's neutral name, and moved into
-# $RUN when it exits. The record contains the skill source path.
+# $RUN when it exits. While the agent runs, the record holds nothing that names the
+# run (task, model, arm, skill source): those fields (IDENT) are added when it lands.
 META="$BENCH_HOME/.meta"
 mkdir -p "$META"
 ID=$(basename "$WORK")
 PROMPT="$META/$ID.prompt.txt"
 RECORD="$META/$ID.run.json"
 TRANSCRIPT="$META/$ID.transcript.txt"
+IDENT=""
 # The working directory becomes $RUN, and the record, prompt and transcript move into
 # it. A symlink from the old path keeps absolute paths the agent wrote (scripts,
 # links to its output) resolving. Safe to call more than once.
 land() {
-  if [ -d "$WORK" ] && [ ! -e "$RUN" ]; then mv "$WORK" "$RUN" && ln -s "$RUN" "$WORK"; fi
+  if [ -d "$WORK" ] && [ ! -L "$WORK" ] && [ ! -e "$RUN" ]; then
+    mv "$WORK" "$RUN" && ln -s "$RUN" "$WORK"
+  fi
   mkdir -p "$RUN"
+  if [ -f "$RECORD" ] && [ -n "$IDENT" ]; then
+    python -c "import json,sys; r=json.load(open(sys.argv[1])); r.update(json.loads(sys.argv[2])); json.dump(r, open(sys.argv[1], 'w')); open(sys.argv[1], 'a').write('\n')" \
+      "$RECORD" "$IDENT" 2>/dev/null
+  fi
   [ -f "$RECORD" ] && mv -f "$RECORD" "$RUN/run.json"
   [ -f "$PROMPT" ] && mv -f "$PROMPT" "$RUN/prompt.txt"
   [ -f "$TRANSCRIPT" ] && mv -f "$TRANSCRIPT" "$RUN/transcript.txt"
@@ -113,19 +123,20 @@ land() {
 # reads the graders after the run: `timeout`'s process group, and any process whose
 # working directory is still inside $WORK (opencode can start commands in process
 # groups of their own).
-WORK_REAL=$(cd "$WORK" && pwd -P)
 stop_agent() {
   [ -n "${AGENT_PID:-}" ] && kill -KILL -- "-$AGENT_PID" 2>/dev/null
+  unset AGENT_PID
   for p in /proc/[0-9]*; do
     case "$(readlink "$p/cwd" 2>/dev/null)" in
-      "$WORK_REAL"|"$WORK_REAL"/*) [ "${p#/proc/}" != "$$" ] && kill -KILL "${p#/proc/}" 2>/dev/null ;;
+      "$WORK"|"$WORK"/*) [ "${p#/proc/}" != "$$" ] && kill -KILL "${p#/proc/}" 2>/dev/null ;;
     esac
   done
   return 0
 }
 # On any exit (normal, abort or signal): the agent's processes are stopped, the run
 # lands in $RUN, the opencode debug output (which contains the resolved gateway key)
-# is deleted, and the arm's skill links are removed so the skills directory is empty.
+# is deleted if still there, and the arm's skill links are removed so the skills
+# directory is empty.
 trap 'stop_agent
       land
       rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
@@ -198,15 +209,17 @@ PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 # workdir: where the agent ran, before the rename to $RUN. opencode's session
 # records it, and finalize_run.py looks the session up by it.
 # wave: the wave the run was dispatched for (RUN_WAVE), empty outside one.
-printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"image_version":"%s","opencode_version":"%s","skills_sha":"%s","skills_src":"%s","skills_hash":"%s","prompt_hash":"%s","tasks_sha":"%s","skills_installed":"%s","node":"%s","label":"%s","wave":"%s","workdir":"%s","start":"%s"}\n' \
-  "$TASK" "$MODEL" "$COND" "$REP" "${NEURODESKTOP_VERSION:-unknown}" \
-  "$("$OPENCODE_BIN" --version 2>/dev/null)" \
+# The fields that name the run are held in IDENT and added to the record by land().
+IDENT=$(printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s"}' \
+  "$TASK" "$MODEL" "$COND" "$REP" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
-  "$SKILLSRC" "$SKILLS_HASH" "${PROMPT_HASH:-none}" \
+  "$SKILLSRC" "$SKILLS_HASH" "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
+  "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}")
+printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_sha":"%s","node":"%s","workdir":"%s","start":"%s"}\n' \
+  "${NEURODESKTOP_VERSION:-unknown}" "$("$OPENCODE_BIN" --version 2>/dev/null)" \
+  "${PROMPT_HASH:-none}" \
   "${TASKS_SHA:-$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)}" \
-  "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
-  "${NODE_NAME:-}" "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}" "$WORK" \
-  "$(date -u +%FT%TZ)" > "$RECORD"
+  "${NODE_NAME:-}" "$WORK" "$(date -u +%FT%TZ)" > "$RECORD"
 
 # A random id for this run, sent to the gateway on every model call as
 # x-litellm-session-id (write_opencode_config.py) and recorded by env_record.py.
@@ -251,11 +264,13 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 # Harness and CI variables are removed from the agent's environment: they name the
 # skill source, the arm, the run, the task and grader repositories, and the dispatch
 # (GITHUB_EVENT_PATH). NEURODESK_API_KEY and BENCH_SESSION_ID stay; opencode reads them.
+# RUNNER_TRACKING_ID stays: the runner uses it to stop leftover processes at job end.
 AGENT_ENV=(env)
 for v in SKILLS_SRC SKILLS_DST RUN_LABEL RUN_WAVE ARM TASK MODEL REP TASKS_JSON \
          BENCH_HOME TASKS_SHA NEURODESKTOP_VERSION AGENT_VIEW_CHECK AGENT_BASH_ENV \
          OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT \
-         $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_)'); do
+         $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_)' \
+                      | grep -vx RUNNER_TRACKING_ID); do
   AGENT_ENV+=(-u "$v")
 done
 
@@ -272,7 +287,12 @@ esac
 (cd "$WORK" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug config) > "$META/$ID.config.json" 2>/dev/null
 ENFORCE=""; [ "${AGENT_VIEW_CHECK:-0}" = 1 ] && ENFORCE=--enforce
 python "$HERE/agent_view.py" --skills "$META/$ID.skills.json" \
-  --config "$META/$ID.config.json" --record "$RECORD" --expect "$EXPECT" $ENFORCE || {
+  --config "$META/$ID.config.json" --record "$RECORD" --expect "$EXPECT" $ENFORCE
+VIEW_RC=$?
+# Deleted before the agent starts: the config holds the resolved gateway key, and the
+# skill list names the arm's skills.
+rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
+[ "$VIEW_RC" = 0 ] || {
   echo "ABORT: what opencode offers the agent does not match the arm. No tokens spent." >&2
   exit 3; }
 
