@@ -6,9 +6,8 @@
 `run.json` is written *before* the agent starts, so it cannot know which tools the
 agent chose. This reads them back out of the transcript once the run is over:
 
-  tools_loaded   every `module load <tool>/<version>` the agent issued. Matters more
-                 than it looks -- we have already seen one model load fsl/6.0.7.14
-                 while another loaded fsl/6.0.7.22 in the same experiment.
+  tools_loaded   every `<tool>/<version>` loaded with `module load` or `ml` in an
+                 executed command or a script the agent wrote
   methods_used   which brain-extraction method it actually RAN. Not the same thing as
                  the module it loaded: an agent can `module load fsl` and then call
                  `bet`, and one model loaded hd-bet and still fell back to BET.
@@ -60,9 +59,6 @@ if os.path.exists(tr):
         txt = fh.read()
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 plain = ANSI.sub("", txt)
-
-rec["tools_loaded"] = sorted(set(
-    re.findall(r"module load\s+([A-Za-z0-9_.\-]+/[A-Za-z0-9_.]+)", txt)))
 
 # Method detection lives in summarize.py so the two never drift apart. Guarded
 # because this runs in the hot path of every run: a missing sibling must not cost
@@ -192,6 +188,11 @@ else:
     rec["off_spec"] = (["sudo"] * bool(rec["used_sudo"])
                        + ["package-install"] * bool(rec["installed_packages"])
                        + ["external-image"] * bool(rec["external_images"]))
+
+# Modules loaded, from the same executed commands and scripts. A module named in
+# the agent's text, a diff it printed, or a script comment was not loaded.
+_MODLOAD = re.compile(_AT + r"(?:module\s+load|ml)\s+((?:[\w.+-]+/[\w.+-]+\s*)+)")
+rec["tools_loaded"] = sorted({m for c in _cmds for g in _MODLOAD.findall(c) for m in g.split()})
 
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
