@@ -26,14 +26,33 @@ File prefixes: `00` manifest, `10` summaries, `20` gates, `30` mechanism,
 
 ## 1. Headline pass rates (intent-to-treat)
 
-Source: `10_summary_<task>.txt`, `40_matrix.txt`
+Source: `stratified_effect.py` over `results/summary_<task>.json`. Stroke has no
+published summary; its row comes from `summarize.py` over
+`results/runs/structural-brain-extraction-stroke/`.
 
-| task | models | no skill | skill A | skill B | A vs baseline |
+Skill effect per task, stratified by model: Mantel-Haenszel risk difference (skill
+minus no skill) with 95% CI, exact stratified p, Holm-adjusted across the five
+tasks, and the number of models with a positive / zero / negative difference.
+Runs are never pooled across models.
+
+| task | models | skill A vs no skill (95% CI) | exact p | Holm p | + / 0 / − |
 |---|---|---|---|---|---|
-| 7T MP2RAGE | 5 | 21/50 = 42% | 35/50 = 70% | 25/50 = 50% | +28 pp, p=0.0085 |
-| motion (3T) | 5 | 30/50 = 60% | 43/50 = 86% | not run | +26 pp, p=0.0063 |
-| stroke | 3 | 15/30 = 50% | 22/30 = 73% | 20/30 = 67% | +23 pp, p=0.11 |
-| 7t-nodura | 5 | 20/50 = 40% | 23/50 = 46% | not run | +6 pp, p=0.69 |
+| diffusion | 4 | +65 pp (+50, +80) | <0.0001 | <0.0001 | 4 / 0 / 0 |
+| motion (3T) | 5 | +32 pp (+16, +48) | 0.0003 | 0.0014 | 4 / 0 / 1 |
+| 7T MP2RAGE | 5 | +20 pp (+7, +33) | 0.0071 | 0.021 | 5 / 0 / 0 |
+| stroke | 5 | +11 pp (+0, +22) | 0.054 | 0.11 | 3 / 1 / 1 |
+| 7t-nodura | 4 | +8 pp (−12, +27) | 0.59 | 0.59 | 3 / 0 / 1 |
+
+Skill B vs no skill: 7T +6 pp (−9, +21), p=0.60; stroke +13 pp (+3, +24), p=0.050.
+
+All of these are **wave 0**: the Neurodesk Play VM environment (standing instructions
+from `/opt/AGENTS.md`, additional skills in both arms), arms not interleaved in
+time, and 7T and motion spanning more than one image. They are exploratory and are
+not pooled with later waves.
+
+**One 10-vs-10 cell has little power.** A true 20% → 70% difference reaches p < 0.05
+in 43% of cells (`stratified_effect.py --power`). A cell that is not significant is
+not evidence of no effect.
 
 **Arms are intent-to-treat**, defined by skill *availability*, not uptake. Runs
 that never opened the skill still count in the skill arm.
