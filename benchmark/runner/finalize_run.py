@@ -18,9 +18,16 @@ agent chose. This reads them back out of the transcript once the run is over:
                  per session, so this works retroactively on runs already on disk --
                  nothing has to be re-run to get it.
   dataset_pin    dataset version the agent pinned itself (e.g. `git checkout 1.1.0`)
-  skill_loads    count of opencode's `Skill "<name>"` markers, i.e. did the skill
-                 actually load (the ground truth for the with/without arm)
+  skill_loads    successful skill tool calls
   skills_seen    which skills those were
+  skill_load_failures  skill tool calls that failed
+  skills_available     skills opencode listed in a failed call's error; None if
+                       it never listed them
+  skill_files_read     SKILL.md / references/*.md files opened directly
+  off_spec       why this run left the benchmark environment: "sudo",
+                 "package-install", "external-image". [] is clean; None means
+                 the transcript could not be read, which is NOT clean.
+  used_sudo / installed_packages / external_images   the evidence behind it
   exit_code / output_present / end
 
 Safe to re-run: it only adds keys. Also usable to backfill older runs.
@@ -51,6 +58,8 @@ txt = ""
 if os.path.exists(tr):
     with open(tr, encoding="utf-8", errors="replace") as fh:
         txt = fh.read()
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+plain = ANSI.sub("", txt)
 
 rec["tools_loaded"] = sorted(set(
     re.findall(r"module load\s+([A-Za-z0-9_.\-]+/[A-Za-z0-9_.]+)", txt)))
@@ -106,11 +115,122 @@ rec["scheduler_mentions"] = len(re.findall("slurm|sbatch|squeue|scontrol", txt, 
 rec["qc_ran"] = bool(re.search(
     "qc_metrics|afni_outline_qc|qc_mosaic|ai_eval|brain-extraction-qc", txt, re.I))
 
+# --- off_spec: did the run leave the benchmark environment? -------------------
+# The benchmark environment provides Neurodesk tools through Lmod and nothing else.
+# The runner allows sudo, so leaving the environment is detected, not prevented:
+#   sudo             a command run with sudo
+#   package-install  an apt/pip/conda/npm install
+#   external-image   a container image fetched from outside CVMFS
+#
+# Only executed commands are read: transcript lines opencode prefixes with `$ `,
+# and the lines of shell scripts the agent wrote (it runs them by name, so their
+# content is not in the transcript). Text the agent writes is not a command.
+_tr_cmds = [l[2:] for l in plain.splitlines() if l.startswith("$ ")]
+_cmds = list(_tr_cmds)
+for _root, _dirs, _files in os.walk(run_dir):
+    # Skip the fetched dataset, scratch, opencode's state, the graded outputs, and
+    # any cloned repository or dataset (it has .git or .datalad); those carry their
+    # own .sh files.
+    _dirs[:] = [d for d in _dirs
+                if d not in ("data", "tmp", ".xdg-data", "submissions")
+                and not os.path.exists(os.path.join(_root, d, ".git"))
+                and not os.path.exists(os.path.join(_root, d, ".datalad"))]
+    for _f in _files:
+        if _f.endswith(".sh"):
+            try:
+                with open(os.path.join(_root, _f), encoding="utf-8", errors="replace") as fh:
+                    _cmds += [l for l in fh.read().splitlines()
+                              if l.strip() and not l.lstrip().startswith("#")]
+            except OSError:
+                pass
+
+# Command position: start of a line, after a shell separator, after then/do/else,
+# `{` or xargs, or inside the quoted argument of `bash -c` / `eval`. A quote
+# anywhere else is an argument: `echo "sudo ..."` runs echo. Optional `VAR=x`,
+# env, nohup, time, exec and command in front.
+_AT = (r"(?:^|[;&|(`]|\$\(|\b(?:then|do|else)\s|\{\s|(?:ba)?sh\s+-c\s+['\"]"
+       r"|\beval\s+['\"]?|\bxargs\s+(?:-\S+\s+)*)\s*(?:\w+=\S*\s+)*"
+       r"(?:(?:env|nohup|time|exec|command)\s+(?:\w+=\S*\s+)*)*")
+_SUDO = r"(?:sudo(?:\s+-u\s+\S+)?(?:\s+-\S+)*\s+)?"
+SUDO_RE = re.compile(_AT + r"sudo\b")
+INSTALL_RE = re.compile(
+    _AT + _SUDO + r"(?:\w+=\S*\s+)*"
+    r"((?:apt-get|apt|dnf|yum|apk)\s+(?:-\S+\s+)*install\b[^;&|<>]*"
+    r"|(?:\S*/)?(?:pip(?:3(?:\.\d+)?)?|uv\s+pip|python3?(?:\.\d+)?\s+-m\s+pip)"
+    r"\s+install\b[^;&|<>]*"
+    r"|pipx\s+install\b[^;&|<>]*"
+    r"|(?:conda|mamba|micromamba)\s+(?:env\s+)?(?:install|create)\b[^;&|<>]*"
+    r"|npm\s+(?:i|install)\b[^;&|<>]*)")
+# An image from outside CVMFS: `docker pull`, `apptainer pull|build` from a remote
+# URI, or `apptainer exec|run|shell` whose image argument (first positional after
+# the flags) is a remote URI. A URL later on the line is a download inside the
+# container, not an image.
+_REMOTE = r"['\"]?(?:docker|oras|library|shub)://"
+# docker run flags that take a value, so the value is not read as the image.
+_DOCKER_VAL = r"(?:-v|--volume|-e|--env|-w|--workdir|--name|-u|--user|--entrypoint|--network|-p|--mount|--platform)"
+IMAGE_RE = re.compile(
+    _AT + _SUDO + r"(?:"
+    r"(?:docker|podman)\s+pull\s+(?:-\S+\s+)*['\"]?([\w./:@+-]+)"
+    r"|(?:docker|podman)\s+run\s+(?:" + _DOCKER_VAL + r"\s+\S+\s+|-\S+\s+)*['\"]?([\w./:@+-]+)"
+    r"|(?:apptainer|singularity)\s+(?:pull|build)\b[^;&|]*?"
+    r"(?:" + _REMOTE + r"|['\"]?https?://)([\w./:@+-]+)"
+    r"|(?:apptainer|singularity)\s+(?:exec|run|shell)\s+"
+    r"(?:-\S+(?:\s+(?!" + _REMOTE + r")[^-\s]\S*)?\s+)*" + _REMOTE + r"([\w./:@+-]+))")
+
+if not _tr_cmds:
+    # No command lines in the transcript: unreadable, not clean. Scripts alone
+    # are not enough, since most commands never reach a script.
+    rec["off_spec"] = None
+else:
+    rec["used_sudo"] = sum(1 for c in _cmds if SUDO_RE.search(c))
+    # The trailing fd of a redirect (`... 2>&1`) is not part of the install.
+    rec["installed_packages"] = sorted(set(
+        re.sub(r"\s+\d$", "", " ".join(m.group(1).split()))[:120]
+        for c in _cmds for m in INSTALL_RE.finditer(c)))
+    rec["external_images"] = sorted(set(
+        next(g for g in m.groups() if g) for c in _cmds for m in IMAGE_RE.finditer(c)))
+    rec["off_spec"] = (["sudo"] * bool(rec["used_sudo"])
+                       + ["package-install"] * bool(rec["installed_packages"])
+                       + ["external-image"] * bool(rec["external_images"]))
+
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
-skills = re.findall(r'Skill "([^"]+)"', txt)
-rec["skill_loads"] = len(skills)
-rec["skills_seen"] = sorted(set(skills))
+# --- skill loads -----------------------------------------------------------------
+# opencode prints one status line per skill tool call: `→ Skill "<name>"` on
+# success, `✗ Skill "<name>" failed` on failure. A failure is followed by
+# `Error: Skill "<name>" not found. Available skills: a, b`, which is read only for
+# the list of skills opencode offered. Any other line naming a skill is text.
+_loads, _fails, _avail = [], [], None
+for _l in plain.splitlines():
+    _a = re.match(r"Error: .*Available skills:\s*(.*)", _l)
+    if _a:
+        _avail = (_avail or set()) | {s.strip(" .") for s in _a.group(1).split(",")
+                                      if s.strip(" .")}
+    _m = re.match(r'([→✗])\s*Skill "([^"]+)"', _l)
+    if _m:
+        (_loads if _m.group(1) == "→" else _fails).append(_m.group(2))
+rec["skill_loads"] = len(_loads)
+rec["skills_seen"] = sorted(set(_loads))
+rec["skill_load_failures"] = len(_fails)
+# None when opencode never printed its list, which it does only on a failed call.
+rec["skills_available"] = sorted(_avail) if _avail is not None else None
+
+# Skill files opened directly (the Read tool, or a command that prints a file)
+# rather than through the skill tool. Each pipeline segment is judged on its own:
+# in `find / -name SKILL.md | head` the path belongs to find, which only lists.
+# Paths must contain a directory; `cat SKILL.md` after a `cd` is not detected.
+_READ_CMD = re.compile(r"\s*(?:sudo\s+(?:-\S+\s+)*)?(?:cat|head|tail|less|more|sed|awk|grep|bat|nl"
+                       r"|git\s+(?:-C\s+\S+\s+)?(?:show|cat-file))\b")
+_SKILL_FILE = re.compile(r"[\w./~-]*(?:/SKILL\.md|/references/[\w.-]+\.md)")
+_reads = set()
+for _l in plain.splitlines():
+    if _l.startswith("→ Read "):
+        _reads.update(_SKILL_FILE.findall(_l))
+    elif _l.startswith("$ "):
+        for _seg in re.split(r"\|\|?|;|&&", _l[2:]):
+            if _READ_CMD.match(_seg):
+                _reads.update(_SKILL_FILE.findall(_seg))
+rec["skill_files_read"] = sorted(_reads)
 rec["transcript_lines"] = txt.count("\n")
 
 # --- token accounting from opencode's own database ---------------------------

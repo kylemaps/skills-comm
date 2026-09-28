@@ -535,8 +535,10 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
             src = fh.read()
         ordered = [
             'contaminated: env-only run loaded the skill',
+            'contaminated: env-only run read skill files',
             'misassigned: skill installed in env-only run',
             'misassigned: skill absent in',
+            'harness failure: skill installed but not offered by',
             'harness failure: run recorded no exit code',
             'harness failure: run timed out',
             'harness failure: %s" % r["infra_error"]',
@@ -565,9 +567,9 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         # still could not count it.
         n = src.count('r["exclude_reason"] = ')
         self.assertEqual(
-            n, 9,
-            "the chain has %d exclude_reason assignments, expected 9 (one reset to "
-            "empty plus eight branches). If you added a branch, decide where it "
+            n, 11,
+            "the chain has %d exclude_reason assignments, expected 11 (one reset to "
+            "empty plus ten branches). If you added a branch, decide where it "
             "belongs in the order and update this number deliberately." % n)
 
     def test_a_timeout_with_output_is_still_excluded(self):

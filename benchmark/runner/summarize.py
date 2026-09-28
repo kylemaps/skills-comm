@@ -33,8 +33,12 @@ Two decisions in here are methodological, not cosmetic.
    env-only + skill actually loaded    -> impossible unless two arms overlapped in the
                                           container-global skills dir. Proof of
                                           contamination. EXCLUDE.
+   env-only + skill files read
+   directly (SKILL.md, references/)    -> contamination. EXCLUDE.
    arm label disagrees with
    skills_installed                    -> the harness misassigned the cell. EXCLUDE.
+   env+skill + opencode reports the
+   skill is not among those offered    -> the skill never reached the agent. EXCLUDE.
    gateway died and no output          -> the agent never got to attempt the task.
                                           EXCLUDE (see INFRA_ERROR_RES).
    env+skill + skill never opened      -> non-uptake. KEEP.
@@ -404,6 +408,10 @@ def load_run(run_dir, task, tokens_available=False):
             glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))),
         "skill_loads": rec.get("skill_loads", 0),
         "skills_seen": rec.get("skills_seen") or [],
+        "skill_load_failures": rec.get("skill_load_failures", 0),
+        "skills_offered": rec.get("skills_offered"),
+        "skills_available": rec.get("skills_available"),
+        "skill_files_read": rec.get("skill_files_read") or [],
         "skills_installed": rec.get("skills_installed", ""),
         "tools_loaded": rec.get("tools_loaded") or [],
         "dataset_pin": rec.get("dataset_pin") or [],
@@ -478,6 +486,10 @@ def load_run(run_dir, task, tokens_available=False):
               "tokens_cache_read", "tokens_cache_write", "tokens_total"):
         r[k] = rec.get(k)
     r["session_id"] = rec.get("session_id", "")
+    # Reasons the run left the benchmark environment (see finalize_run.py). A list;
+    # [] is clean. None means not checked: the run predates the field, or its
+    # transcript had no readable command lines.
+    r["off_spec"] = rec.get("off_spec")
 
     a = parse_astra(run_dir)
     r["decided_tools"] = a.get("decided_tools") or []
@@ -492,14 +504,35 @@ def load_run(run_dir, task, tokens_available=False):
     has_skill_installed = any(s in installed for s in SKILL_NAMES)
     has_skill_seen = any(s in seen for s in SKILL_NAMES)
 
-    r["uptake"] = has_skill_seen
+    # What opencode reported offering the agent: skills_offered, from `opencode debug
+    # skill` before the run; otherwise skills_available, from a failed skill call's
+    # error. None when neither was recorded. When known, it decides delivery over
+    # what was copied into the skills directory.
+    avail = r["skills_offered"]
+    if avail is None:
+        avail = r["skills_available"]
+    any_offered = avail is not None and any(s in avail for s in SKILL_NAMES)
+    all_offered = avail is not None and all(s in avail for s in SKILL_NAMES)
+    # Only reads of the benchmark's own skills count; other skills and datasets have
+    # SKILL.md and references/ files too.
+    own_reads = [p for p in r["skill_files_read"]
+                 if any("/%s/" % s in p for s in SKILL_NAMES)]
+
+    # Uptake: the agent loaded the skill, or opened its files directly.
+    r["uptake"] = has_skill_seen or (r["arm"].startswith("env+skill") and bool(own_reads))
     r["exclude_reason"] = ""
     if r["arm"] == "env-only" and has_skill_seen:
         r["exclude_reason"] = "contaminated: env-only run loaded the skill"
-    elif r["arm"] == "env-only" and has_skill_installed:
+    elif r["arm"] == "env-only" and own_reads:
+        r["exclude_reason"] = "contaminated: env-only run read skill files"
+    elif r["arm"] == "env-only" and (has_skill_installed or any_offered):
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
     elif r["arm"].startswith("env+skill") and not has_skill_installed:
         r["exclude_reason"] = "misassigned: skill absent in %s run" % r["arm"]
+    elif (r["arm"].startswith("env+skill") and avail is not None
+          and not all_offered and not has_skill_seen):
+        r["exclude_reason"] = ("harness failure: skill installed but not offered by "
+                               "opencode (available: %s)" % ", ".join(avail))
     elif r["exit_code"] in (None, ""):
         # run_bench.sh records an exit code for every run that finishes, whatever
         # the outcome. A blank one means the process never got to report -- the
@@ -1054,6 +1087,11 @@ def report(runs, task):
                 "median_tokens_total": int(median([r["tokens_total"] for r in rs
                                                    if r.get("tokens_total")]) or 0),
                 "uptake": sum(1 for r in rs if r["uptake"]),
+                "off_spec": {
+                    "flagged": sum(1 for r in rs if r["off_spec"]),
+                    "unchecked": sum(1 for r in rs if r["off_spec"] is None),
+                    "reasons": dict(Counter(x for r in rs for x in (r["off_spec"] or []))),
+                },
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
                 "decided": dict(Counter(t for r in rs for t in r["decided_tools"])),
@@ -1077,7 +1115,8 @@ def report(runs, task):
 
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
-            "tools_loaded", "dataset_pin", "not_found_claims", "exit_code",
+            "tools_loaded", "skill_load_failures", "off_spec", "dataset_pin",
+            "not_found_claims", "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
             "tokens_input", "tokens_output", "tokens_reasoning",
             "tokens_cache_read", "tokens_total", "session_id",
@@ -1130,6 +1169,10 @@ def main():
             for k in ("methods", "tools_loaded", "dataset_pin",
                       "decided_tools", "considered_tools"):
                 row[k] = ";".join(row.get(k) or [])
+            # Three states, so an empty cell cannot be read as clean.
+            os_ = row.get("off_spec")
+            row["off_spec"] = ("unchecked" if os_ is None
+                               else ";".join(os_) if os_ else "none")
             w.writerow(row)
 
     print("\nwrote %s" % sp)
