@@ -2,8 +2,11 @@
 """Gate one cell before it is allowed to become a published result.
 
     python3 assemble_cell.py --runs bench/runs --task T --model M --arm A \\
-        --sweep benchmark/ci/sweep.json --stage results/runs
+        --sweep benchmark/ci/sweep.json --wave 1 --stage results/wave1/runs
     python3 assemble_cell.py ... --explain      # print the gates and stop
+
+--wave selects the wave's tasks, pins and classification rules from sweep.json. It is
+required when sweep.json declares waves.
 
 WHAT THIS IS FOR
 `run.yml` produces an artifact. `pages.yml` publishes `results/**`. Nothing connects
@@ -40,7 +43,7 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from summarize import (PROVENANCE_KEYS, UNRECORDED, RETRYABLE_EXCLUSIONS,  # noqa: E402
-                       load_run)
+                       load_run, rules_for)
 
 # Provenance that must not vary inside one cell. skills_sha is excluded for the same
 # reason summarize.py excludes it from pooling: the commit a snapshot came from can
@@ -118,7 +121,22 @@ def collisions(runs, task, stage):
     return out
 
 
-def gates_for(runs, task, model, arm, spec, stage=None, replace=False):
+def wave_spec(spec, wave):
+    """The part of sweep.json that declares this wave's cells: its tasks and pins.
+
+    A sweep without `waves` declares one set of tasks at the top level.
+    """
+    if "waves" not in spec:
+        return {"tasks": spec.get("tasks", {})}
+    if wave is None:
+        raise SystemExit("REFUSED: the sweep declares waves; say which with --wave")
+    w = spec["waves"].get(str(wave))
+    if not isinstance(w, dict) or "tasks" not in w:
+        raise SystemExit("REFUSED: wave %s is not declared in the sweep" % wave)
+    return w
+
+
+def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None):
     g = []
 
     # ---- complete ----------------------------------------------------------
@@ -159,6 +177,19 @@ def gates_for(runs, task, model, arm, spec, stage=None, replace=False):
         if len(vals) > 1:
             p.fail("%s varies within the cell: %s" % (k, ", ".join(sorted(vals))))
     g.append(p)
+
+    # ---- the wave's environment -------------------------------------------
+    if pins:
+        w = Gate("the wave's environment",
+                 "A wave is one environment. Runs from another environment or task "
+                 "pack belong to another wave, even when they are consistent with "
+                 "each other.")
+        for k, want_v in sorted(pins.items()):
+            off = Counter(str(r.get(k)) for r in runs if r.get(k) != want_v)
+            if off:
+                w.fail("%s must be %s; %s" % (k, want_v, ", ".join(
+                    "%d run(s) carry %s" % (n, v) for v, n in sorted(off.items()))))
+        g.append(w)
 
     # ---- the arm is the arm ------------------------------------------------
     a = Gate("the arm is what it claims",
@@ -253,6 +284,7 @@ def main():
     ap.add_argument("--model", required=True, help="bare id, no neurodesk/ prefix")
     ap.add_argument("--arm", required=True)
     ap.add_argument("--sweep", default=os.path.join(HERE, "..", "ci", "sweep.json"))
+    ap.add_argument("--wave", help="wave id in sweep.json")
     ap.add_argument("--stage", help="if the gates pass, copy the graded facts here")
     ap.add_argument("--replace", action="store_true",
                     help="allow overwriting published runs of this cell. Say it out "
@@ -264,29 +296,35 @@ def main():
 
     spec = json.load(open(a.sweep, encoding="utf-8"))
     if a.explain:
-        for g in gates_for([], a.task, a.model, a.arm, spec, a.stage, a.replace):
+        for g in gates_for([], a.task, a.model, a.arm, spec, a.stage, a.replace,
+                           {"image_version": "<pinned>"}):
             print("%-28s %s" % (g.name, g.why))
         return 0
 
-    if a.task not in spec["tasks"]:
-        raise SystemExit("REFUSED: %s is not a task in %s. A cell nobody declared is "
-                         "not a result." % (a.task, a.sweep))
-    if a.arm not in spec["tasks"][a.task]["arms"]:
+    w = wave_spec(spec, a.wave)
+    rules = rules_for(spec, a.wave) if "waves" in spec else None
+    if a.task not in w["tasks"]:
+        raise SystemExit("REFUSED: %s is not a task in %s%s. A cell nobody declared is "
+                         "not a result." % (a.task, a.sweep,
+                                            " wave %s" % a.wave if a.wave else ""))
+    if a.arm not in w["tasks"][a.task]["arms"]:
         raise SystemExit("REFUSED: arm %s is not declared for %s" % (a.arm, a.task))
 
     model = a.model.replace("neurodesk/", "")
     dirs = [d for d in sorted(glob.glob(os.path.join(a.runs, "%s__*" % a.task)))
             if os.path.isdir(d)]
-    runs = [load_run(d, a.task) for d in dirs]
+    runs = [load_run(d, a.task, rules=rules) for d in dirs]
     runs = [r for r in runs if r["model"] == model and r["arm"] == a.arm]
 
-    print("cell: %s / %s / %s" % (a.task, model, a.arm))
+    print("cell: %s / %s / %s%s" % (a.task, model, a.arm,
+                                    "  (wave %s)" % a.wave if a.wave else ""))
     print("%d run directories matched\n" % len(runs))
     if not runs:
         raise SystemExit("REFUSED: no runs matched this cell. An empty cell is not a "
                          "complete one -- check the model prefix and the arm label.")
 
-    gates = gates_for(runs, a.task, model, a.arm, spec, a.stage, a.replace)
+    gates = gates_for(runs, a.task, model, a.arm, spec, a.stage, a.replace,
+                      w.get("pins"))
     for g in gates:
         print("  %-5s %s" % ("ok" if g.ok else "FAIL", g.name))
         for f in g.failures:

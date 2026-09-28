@@ -90,4 +90,9 @@ if [ -f "$BENCH_HOME/sweep_manifest.json" ]; then
   cat "$BENCH_HOME/sweep_manifest.json"
 fi
 
-python "$HERE/summarize.py" "$BENCH_HOME/runs" "$TASK"
+# SWEEP and WAVE, when both set, classify with that wave's rules.
+if [ -n "${SWEEP:-}" ] && [ -n "${WAVE:-}" ]; then
+  python "$HERE/summarize.py" "$BENCH_HOME/runs" "$TASK" --sweep "$SWEEP" --wave "$WAVE"
+else
+  python "$HERE/summarize.py" "$BENCH_HOME/runs" "$TASK"
+fi

@@ -509,7 +509,7 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         with open(os.path.join(HERE, "summarize.py"), encoding="utf-8") as fh:
             src = fh.read()
         blank = src.index('r["exit_code"] in (None, "")')
-        timeout = src.index('r["exit_code"] == RUN_TIMEOUT_EXIT')
+        timeout = src.index('r["timed_out"] and rules["timeout"] == "exclude"')
         self.assertLess(blank, timeout)
         self.assertIn("harness failure: run recorded no exit code", src)
 

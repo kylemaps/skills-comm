@@ -38,8 +38,10 @@ disown
 $R/collect_results.sh structural-brain-extraction-7t
 ```
 
-Runs land in `~/bench/runs/<task>__<model>__<condition>__r<N>/`, each containing `prompt.txt`,
-`run.json` (provenance), `transcript.txt`, and `submissions/<task>/output.nii.gz`.
+The agent works in `~/bench/work/run-<random>/`, a name that does not identify the run.
+When it exits, that directory is renamed to `~/bench/runs/<task>__<model>__<condition>__r<N>/`
+and `prompt.txt`, `run.json` (provenance) and `transcript.txt` are moved in beside
+`submissions/<task>/output.nii.gz`.
 
 ## Experimental design
 

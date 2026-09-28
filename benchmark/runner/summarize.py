@@ -34,7 +34,8 @@ Two decisions in here are methodological, not cosmetic.
                                           container-global skills dir. Proof of
                                           contamination. EXCLUDE.
    env-only + skill files read
-   directly (SKILL.md, references/)    -> contamination. EXCLUDE.
+   directly (SKILL.md, references/)    -> contamination. EXCLUDE, or keep and flag
+                                          (the wave's `control_skill_reads` rule).
    arm label disagrees with
    skills_installed                    -> the harness misassigned the cell. EXCLUDE.
    env+skill + opencode reports the
@@ -145,6 +146,38 @@ INFRA_ERROR_RES = [
     (re.compile(r"Error: Session not found"), "opencode session lost"),
     (re.compile(r"Unexpected server error\. Check server logs"), "opencode server error"),
 ]
+
+# How runs are classified. A wave declares its rules in sweep.json (`waves.<n>.rules`);
+# keys it leaves out take these values, which are the rules wave 0 was published with.
+#   timeout              "exclude": a run killed by RUN_TIMEOUT is excluded and re-run.
+#                        "fail": it counts as a failed run whatever it produced
+#                        (verdict TIMEOUT, score 0).
+#   infra_errors_from    where INFRA_ERROR_RES is matched. "transcript": anywhere in it.
+#                        "opencode": only opencode's own error messages
+#                        (`opencode_errors`, recorded by finalize_run.py).
+#   control_skill_reads  a control run that read the skill's files. "exclude": excluded
+#                        as contaminated. "keep": kept in its arm and flagged.
+DEFAULT_RULES = {"timeout": "exclude", "infra_errors_from": "transcript",
+                 "control_skill_reads": "exclude"}
+RULE_VALUES = {"timeout": ("exclude", "fail"),
+               "infra_errors_from": ("transcript", "opencode"),
+               "control_skill_reads": ("exclude", "keep")}
+
+
+def rules_for(sweep, wave):
+    """The classification rules for a wave: DEFAULT_RULES overridden by the wave's own."""
+    rules = dict(DEFAULT_RULES)
+    if sweep is None or wave is None:
+        return rules
+    w = (sweep.get("waves") or {}).get(str(wave))
+    if w is None:
+        raise SystemExit("wave %s is not declared in the sweep" % wave)
+    for k, v in (w.get("rules") or {}).items():
+        if k not in RULE_VALUES or v not in RULE_VALUES[k]:
+            raise SystemExit("wave %s: unknown rule %s=%s" % (wave, k, v))
+        rules[k] = v
+    return rules
+
 
 # skills_hash is here on purpose: a collaborator's skill drop leaves skills_sha
 # unchanged while the skill content is entirely different, so the commit alone would
@@ -380,8 +413,9 @@ def parse_astra(run_dir):
     }
 
 
-def load_run(run_dir, task, tokens_available=False):
+def load_run(run_dir, task, tokens_available=False, rules=None):
     """One run -> a flat record. Never raises; a broken run becomes a failed run."""
+    rules = dict(DEFAULT_RULES, **(rules or {}))
     rec = {}
     rj = os.path.join(run_dir, "run.json")
     if os.path.exists(rj):
@@ -440,9 +474,16 @@ def load_run(run_dir, task, tokens_available=False):
 
     # Only treat a harness error as fatal when the run produced nothing. If the agent
     # recovered and still delivered a mask, the run is real and gets scored.
+    r["opencode_errors"] = rec.get("opencode_errors")
+    if rules["infra_errors_from"] == "opencode":
+        # Stored without the `Error: ` prefix opencode printed; restored so the
+        # patterns match as they do on a transcript.
+        infra_text = "\n".join("Error: " + m for m in r["opencode_errors"] or [])
+    else:
+        infra_text = text
     r["infra_error"] = ""
     for rx, label in INFRA_ERROR_RES:
-        if rx.search(text):
+        if rx.search(infra_text):
             r["infra_error"] = label
             break
 
@@ -490,6 +531,14 @@ def load_run(run_dir, task, tokens_available=False):
     # [] is clean. None means not checked: the run predates the field, or its
     # transcript had no readable command lines.
     r["off_spec"] = rec.get("off_spec")
+    # Reads of grading material (see finalize_run.py). A list; [] is clean, None is
+    # not checked. Flagged, never excluded.
+    r["answer_key_reads"] = rec.get("answer_key_reads")
+    r["arm_seen"] = rec.get("arm_seen")
+    r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT
+    # Why a run is flagged but kept: "answer-key", "arm-seen", "control-read-skill".
+    r["flags"] = (["answer-key"] * bool(r["answer_key_reads"])
+                  + ["arm-seen"] * bool(r["arm_seen"]))
 
     a = parse_astra(run_dir)
     r["decided_tools"] = a.get("decided_tools") or []
@@ -521,9 +570,12 @@ def load_run(run_dir, task, tokens_available=False):
     # Uptake: the agent loaded the skill, or opened its files directly.
     r["uptake"] = has_skill_seen or (r["arm"].startswith("env+skill") and bool(own_reads))
     r["exclude_reason"] = ""
+    if r["arm"] == "env-only" and own_reads and rules["control_skill_reads"] == "keep":
+        r["flags"].append("control-read-skill")
     if r["arm"] == "env-only" and has_skill_seen:
         r["exclude_reason"] = "contaminated: env-only run loaded the skill"
-    elif r["arm"] == "env-only" and own_reads:
+    elif (r["arm"] == "env-only" and own_reads
+          and rules["control_skill_reads"] == "exclude"):
         r["exclude_reason"] = "contaminated: env-only run read skill files"
     elif r["arm"] == "env-only" and (has_skill_installed or any_offered):
         r["exclude_reason"] = "misassigned: skill installed in env-only run"
@@ -547,7 +599,7 @@ def load_run(run_dir, task, tokens_available=False):
         # output is an unknown intermediate.
         r["exclude_reason"] = ("harness failure: run recorded no exit code, killed "
                                "before it could report")
-    elif r["exit_code"] == RUN_TIMEOUT_EXIT:
+    elif r["timed_out"] and rules["timeout"] == "exclude":
         # A timeout is our failure, not the model's: WE killed the run. It is
         # excluded even when it produced output, which is the part that took a
         # while to see. On diffusion-brain-mask 11 of 80 runs hit the wall, and
@@ -581,6 +633,10 @@ def load_run(run_dir, task, tokens_available=False):
         # The output_present guard is load-bearing -- without it, every genuine
         # no-output failure is excluded too and the pass rate inflates.
         r["exclude_reason"] = "not graded yet -- run the grader on this task"
+    # timeout "fail": the run stays in and is scored as a failed run (verdict TIMEOUT,
+    # score 0) whatever it wrote. The grader's metrics stay in `metrics` and `dice`.
+    if r["timed_out"] and rules["timeout"] == "fail":
+        r["passed"], r["score"], r["verdict"] = False, 0.0, "TIMEOUT"
     r["valid"] = not r["exclude_reason"]
     return r
 
@@ -604,7 +660,7 @@ def run_dates(rs):
     return (ds[0], ds[-1]) if ds else (None, None)
 
 
-def report(runs, task):
+def report(runs, task, rules=None):
     valid = [r for r in runs if r["valid"]]
     excluded = [r for r in runs if not r["valid"]]
 
@@ -1055,6 +1111,9 @@ def report(runs, task):
 
     return {
         "task": task,
+        # The classification rules these numbers were computed under (DEFAULT_RULES
+        # plus the wave's own).
+        "rules": dict(DEFAULT_RULES, **(rules or {})),
         "first_run": run_dates(runs)[0],
         "last_run": run_dates(runs)[1],
         "n_runs": len(runs),
@@ -1092,6 +1151,16 @@ def report(runs, task):
                     "unchecked": sum(1 for r in rs if r["off_spec"] is None),
                     "reasons": dict(Counter(x for r in rs for x in (r["off_spec"] or []))),
                 },
+                "answer_key_reads": {
+                    "flagged": sum(1 for r in rs if r["answer_key_reads"]),
+                    "unchecked": sum(1 for r in rs if r["answer_key_reads"] is None),
+                },
+                "arm_seen": {
+                    "flagged": sum(1 for r in rs if r["arm_seen"]),
+                    "unchecked": sum(1 for r in rs if r["arm_seen"] is None),
+                },
+                "flags": dict(Counter(f for r in rs for f in r["flags"])),
+                "timed_out": sum(1 for r in rs if r["timed_out"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
                 "decided": dict(Counter(t for r in rs for t in r["decided_tools"])),
@@ -1115,8 +1184,9 @@ def report(runs, task):
 
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
-            "tools_loaded", "skill_load_failures", "off_spec", "dataset_pin",
-            "not_found_claims", "exit_code",
+            "tools_loaded", "skill_load_failures", "off_spec", "answer_key_reads",
+            "arm_seen", "flags", "timed_out", "dataset_pin", "not_found_claims",
+            "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
             "tokens_input", "tokens_output", "tokens_reasoning",
             "tokens_cache_read", "tokens_total", "session_id",
@@ -1135,7 +1205,13 @@ def main():
     ap.add_argument("task")
     ap.add_argument("--out-dir", default=None,
                     help="where to write summary.json / runs.csv (default: runs_dir)")
+    ap.add_argument("--sweep", help="sweep.json declaring the wave's rules")
+    ap.add_argument("--wave", help="classify with this wave's rules (needs --sweep)")
     a = ap.parse_args()
+    if bool(a.sweep) != bool(a.wave):
+        ap.error("--sweep and --wave go together")
+    rules = rules_for(json.load(open(a.sweep, encoding="utf-8")) if a.sweep else None,
+                      a.wave)
 
     dirs = sorted(d for d in glob.glob(os.path.join(a.runs_dir, a.task + "__*"))
                   if os.path.isdir(d))
@@ -1145,10 +1221,11 @@ def main():
     # Two passes: establish whether token extraction works for this dataset at
     # all, then classify. Without that check, an unreadable opencode database
     # would mark every no-output run as a harness failure and void the experiment.
-    probe = [load_run(d, a.task) for d in dirs]
+    probe = [load_run(d, a.task, rules=rules) for d in dirs]
     tokens_available = any(r.get("tokens_total") for r in probe)
-    runs = ([load_run(d, a.task, True) for d in dirs] if tokens_available else probe)
-    summary = report(runs, a.task)
+    runs = ([load_run(d, a.task, True, rules) for d in dirs] if tokens_available
+            else probe)
+    summary = report(runs, a.task, rules)
 
     # Task-scoped filenames. These used to be plain summary.json / runs.csv, so
     # collecting a second task silently overwrote the first task's results -- the
@@ -1167,12 +1244,12 @@ def main():
         for r in runs:
             row = dict(r)
             for k in ("methods", "tools_loaded", "dataset_pin",
-                      "decided_tools", "considered_tools"):
+                      "decided_tools", "considered_tools", "flags"):
                 row[k] = ";".join(row.get(k) or [])
             # Three states, so an empty cell cannot be read as clean.
-            os_ = row.get("off_spec")
-            row["off_spec"] = ("unchecked" if os_ is None
-                               else ";".join(os_) if os_ else "none")
+            for k in ("off_spec", "answer_key_reads", "arm_seen"):
+                v = row.get(k)
+                row[k] = "unchecked" if v is None else ";".join(v) if v else "none"
             w.writerow(row)
 
     print("\nwrote %s" % sp)

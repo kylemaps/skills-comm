@@ -26,9 +26,9 @@ File prefixes: `00` manifest, `10` summaries, `20` gates, `30` mechanism,
 
 ## 1. Headline pass rates (intent-to-treat)
 
-Source: `stratified_effect.py` over `results/summary_<task>.json`. Stroke has no
-published summary; its row comes from `summarize.py` over
-`results/runs/structural-brain-extraction-stroke/`.
+Source: `stratified_effect.py` over `results/wave0/summary_<task>.json` in
+skills-benchmark. Stroke has no published summary; its row comes from `summarize.py`
+over `results/wave0/runs/structural-brain-extraction-stroke/`.
 
 Skill effect per task, stratified by model: Mantel-Haenszel risk difference (skill
 minus no skill) with 95% CI, exact stratified p, Holm-adjusted across the five

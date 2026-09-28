@@ -93,7 +93,10 @@ def build(ids, limits):
         "name": "Neurodesk LiteLLM",
         # The key is referenced, never inlined. This file is world-readable on a
         # shared image and gets copied into bug reports.
-        "options": {"baseURL": GATEWAY, "apiKey": "{env:NEURODESK_API_KEY}"},
+        # x-litellm-session-id groups a run's calls in the gateway's logs. run_bench.sh
+        # sets BENCH_SESSION_ID per run and records it; unset, the header is empty.
+        "options": {"baseURL": GATEWAY, "apiKey": "{env:NEURODESK_API_KEY}",
+                    "headers": {"x-litellm-session-id": "{env:BENCH_SESSION_ID}"}},
         "models": models,
     }
 

@@ -197,8 +197,8 @@ expect 1 $? "refuses a task nobody declared"
 expect 1 $? "refuses an arm nobody declared"
 
 # Staging over a cell that is already published. Run directories are named
-# <task>__<model>__<arm>__rN and carry no date and no node, so a CI re-run of any
-# declared cell produces exactly the ten names already in results/runs/.
+# <task>__<model>__<arm>__rN and carry no date and no node, so a re-run of a
+# published cell produces exactly the names already in its results tree.
 rm -rf "$T/runs" "$T/stage"; mkdir -p "$T/stage"
 for r in 1 2 3; do mkrun env+skill $r graded brain-extraction; done
 stage_gate() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" \
@@ -729,6 +729,407 @@ SECRET="$K" "$PY" "$HERE/redact.py" "$T/r" SECRET >/dev/null 2>&1
 expect 0 $? "a read-only file does not stop the run"
 grep -rqF "$K" "$T/r" && bad "  a copy survived next to a read-only file" \
                       || ok "  and no copy of the secret remains anywhere"
+rm -rf "$T"
+
+echo
+echo "=== finalize_run answer_key_reads: reads and fetches of grading material"
+T=$(mktemp -d)
+E=$(printf '\033')
+fa() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$3" > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  PYTHONIOENCODING=utf-8 "$PY" -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))[sys.argv[2]])" \
+    "$d/run.json" "$2" | tr -d '\r'; }
+o=$(fa a answer_key_reads '→ Read /h/_work/ws/graders/benchmark/tasks.json')
+has   "a Read of tasks.json is flagged" "$o" "tasks.json"
+o=$(fa b answer_key_reads '$ cat /ws/graders/benchmark/graders/diffusion-brain-mask/rubric.json')
+has   "cat of a rubric is flagged" "$o" "rubric.json"
+o=$(fa c answer_key_reads '$ python3 -c "import json; json.load(open(\"/ws/tasks.json\"))"')
+has   "a python one-liner reading tasks.json is flagged" "$o" "tasks.json"
+o=$(fa d answer_key_reads '% WebFetch https://huggingface.co/datasets/neurodeskorg/skills-comm-ground-truth')
+has   "fetching the reference dataset is flagged" "$o" "skills-comm-ground-truth"
+o=$(fa e answer_key_reads '$ git clone https://github.com/nipreps/skills-comm.git')
+has   "cloning skills-comm is flagged" "$o" "skills-comm"
+o=$(fa f answer_key_reads '$ huggingface-cli download neurodeskorg/skills-comm-ground-truth --repo-type dataset')
+has   "downloading the dataset by repo id is flagged" "$o" "ground-truth"
+o=$(fa g answer_key_reads '◈ Exa Web Search "skills-comm benchmark diffusion mask"')
+has   "a web search for the benchmark is flagged" "$o" "skills-comm"
+mkdir -p "$T/h"; printf 'from huggingface_hub import hf_hub_download\nhf_hub_download(repo_id="neurodeskorg/skills-comm-ground-truth", filename="m.nii.gz")\n' > "$T/h/get.py"
+o=$(fa h answer_key_reads '$ python3 get.py')
+has   "a script the agent wrote that fetches the dataset is flagged" "$o" "script:"
+o=$(fa i answer_key_reads '$ find / -name tasks.json 2>/dev/null | head')
+[ "$o" = "[]" ] && ok "searching for tasks.json is not a read" || bad "a find was flagged: $o"
+o=$(fa j answer_key_reads 'The grader probably keeps the answer in tasks.json.
+$ ls')
+[ "$o" = "[]" ] && ok "prose naming tasks.json is not a read" || bad "prose was flagged: $o"
+o=$(fa k answer_key_reads '$ cat /home/jovyan/skills-comm/plugins/brain-extraction/brain-extraction/SKILL.md')
+[ "$o" = "[]" ] && ok "a local skill path containing skills-comm is not a fetch" || bad "local path flagged: $o"
+o=$(fa l answer_key_reads '$ curl -sO https://s3.amazonaws.com/openneuro.org/ds003642/sub-025/anat/x.nii.gz')
+[ "$o" = "[]" ] && ok "fetching the task's input dataset is not flagged" || bad "input data flagged: $o"
+W=/home/runner/_work/skills-benchmark/skills-benchmark
+o=$(fa l2 answer_key_reads "→ Read $W/bench/r1/work/run-x/data/ds002790/README.md
+\$ ls -la $W
+\$ find /home/runner/_work/skills-benchmark -name '*.nii.gz'
+→ Read /home/runner/_work/_temp/prompts.json")
+[ "$o" = "[]" ] && ok "paths through a directory named skills-benchmark are not flagged" || bad "honest paths flagged: $o"
+o=$(fa l3 answer_key_reads '→ Read /ws/graders/benchmark/graders/diffusion-brain-mask/PROVENANCE.md')
+has   "  but a grader's PROVENANCE.md still is" "$o" "PROVENANCE.md"
+mkdir -p "$T/l4/venv/lib/site-packages/pkg"
+printf 'URL = "https://huggingface.co/datasets/neurodeskorg/skills-comm-ground-truth"\n' > "$T/l4/venv/lib/site-packages/pkg/x.py"
+o=$(fa l4 answer_key_reads '$ ls')
+[ "$o" = "[]" ] && ok "code inside installed packages is not the agent's script" || bad "site-packages flagged: $o"
+d="$T/m"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"; : > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+for k in answer_key_reads arm_seen opencode_errors; do
+  o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$d/run.json" $k | tr -d '\r')
+  [ "$o" = "None" ] && ok "an empty transcript: $k is None, not a clean []" || bad "empty transcript: $k is $o"
+done
+
+echo
+echo "=== finalize_run arm_seen: the agent came across its arm label"
+o=$(fa as1 arm_seen '$ ps aux | grep run_bench
+runner  41  bash harness/benchmark/runner/run_bench.sh diffusion-brain-mask neurodesk/qwen3 env-only 3')
+has   "a process listing naming the arm is recorded" "$o" "env-only"
+o=$(fa as2 arm_seen '$ cat /home/runner/_work/_temp/_github_workflow/event.json
+{"inputs": {"arm": "env+skill", "snapshot": "291f844a"}}')
+has   "  so is the dispatch payload" "$o" "env+skill"
+o=$(fa as3 arm_seen '$ ls
+data  scripts  submissions')
+[ "$o" = "[]" ] && ok "a transcript without an arm label is clean" || bad "clean transcript flagged: $o"
+
+echo
+echo "=== finalize_run: tokens found after the working directory was renamed"
+d="$T/tok"; mkdir -p "$d/.xdg-data/opencode"
+echo '{"task_id":"t","workdir":"/w/bench/work/run-abc123"}' > "$d/run.json"; echo x > "$d/transcript.txt"
+"$PY" -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1])
+c.execute('create table session (id text, directory text, time_created int, time_updated int, tokens_input int, tokens_output int)')
+c.execute(\"insert into session values ('s1','/w/bench/work/run-abc123',1000,61000,500,20)\")
+c.commit()" "$d/.xdg-data/opencode/opencode.db"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['tokens_input']==500 and r['session_id']=='s1' and r['session_duration_s']==60" \
+  "$d/run.json" 2>/dev/null && ok "the session is found by the recorded workdir" || bad "session not found by workdir: $(cat "$d/run.json")"
+echo '{"task_id":"t"}' > "$d/run.json"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert 'tokens_input' not in r" "$d/run.json" 2>/dev/null \
+  && ok "  and without it, a session in another directory is not taken" || bad "  matched a session it should not have"
+
+echo
+echo "=== finalize_run opencode_errors: opencode's own errors, not tool errors or output"
+o=$(fa n opencode_errors "${E}[91m${E}[1mError: ${E}[0mModel '' was not found")
+has   "a standalone opencode error is recorded" "$o" "Model '' was not found"
+o=$(fa p opencode_errors "${E}[0m✗ ${E}[0m failed
+${E}[91m${E}[1mError: ${E}[0mTool execution aborted")
+[ "$o" = "[]" ] && ok "an error following a failed tool call is not opencode's own" || bad "tool error recorded: $o"
+o=$(fa q opencode_errors '$ astra paper add x
+Error: Unpaywall HTTP error: 429 rate limit')
+[ "$o" = "[]" ] && ok "an Error: line in command output is not recorded" || bad "command output recorded: $o"
+rm -rf "$T"
+
+echo
+echo "=== summarize: a wave's rules decide timeouts, infra errors and control reads"
+T=$(mktemp -d); TK=diffusion-brain-mask
+cat > "$T/sweep.json" <<J
+{"reps":1,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"0":{"tasks":{}},
+          "1":{"rules":{"timeout":"fail","infra_errors_from":"opencode","control_skill_reads":"keep"},"tasks":{}}}}
+J
+# sr ARM REP EXIT OUTPUT(out|none) EXTRA-JSON [TRANSCRIPT]
+sr() { d="$T/runs/${TK}__m__$1__r$2"; mkdir -p "$d/submissions/$TK"
+  if [ "$4" = out ]; then echo x > "$d/submissions/$TK/output.nii.gz"
+    echo '{"score":100,"verdict":"indistinguishable"}' > "$d/envelope.json"; fi
+  echo "{\"task_id\":\"$TK\",\"model\":\"m\",\"condition\":\"$1\",\"repeat\":$2,\"exit_code\":$3,\"output_present\":$([ "$4" = out ] && echo true || echo false),\"skills_installed\":\"\"$5}" > "$d/run.json"
+  printf '%s\n' "${6:-}" > "$d/transcript.txt"; }
+sr env-only 1 124 out ''
+sr env-only 2 1 none ',"opencode_errors":[]' 'curl said: 429 rate limit exceeded'
+sr env-only 3 1 none ',"opencode_errors":["429 Too Many Requests: rate limit"]'
+sr env-only 4 0 out ',"skill_files_read":["/w/skills-comm/plugins/brain-extraction/brain-extraction/SKILL.md"]'
+sr env-only 5 0 out ',"answer_key_reads":["→ Read /ws/tasks.json"]'
+row() { "$PY" -c "import csv,sys
+for r in csv.DictReader(open(sys.argv[1])):
+    if r['rep']==sys.argv[2]: print(r['exclude_reason'] or 'VALID', r['passed'], r['flags'])" \
+  "$T/$1/runs_$TK.csv" "$2" | tr -d '\r'; }
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w0" --sweep "$T/sweep.json" --wave 0 >/dev/null 2>&1
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 1 >/dev/null 2>&1
+has   "default rules: a timed-out run is excluded" "$(row w0 1)" "timed out"
+case "$(row w1 1)" in "VALID False "*) ok "timeout=fail: kept, and not a pass although it scored";; *) bad "timeout=fail: got $(row w1 1)";; esac
+v=$("$PY" -c "import csv,sys
+for r in csv.DictReader(open(sys.argv[1])):
+    if r['rep']=='1': print(r['verdict'], r['score'], r['timed_out'])" "$T/w1/runs_$TK.csv" | tr -d '\r')
+[ "$v" = "TIMEOUT 0.0 True" ] && ok "  scored as a failed run: verdict TIMEOUT, score 0" || bad "  timed-out run scored as: $v"
+has   "default rules: rate limit in the transcript excludes a no-output run" "$(row w0 2)" "rate limit"
+case "$(row w1 2)" in "VALID False"*) ok "infra_errors_from=opencode: agent text alone does not exclude";; *) bad "  got $(row w1 2)";; esac
+has   "  but opencode's own rate-limit error does" "$(row w1 3)" "rate limit"
+has   "default rules: a control run reading the skill is excluded" "$(row w0 4)" "read skill files"
+case "$(row w1 4)" in "VALID True control-read-skill") ok "control_skill_reads=keep: kept and flagged";; *) bad "  got $(row w1 4)";; esac
+case "$(row w1 5)" in "VALID True answer-key") ok "an answer-key read is flagged, not excluded";; *) bad "  got $(row w1 5)";; esac
+"$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['rules']['timeout']=='fail'" \
+  "$T/w1/summary_$TK.json" 2>/dev/null && ok "the summary records the rules it used" || bad "rules not in the summary"
+# Every infra pattern must match an opencode error as finalize_run stores it
+# (without the `Error: ` prefix), or that failure is scored against the model.
+"$PY" - "$HERE" "$T" > "$T/infra.out" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from summarize import INFRA_ERROR_RES, load_run
+msgs = {"gateway returned empty model name": "Model '' was not found",
+        "gateway rate limit": "429 Too Many Requests",
+        "gateway 5xx": "502 Bad Gateway",
+        "connection/descriptor failure": "connect ECONNREFUSED 10.0.0.1:443",
+        "opencode database contention": 'Failed query: insert into "project"',
+        "opencode session lost": "Session not found",
+        "opencode server error": "Unexpected server error. Check server logs"}
+labels = [l for _, l in INFRA_ERROR_RES]
+print(("OK:" if sorted(labels) == sorted(msgs) else "FAIL:") + "every infra label has a stored-format message")
+for label, m in msgs.items():
+    d = os.path.join(sys.argv[2], "infra", label.replace("/", "_").replace(" ", "_"))
+    os.makedirs(d, exist_ok=True)
+    json.dump({"task_id": "t", "model": "m", "condition": "env-only", "repeat": 1,
+               "exit_code": 1, "output_present": False, "opencode_errors": [m]},
+              open(os.path.join(d, "run.json"), "w"))
+    r = load_run(d, "t", rules={"infra_errors_from": "opencode"})
+    print(("OK:" if r["infra_error"] == label else "FAIL:") + "opencode error matches: " + label)
+EOF
+while IFS= read -r line; do
+  case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
+done < "$T/infra.out"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 8 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
+sed -i 's/"timeout":"fail"/"timeout":"maybe"/' "$T/sweep.json"
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 1 >/dev/null 2>&1
+expect 1 $? "an unknown rule value is refused"
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 7 >/dev/null 2>&1
+expect 1 $? "an undeclared wave is refused"
+rm -rf "$T"
+
+echo
+echo "=== sweep.json: every wave is readable and consistent"
+"$PY" - "$HERE" > "$T.sw" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from summarize import rules_for
+sw = json.load(open(os.path.join(sys.argv[1], "..", "ci", "sweep.json"), encoding="utf-8"))
+waves = [k for k in sw["waves"] if not k.startswith("_")]
+print(("OK:" if waves else "FAIL:") + "waves declared: %s" % waves)
+for w in waves:
+    rules_for(sw, w)
+    tasks = sw["waves"][w]["tasks"]
+    bad = [(t, a) for t, s in tasks.items() for a in s["arms"] if a not in sw["arms"]]
+    print(("FAIL:" if bad else "OK:") + "wave %s: rules valid, every arm declared %s" % (w, bad or ""))
+print(("OK:" if sw["waves"]["1"].get("pins", {}).get("image_version") else "FAIL:")
+      + "wave 1 pins its image_version")
+EOF
+while IFS= read -r line; do
+  case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; *) bad "sweep check: $line";; esac
+done < "$T.sw"
+rm -f "$T.sw"
+
+echo
+echo "=== assemble_cell --wave: the wave's tasks, pins and rules"
+T=$(mktemp -d); TASK=diffusion-brain-mask; SW="$T/sweep.json"
+cat > "$SW" <<J
+{"reps":2,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"0":{"tasks":{"$TASK":{"models":["m"],"arms":["env-only"]},
+                         "only-in-0":{"models":["m"],"arms":["env-only"]}}},
+          "1":{"pins":{"image_version":"ci-env2-x","tasks_sha":"e98e3b6"},
+               "rules":{"timeout":"fail"},
+               "tasks":{"$TASK":{"models":["m"],"arms":["env-only"]}}}}}
+J
+mw() { d="$T/runs/${TASK}__m__env-only__r$1"; mkdir -p "$d/submissions/$TASK"
+  echo x > "$d/submissions/$TASK/output.nii.gz"; echo '{"score":100}' > "$d/envelope.json"
+  cat > "$d/run.json" <<J
+{"task_id":"$TASK","model":"m","condition":"env-only","repeat":"$1","exit_code":${3:-0},
+ "output_present":true,"skills_seen":[],"skills_installed":"","image_version":"${2:-ci-env2-x}",
+ "opencode_version":"o","skills_sha":"a","skills_hash":"noskill","prompt_hash":"p","tasks_sha":"e98e3b6"}
+J
+}
+gw() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "${2:-$TASK}" --model m \
+  --arm env-only --sweep "$SW" $1 >"$T/o" 2>&1; }
+rm -rf "$T/runs"; mw 1; mw 2
+gw "--wave 1"; expect 0 $? "a wave-1 cell in the pinned environment passes"
+gw ""; expect 1 $? "a sweep with waves refuses without --wave"
+gw "--wave 1" only-in-0; expect 1 $? "a task declared only in another wave is refused"
+rm -rf "$T/runs"; mw 1; mw 2 ci-env1-x
+gw "--wave 1"; expect 1 $? "a run from another environment is refused"
+grep -q "FAIL  the wave's environment" "$T/o" && ok "  via the wave's environment gate" || bad "  refused by the wrong gate"
+rm -rf "$T/runs"; mw 1 ci-env1-x; mw 2 ci-env1-x
+gw "--wave 1"; expect 1 $? "a consistent cell from another environment is still refused"
+grep -q "FAIL  the wave's environment" "$T/o" && ok "  via the wave's environment gate" || bad "  refused by the wrong gate"
+rm -rf "$T/runs"; mw 1; mw 2 ci-env2-x 124
+gw "--wave 1"; expect 0 $? "wave 1 counts a timeout as a fail, not an exclusion to resolve"
+gw "--wave 0"; expect 1 $? "wave 0 rules leave the same timeout unresolved"
+grep -q "FAIL  no unresolved exclusions" "$T/o" && grep -q "timed out" "$T/o" \
+  && ok "  via the exclusions gate, naming the timeout" || bad "  refused by the wrong gate"
+"$PY" "$HERE/assemble_audit.py" --runs "$T/runs" --results "$T/none" --sweep "$SW" >/dev/null 2>&1
+expect 1 $? "assemble_audit refuses a sweep with waves without --wave"
+"$PY" "$HERE/assemble_audit.py" --runs "$T/runs" --results "$T/none" --sweep "$SW" --wave 1 >/dev/null 2>&1
+expect 0 $? "  and runs with it"
+rm -rf "$T"
+
+echo
+echo "=== wave_check: a run that assemble would refuse is stopped before it is paid for"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"waves":{"1":{"pins":{"image_version":"ci-env2-x","tasks_sha":"e98e3b6"},
+  "tasks":{"diffusion-brain-mask":{"models":["qwen3"],"arms":["env-only","env+skill"]}}}}}
+J
+wc_() { "$PY" "$HERE/wave_check.py" --sweep "$SW" "$@" >"$T/o" 2>&1; }
+wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
+  image_version=ci-env2-x tasks_sha=e98e3b6
+expect 0 $? "a declared cell in the pinned environment passes"
+wc_ --wave 1 image_version=ci-env1-x tasks_sha=e98e3b6
+expect 1 $? "another environment is stopped"
+wc_ --wave 1 image_version=ci-env2-x
+expect 1 $? "a pin with no value to check is stopped"
+wc_ --wave 2 image_version=ci-env2-x tasks_sha=e98e3b6
+expect 1 $? "an undeclared wave is stopped"
+wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/kimi-k3 --arm env-only \
+  image_version=ci-env2-x tasks_sha=e98e3b6
+expect 1 $? "a benchmark run of an undeclared model is stopped"
+grep -q "model kimi-k3 is not declared" "$T/o" && ok "  and says which" || bad "  wrong reason: $(cat "$T/o")"
+wc_ --wave 1 --label exploratory --task other-task --model neurodesk/kimi-k3 --arm env-only \
+  image_version=ci-env2-x tasks_sha=e98e3b6
+expect 0 $? "an exploratory run needs only the pins"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 1 --label benchmark \
+  --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
+  image_version=ci-env2-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
+expect 0 $? "the real sweep accepts the environment run.yml declares for wave 1"
+rm -rf "$T"
+
+echo
+echo "=== mkprompt --prompts-only: the task pack without its answers"
+T=$(mktemp -d)
+cat > "$T/tasks.json" <<'EOF'
+{"benchmark":"b","categories":{"c":{"tasks":{"t-x":{"title":"T","description":"uses bet",
+ "grading":{"x":1},"prompt":{"goal":"extract","dataset":{"id":"ds1","subjects":["01"]},
+ "required_output":"write out.nii.gz"},"solution":{"reference":"secret-mask"}}}}}}
+EOF
+"$PY" "$HERE/mkprompt.py" --prompts-only "$T/tasks.json" > "$T/p.json"
+grep -q "secret-mask\|solution\|grading\|uses bet" "$T/p.json" && bad "answer material kept in the prompt-only file" \
+                                                           || ok "solution, grading and description are dropped"
+[ "$("$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-x | md5sum)" = "$("$PY" "$HERE/mkprompt.py" "$T/p.json" t-x | md5sum)" ] \
+  && ok "  and the prompt built from it is byte-identical" || bad "  the prompt changed"
+rm -rf "$T"
+
+echo
+echo "=== model_probe --phase end: a model that changes during the run"
+T=$(mktemp -d)
+echo '{"data":[{"id":"qwen3"}]}' > "$T/roster.json"
+echo '{"model":"Qwen/Qwen3-235B","system_fingerprint":"fp_1"}' > "$T/r1.json"
+echo '{"model":"Qwen/Qwen3-235B","system_fingerprint":"fp_2"}' > "$T/r2.json"
+echo '{"x-litellm-model-group":"qwen3","x-litellm-attempted-fallbacks":"1"}' > "$T/h.json"
+pe() { echo '{"task_id":"t"}' > "$T/r.json"
+  "$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" --offline "$T/roster.json" "$1" "$T/h.json" >/dev/null 2>&1
+  "$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" --offline "$T/roster.json" "$2" "$T/h.json" --phase end >/dev/null 2>&1
+  "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r[sys.argv[2]])" "$T/r.json" "$3" | tr -d '\r'; }
+[ "$(pe "$T/r1.json" "$T/r1.json" model_changed)" = False ] && ok "the same model before and after: model_changed False" || bad "unchanged model flagged"
+[ "$(pe "$T/r1.json" "$T/r2.json" model_changed)" = True ] && ok "a different fingerprint after: model_changed True" || bad "a change was missed"
+[ "$(pe "$T/r1.json" "$T/missing.json" model_changed)" = None ] && ok "no probe after: None, not False" || bad "a missing probe read as no change"
+[ "$(pe "$T/r1.json" "$T/r1.json" model_fingerprint)" != None ] && ok "  and the start fields are kept" || bad "  the start fingerprint was overwritten"
+o=$(pe "$T/r1.json" "$T/r1.json" model_probe)
+has   "fallback headers are recorded as routing" "$o" "attempted-fallbacks"
+rm -rf "$T"
+
+echo
+echo "=== env_record: the run's software environment"
+T=$(mktemp -d); echo '{"task_id":"t"}' > "$T/r.json"
+CVMFS_ROOT="$T/no-cvmfs" HARNESS_SHA=abc1234 BENCH_SESSION_ID=s123 GITHUB_RUN_ID=9 GITHUB_RUN_ATTEMPT=2 GITHUB_JOB=rep \
+  "$PY" "$HERE/env_record.py" --record "$T/r.json" >/dev/null 2>&1
+expect 0 $? "exits 0"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['cvmfs_revision'] is None and r['harness_sha']=='abc1234' and r['ci_run']=='9/2/rep' and r['session_id_sent']=='s123'
+assert 'python_packages' in r and 'kernel' in r" "$T/r.json" 2>/dev/null \
+  && ok "records harness, CI run and session id; an unreadable CVMFS revision is None" || bad "record wrong: $(cat "$T/r.json")"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: neutral working directory, records around the agent"
+T=$(mktemp -d)
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then echo '[{"name":"customize-opencode","location":"<built-in>"}]'; exit 0; fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+echo "DIR: $3"
+echo "CWD: $(ls -A "$3" | tr '\n' ' ')"
+echo "META: $(ls -A "$(dirname "$(dirname "$3")")/.meta" | tr '\n' ' ')"
+echo "ENV: SID=${BENCH_SESSION_ID-unset} HARNESS_SHA=${HARNESS_SHA-unset} TASKS_SHA=${TASKS_SHA-unset} GRADER_REPO=${GRADER_REPO-unset} HARNESS_REF=${HARNESS_REF-unset} GITHUB_EVENT_PATH=${GITHUB_EVENT_PATH-unset} RUNNER_TEMP=${RUNNER_TEMP-unset}"
+echo made > "$3/out.txt"; ln -s "$3/out.txt" "$3/link.txt"
+# Left running after the agent exits, in the working directory.
+(cd "$3" && sleep 3 && echo late > late.txt) > /dev/null 2>&1 &
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+  SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 NEURODESK_API_KEY=k \
+  OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 NEURODESK_GATEWAY=http://127.0.0.1:9 \
+  HARNESS_SHA=abc1234 TASKS_SHA=e98e3b6 GRADER_REPO=owner/tasks HARNESS_REF=deadbeef \
+  GITHUB_EVENT_PATH=/x/event.json RUNNER_TEMP=/x/temp RUN_WAVE=1 \
+  bash "$HERE/run_bench.sh" t-x neurodesk/m env-only 1 >/dev/null 2>&1
+R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
+tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+dir_=$(echo "$tr_" | sed -n 's/^DIR: //p')
+case "$dir_" in */work/run-*) ok "the agent worked in $(basename "$dir_")";; *) bad "working dir: $dir_";; esac
+hasnt "  whose path names no arm" "$dir_" "env-only"
+hasnt "  no model" "$dir_" "neurodesk-m"
+hasnt "  and no task" "$dir_" "t-x"
+hasnt "the transcript is not in the working directory while the agent runs" "$tr_" "CWD: transcript"
+meta_=$(echo "$tr_" | sed -n 's/^META: //p')
+case "$meta_" in *run-*.transcript.txt*) ok "the files kept aside during the run are there under the neutral name";; *) bad "meta listing: $meta_";; esac
+hasnt "  and their names do not name the arm" "$meta_" "env-only"
+hasnt "  or the task" "$meta_" "t-x"
+has   "harness and CI variables are removed from the agent's environment" "$tr_" \
+      "HARNESS_SHA=unset TASKS_SHA=unset GRADER_REPO=unset HARNESS_REF=unset GITHUB_EVENT_PATH=unset RUNNER_TEMP=unset"
+sid=$(echo "$tr_" | sed -n 's/.*SID=\([^ ]*\).*/\1/p')
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['session_id_sent']==sys.argv[2] and len(sys.argv[2])==32
+assert r['workdir'].endswith(sys.argv[3]) and r['harness_sha']=='abc1234'
+assert 'model_changed' in r and 'model_fingerprint_end' in r" "$R/run.json" "$sid" "$(basename "$dir_")" 2>/dev/null \
+  && ok "the record holds the session id the agent had, the workdir, and the end probe" \
+  || bad "record incomplete: sid=$sid"
+[ -d "$R" ] && [ ! -d "$R/.meta" ] && [ -s "$R/transcript.txt" ] \
+  && ok "  and the working directory became the run directory" \
+  || bad "  working directory left behind or transcript missing"
+# Only where ln -s makes real symlinks (Git Bash on Windows copies instead).
+if [ -L "$R/link.txt" ]; then
+  [ "$(cat "$R/link.txt" 2>/dev/null)" = made ] && ok "  an absolute link the agent made still resolves after the rename" \
+                                                || bad "  the agent's absolute link dangles after the rename"
+else
+  echo "  skip  symlink check: ln -s does not make symlinks here"
+fi
+"$PY" -c "import json,sys; assert json.load(open(sys.argv[1]))['wave']=='1'" "$R/run.json" 2>/dev/null \
+  && ok "  the record names the wave" || bad "  wave not recorded"
+sleep 4
+[ ! -e "$R/late.txt" ] && ok "a process the agent left running is stopped when it exits" \
+                       || bad "a background process kept writing after the run"
+rm -rf "$T"
+
+echo
+echo "=== env_check: no grading material on disk"
+T=$(mktemp -d)
+mkdir -p "$T/bin" "$T/home/.config/opencode" "$T/ws/bench/r1"
+printf '#!/bin/sh\necho bet\n' > "$T/bin/bet"; chmod +x "$T/bin/bet"
+cat > "$T/lmod.sh" <<EOF
+module() { [ "\$1" = load ] && [ "\$2" = fsl/6.0.7.22 ] || return 1; export PATH="$T/bin:\$PATH"; }
+EOF
+ek() { env HOME="$T/home" BASH_ENV="$T/lmod.sh" FSL_VERSION=6.0.7.22 \
+    BENCH_HOME="$T/ws/bench/r1" PYTHON="$PY" SKILLS_SRC="" SKILL_SEARCH_ROOT="$T/home" \
+    bash "$HERE/env_check.sh" > "$T/out" 2>&1; }
+ek; expect 0 $? "passes with no grading material"
+mkdir -p "$T/home/tmp"; echo '{"categories":{"c":{"tasks":{"t":{"prompt":{}}}}}}' > "$T/home/tmp/tasks.json"
+ek; expect 0 $? "  and with the prompt-only task pack"
+echo '{"categories":{"c":{"tasks":{"t":{"prompt":{},"solution":{}}}}}}' > "$T/home/tmp/tasks.json"
+ek; expect 1 $? "fails on a task pack with solution blocks"
+grep -q "grading material readable" "$T/out" && ok "  and says why" || bad "  wrong reason"
+rm "$T/home/tmp/tasks.json"
+mkdir -p "$T/home/g/diffusion"; touch "$T/home/g/diffusion/rubric.json"
+ek; expect 1 $? "fails on a rubric"
+rm -r "$T/home/g"; mkdir -p "$T/home/h/benchmark/runner"; touch "$T/home/h/benchmark/runner/CLAIMS.md"
+ek; expect 1 $? "fails on CLAIMS.md"
+rm -r "$T/home/h"; mkdir -p "$T/ws/bench/r1/runs/old"; touch "$T/ws/bench/r1/runs/old/envelope.json"
+env HOME="$T/home" BASH_ENV="$T/lmod.sh" FSL_VERSION=6.0.7.22 BENCH_HOME="$T/ws/bench/r1" \
+  PYTHON="$PY" SKILLS_SRC="" SKILL_SEARCH_ROOT="$T/ws" bash "$HERE/env_check.sh" >/dev/null 2>&1
+expect 1 $? "fails on a graded run left from an earlier job"
+rm -r "$T/ws/bench/r1/runs"
+mkdir -p "$T/ws/bench/r1/work"; touch "$T/ws/bench/r1/work/AGENTS.md"
+ek; expect 1 $? "fails on AGENTS.md where the agent's working directory is created"
 rm -rf "$T"
 
 echo

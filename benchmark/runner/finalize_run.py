@@ -23,6 +23,10 @@ agent chose. This reads them back out of the transcript once the run is over:
   skills_available     skills opencode listed in a failed call's error; None if
                        it never listed them
   skill_files_read     SKILL.md / references/*.md files opened directly
+  answer_key_reads     reads of grading material and fetches of where it is
+                       published; [] is clean, None means no transcript
+  arm_seen             transcript lines naming an arm label; [] is clean
+  opencode_errors      opencode's own error messages, excluding tool-call errors
   off_spec       why this run left the benchmark environment: "sudo",
                  "package-install", "external-image". [] is clean; None means
                  the transcript could not be read, which is NOT clean.
@@ -123,22 +127,29 @@ rec["qc_ran"] = bool(re.search(
 # content is not in the transcript). Text the agent writes is not a command.
 _tr_cmds = [l[2:] for l in plain.splitlines() if l.startswith("$ ")]
 _cmds = list(_tr_cmds)
+# Non-comment lines of the .sh and .py files the agent wrote, by extension.
+_script_lines = {".sh": [], ".py": []}
 for _root, _dirs, _files in os.walk(run_dir):
     # Skip the fetched dataset, scratch, opencode's state, the graded outputs, and
     # any cloned repository or dataset (it has .git or .datalad); those carry their
-    # own .sh files.
+    # own scripts.
+    # Installed packages and virtual environments are not the agent's scripts either.
     _dirs[:] = [d for d in _dirs
-                if d not in ("data", "tmp", ".xdg-data", "submissions")
+                if d not in ("data", "tmp", ".xdg-data", "submissions", "site-packages",
+                             "node_modules", "__pycache__")
                 and not os.path.exists(os.path.join(_root, d, ".git"))
-                and not os.path.exists(os.path.join(_root, d, ".datalad"))]
+                and not os.path.exists(os.path.join(_root, d, ".datalad"))
+                and not os.path.exists(os.path.join(_root, d, "pyvenv.cfg"))]
     for _f in _files:
-        if _f.endswith(".sh"):
+        _ext = os.path.splitext(_f)[1]
+        if _ext in _script_lines:
             try:
                 with open(os.path.join(_root, _f), encoding="utf-8", errors="replace") as fh:
-                    _cmds += [l for l in fh.read().splitlines()
-                              if l.strip() and not l.lstrip().startswith("#")]
+                    _script_lines[_ext] += [l for l in fh.read().splitlines()
+                                            if l.strip() and not l.lstrip().startswith("#")]
             except OSError:
                 pass
+_cmds += _script_lines[".sh"]
 
 # Command position: start of a line, after a shell separator, after then/do/else,
 # `{` or xargs, or inside the quoted argument of `bash -c` / `eval`. A quote
@@ -232,14 +243,95 @@ for _l in plain.splitlines():
             if _READ_CMD.match(_seg):
                 _reads.update(_SKILL_FILE.findall(_seg))
 rec["skill_files_read"] = sorted(_reads)
+
+# --- answer key --------------------------------------------------------------------
+# Grading material and where it is published. None of it is on disk during a CI run;
+# all of it is reachable over the network.
+#   files    tasks.json (solution blocks), rubric.json, a task's PROVENANCE.md or
+#            README.md in a graders/ or benchmark/ tree, anything under graders/,
+#            CLAIMS.md, INFRA_LEDGER.md, the grading scripts
+#   sources  the skills-comm and skills-benchmark repositories and site, and the
+#            reference dataset on Hugging Face, which is public
+# Files count when read: the Read and Grep tools, or a command segment that is not
+# only listing or searching (find, ls, ...). Sources count when fetched or searched
+# for: WebFetch, web search, or any executed command. Scripts the agent wrote are
+# read for both. Each hit is recorded as the line it was found on.
+# A path segment named graders/ or benchmark/ must be the whole segment, so a path
+# through a directory named skills-benchmark does not match. A bare repository id
+# (owner/skills-comm) must not itself be a path segment.
+_KEY_FILE = re.compile(
+    r"(?:^|[\s/'\"=:(])(?:tasks\.json|rubric\.json|CLAIMS\.md|INFRA_LEDGER\.md"
+    r"|grade_wrapper\.py|fetch_reference\.py|run_manifest\.json)\b"
+    r"|(?<![\w.-])(?:graders|benchmark)/\S*(?:PROVENANCE|README)\.md"
+    r"|(?<![\w.-])graders/\S")
+_KEY_SRC = re.compile(
+    r"(?:github\.com|githubusercontent\.com|github\.io|huggingface\.co|hf\.co)"
+    r"[^\s'\"]*skills[-_](?:comm|benchmark)"
+    r"|skills-comm-ground-truth|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)", re.I)
+_KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)", re.I)
+_LISTS = ("find", "ls", "locate", "which", "echo", "printf", "mkdir", "cd", "stat")
+
+
+def _key_hits():
+    hits = []
+    for l in plain.splitlines():
+        if l.startswith(("→ Read ", "✱ Grep ")):
+            if _KEY_FILE.search(l):
+                hits.append(l)
+        elif l.startswith("% WebFetch "):
+            if _KEY_SRC.search(l):
+                hits.append(l)
+        elif l.startswith("◈ "):
+            if _KEY_QUERY.search(l):
+                hits.append(l)
+        elif l.startswith("$ "):
+            if _KEY_SRC.search(l):
+                hits.append(l)
+                continue
+            for seg in re.split(r"\|\|?|;|&&", l[2:]):
+                words = seg.split()
+                if words and words[0] not in _LISTS and _KEY_FILE.search(seg):
+                    hits.append(l)
+                    break
+    for l in _script_lines[".sh"] + _script_lines[".py"]:
+        if _KEY_SRC.search(l) or _KEY_FILE.search(l):
+            hits.append("script: " + l.strip())
+    return sorted({h[:160] for h in hits})
+
+
+rec["answer_key_reads"] = _key_hits() if txt else None
+
+# --- the arm label seen ---------------------------------------------------------------
+# The prompt never names the arm, and the agent's working directory does not either.
+# A transcript line containing an arm label (env-only, env+skill...) means the agent
+# came across it: in the process list, the environment, the runner's event file, or
+# the harness's own files. Recorded as those lines; [] is clean.
+_ARM_RE = re.compile(r"env[-+](?:only|skill)")
+rec["arm_seen"] = ([l[:160] for l in plain.splitlines() if _ARM_RE.search(l)][:10]
+                   if txt else None)
+
+# --- opencode's own errors ----------------------------------------------------------
+# opencode prints its errors as a bold red `Error: `. One that follows a `✗ ... failed`
+# line belongs to a tool call the agent made; the rest are opencode's own (the
+# gateway, the session, the runtime). Read from the raw transcript: the colour code
+# is what separates them from `Error:` lines in command output. Stored without the
+# `Error: ` prefix.
+_OC_ERR = "\x1b[91m\x1b[1mError: "
+_errs, _prev = [], ""
+for _raw in txt.splitlines():
+    _p = ANSI.sub("", _raw).strip()
+    if _raw.startswith(_OC_ERR) and not _prev.startswith("✗"):
+        _errs.append(_p[len("Error: "):][:200])
+    if _p:
+        _prev = _p
+rec["opencode_errors"] = _errs if txt else None
 rec["transcript_lines"] = txt.count("\n")
 
 # --- token accounting from opencode's own database ---------------------------
 # opencode records per-session token totals in SQLite, keyed by the working
-# directory -- which is exactly our run directory, since run_bench.sh passes
-# --dir "$RUN". So this is recoverable for every run ever made, not just future
-# ones. Read-only and best-effort: a locked or missing DB must never cost us the
-# rest of the provenance record.
+# directory run_bench.sh passed as --dir: the run directory for older runs, the
+# recorded `workdir` for runs renamed afterwards. Read-only and best-effort: a
+# locked or missing DB must never cost us the rest of the provenance record.
 #
 # `cost` is 0.0 on this gateway (self-hosted vLLM with no pricing configured), so
 # tokens are the currency, not dollars.
@@ -259,10 +351,16 @@ def _session_row(run_dir):
         import sqlite3
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
         con.row_factory = sqlite3.Row
-        # A directory can be reused across sweeps, so take the newest session.
+        # A directory can be reused across sweeps, so take the newest session. The
+        # agent may have run in a working directory that was renamed to run_dir
+        # afterwards (`workdir` in the record). Each as given and resolved.
+        wd = rec.get("workdir")
+        dirs = sorted({d for d in (wd, wd and os.path.realpath(wd),
+                                   os.path.abspath(run_dir), os.path.realpath(run_dir))
+                       if d})
         cur = con.execute(
-            "select * from session where directory = ? order by time_created desc limit 1",
-            (os.path.abspath(run_dir),))
+            "select * from session where directory in (%s) order by time_created desc "
+            "limit 1" % ",".join("?" * len(dirs)), dirs)
         row = cur.fetchone()
         con.close()
         return row

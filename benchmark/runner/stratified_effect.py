@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Skill effect per task, stratified by model.
 
-    stratified_effect.py results/summary_*.json [--arm env+skill] [--json out.json]
+    stratified_effect.py results/wave0/summary_*.json [--arm env+skill] [--json out.json]
     stratified_effect.py --power
 
 Reads the `skill_effect` block of each task summary: per model, passes and runs in

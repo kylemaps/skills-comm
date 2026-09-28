@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the assemble gates over every declared cell, and compare to what we published.
 
-    python3 assemble_audit.py --runs ~/bench/runs --results ~/bench/report
-    python3 assemble_audit.py --runs ~/bench/runs --results ~/bench/report --why
+    python3 assemble_audit.py --runs ~/bench/runs --results results/wave0 --wave 0
+    python3 assemble_audit.py --runs ~/bench/runs --results results/wave0 --wave 0 --why
 
 THE TEST THIS IS
 `assemble_cell.py` is meant to replace a human's judgement about whether a cell may
@@ -64,21 +64,26 @@ def main():
     ap.add_argument("--results", required=True,
                     help="directory holding summary_<task>.json as published")
     ap.add_argument("--sweep", default=os.path.join(HERE, "..", "ci", "sweep.json"))
+    ap.add_argument("--wave", help="wave id in sweep.json (required if it declares waves)")
     ap.add_argument("--why", action="store_true",
                     help="print the gate output for every disagreement")
     a = ap.parse_args()
 
+    sys.path.insert(0, HERE)
+    from assemble_cell import wave_spec
     spec = json.load(open(a.sweep, encoding="utf-8"))
+    tasks = wave_spec(spec, a.wave)["tasks"]
     live = published_cells(a.results)
 
     rows = []
-    for task, t in sorted(spec["tasks"].items()):
+    for task, t in sorted(tasks.items()):
         for model in t["models"]:
             for arm in t["arms"]:
                 p = subprocess.run(
                     [sys.executable, os.path.join(HERE, "assemble_cell.py"),
                      "--runs", a.runs, "--task", task, "--model", model,
-                     "--arm", arm, "--sweep", a.sweep],
+                     "--arm", arm, "--sweep", a.sweep]
+                    + (["--wave", a.wave] if a.wave else []),
                     capture_output=True, text=True)
                 rows.append({
                     "task": task, "model": model, "arm": arm,
