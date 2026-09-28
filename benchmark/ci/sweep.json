@@ -32,6 +32,21 @@
 
   "reps": 10,
 
+  "waves": {
+    "_comment": [
+      "A wave is one environment, one set of skill snapshots, and the model panel",
+      "the gateway offers when the wave starts, run to completion. Results are",
+      "published per wave and never pooled across waves. Tasks without a `wave` key",
+      "are wave 0. A panel model the gateway stops offering mid-wave has its",
+      "unfinished cells listed under _known_permanently_short."
+    ],
+    "0": {"environment": "Neurodesk Play VM (neurodesktop images)"},
+    "1": {"environment": "ci-env1 (ENVIRONMENT.md version 1 in skills-benchmark)",
+          "skill_snapshot": "291f844a43ec",
+          "models": ["kimi-k3", "minimax-m2", "qwen3"],
+          "started": "2026-09-28"}
+  },
+
   "arms": {
     "env-only": { "skills_hash": null },
     "env+skill": { "skills_hash": "291f844a43ec" },
@@ -40,13 +55,14 @@
 
   "tasks": {
     "structural-brain-extraction-pediatric": {
-      "_comment": "Measured in the CI environment (ENVIRONMENT.md in skills-benchmark).",
-      "models": ["glm-5.2", "kimi-k3", "minimax-m2", "qwen3"],
+      "wave": 1,
+      "models": ["kimi-k3", "minimax-m2", "qwen3"],
       "arms": ["env-only", "env+skill"]
     },
     "structural-brain-extraction": {
-      "_comment": "Measured in the CI environment (ENVIRONMENT.md in skills-benchmark). Add models when they are scheduled.",
-      "models": ["glm-5.2"],
+      "_comment": "Models are added when this task is scheduled.",
+      "wave": 1,
+      "models": [],
       "arms": ["env-only", "env+skill"]
     },
     "structural-brain-extraction-7t": {
