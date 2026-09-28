@@ -574,6 +574,42 @@ expect 0 $? "without AGENT_VIEW_CHECK the mismatch is recorded, not enforced"
 rm -rf "$T"
 
 echo
+echo "=== stratified_effect: effect per task, stratified by model"
+T=$(mktemp -d)
+"$PY" - "$HERE" > "$T/strat.out" 2>&1 <<'EOF'
+import math, sys
+sys.path.insert(0, sys.argv[1])
+from stratified_effect import mh_rd, exact_stratified_p, holm, bh
+from summarize import fisher_exact
+def check(name, cond):
+    print(("OK:" if cond else "FAIL:") + name)
+one = [("m", 1, 10, 7, 10)]
+rd, ci = mh_rd(one)
+check("one model: the MH difference is the plain difference", abs(rd - 0.6) < 1e-12)
+check("one model: the CI is the Wald interval", abs((ci[1] - ci[0]) / 2 - 1.96 * math.sqrt(0.03)) < 1e-9)
+check("one model: the exact p is Fisher's", abs(exact_stratified_p(one) - fisher_exact(1, 9, 7, 3)) < 1e-12)
+same = [("a", 3, 10, 3, 10), ("b", 7, 10, 7, 10)]
+check("identical arms: difference 0, p 1", abs(mh_rd(same)[0]) < 1e-12 and exact_stratified_p(same) > 0.999)
+simpson = [("a", 1, 2, 5, 10), ("b", 9, 10, 9, 10)]
+pooled = (5 + 9) / 20 - (1 + 9) / 12
+check("no difference within any model reads as 0, where pooling reads %+.2f" % pooled,
+      abs(mh_rd(simpson)[0]) < 1e-12 and abs(pooled) > 0.1)
+check("a model with no passes in either arm leaves the exact p unchanged",
+      abs(exact_stratified_p(one + [("z", 0, 10, 0, 10)]) - exact_stratified_p(one)) < 1e-12)
+ps = [0.01, 0.04, 0.03, 0.5]
+h, b = holm(ps), bh(ps)
+check("Holm and BH never lower a p-value, and Holm is the stricter",
+      all(x >= p for x, p in zip(h, ps)) and all(y >= p for y, p in zip(b, ps))
+      and all(x >= y - 1e-12 for x, y in zip(h, b)))
+EOF
+while IFS= read -r line; do
+  case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
+done < "$T/strat.out"
+# A crash prints no OK lines; count them so a crash cannot pass as silence.
+[ "$(grep -c '^OK:\|^FAIL:' "$T/strat.out")" = 7 ] || bad "stratified_effect checks did not all run: $(tail -3 "$T/strat.out")"
+rm -rf "$T"
+
+echo
 echo "=== model_probe: what the gateway serves, recorded per run"
 T=$(mktemp -d)
 echo '{"data":[{"id":"qwen3"},{"id":"kimi-k3"}]}' > "$T/roster.json"
