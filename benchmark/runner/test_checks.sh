@@ -378,5 +378,288 @@ grep -q "predate the label field" "$T/o" && ok "  and say so" || bad "  passed s
 rm -rf "$T"
 
 echo
+echo "=== finalize_run off_spec: commands count, prose does not"
+# Each case changes one thing. The ones that must NOT fire are prose, a download
+# inside a CVMFS container, an echoed command, and scripts inside a fetched dataset.
+T=$(mktemp -d)
+# ESC, for the ANSI codes opencode wraps around each `$ `.
+E=$(printf '\033')
+fin() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$2" > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$d/run.json" | tr -d '\r'; }
+has()  { case "$2" in *"$3"*) ok "$1";; *) bad "$1: got $2";; esac; }
+hasnt() { case "$2" in *"$3"*) bad "$1: got $2";; *) ok "$1";; esac; }
+
+o=$(fin a "${E}[0m\$ ${E}[0msudo apt-get install -y -q iptables 2>&1 | tail -2")
+has   "flags sudo, through the ANSI codes" "$o" "sudo"
+has   "and the package install on the same line" "$o" "package-install"
+o=$(fin b '$ apptainer pull synthstrip.sif docker://freesurfer/synthstrip')
+has   "flags apptainer pull from Docker Hub" "$o" "external-image"
+o=$(fin c "\$ bash -c 'sudo whoami'")
+has   "flags sudo inside a quoted bash -c" "$o" "sudo"
+o=$(fin d "\$ apptainer exec --bind /a:/b docker://ubuntu:22.04 ls")
+has   "flags exec of a remote image, past a flag with a value" "$o" "external-image"
+
+o=$(fin e 'I could run sudo apt-get install iptables, but I will not.
+$ echo done')
+[ "$o" = "[]" ] && ok "prose mentioning sudo and apt-get is NOT flagged" \
+                || bad "prose was flagged: $o"
+# A suggested command in the agent's text starts a line exactly as a real one does.
+# Only the `$ ` marker separates them.
+o=$(fin e2 'You could fix this with:
+sudo apt-get install -y iptables
+$ echo done')
+[ "$o" = "[]" ] && ok "a command the agent only SUGGESTED is not flagged" \
+                || bad "suggested command was flagged: $o"
+o=$(fin f '$ apptainer exec /cvmfs/neurodesk.ardc.edu.au/containers/fsl_6.0.7.22_20260416/fsl.simg curl -sO https://example.org/x.nii.gz')
+hasnt "a download INSIDE a CVMFS container is not an external image" "$o" "external-image"
+o=$(fin g '$ echo "docker pull freesurfer/synthstrip"')
+hasnt "an echoed docker pull is not a pull" "$o" "external-image"
+o=$(fin g2 '$ grep -n "sudo" /etc/group')
+hasnt "a quoted word is an argument, not a command" "$o" "sudo"
+o=$(fin g3 '$ if true; then sudo apt-get install -y x; fi')
+has   "sudo after then is a command" "$o" "sudo"
+o=$(fin g4 '$ apptainer pull x.sif "docker://freesurfer/synthstrip"')
+has   "a quoted image URI is still an external image" "$o" "external-image"
+o=$(fin g5 '$ docker run --rm -v /a:/b freesurfer/synthstrip -h')
+has   "docker run pulls an image" "$o" "external-image"
+
+# A script the agent wrote is run by name, so its content is read from disk.
+mkdir -p "$T/h"; printf '#!/bin/bash\nsudo apt-get install -y curl\n' > "$T/h/analysis_01.sh"
+o=$(fin h '$ bash analysis_01.sh')
+has   "reads the scripts the agent wrote, not just the transcript" "$o" "sudo"
+mkdir -p "$T/i/data/ds"; printf 'sudo make install\n' > "$T/i/data/ds/setup.sh"
+o=$(fin i '$ ls')
+[ "$o" = "[]" ] && ok "  but not scripts inside a fetched dataset" || bad "  dataset script counted: $o"
+
+# No command lines: unreadable, reported as None rather than clean.
+o=$(fin j 'some output with no command lines at all')
+[ "$o" = "None" ] && ok "an unreadable transcript is None, not a clean []" \
+                  || bad "unreadable transcript reported as $o"
+rm -rf "$T"
+
+echo
+echo "=== finalize_run skill loads: only successful calls count"
+T=$(mktemp -d)
+fk() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$3" > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$d/run.json" "$2" | tr -d '\r'; }
+FAILED='✗ Skill "brain-extraction" failed
+Error: Skill "brain-extraction" not found. Available skills: customize-opencode'
+[ "$(fk a skill_loads "$FAILED")" = 0 ] && ok "a failed call is not a load" || bad "a failed call counted as a load"
+[ "$(fk b skill_load_failures "$FAILED")" = 1 ] && ok "  and counts once, not once per line naming the skill" \
+                                                || bad "  failure count wrong"
+[ "$(fk c skills_available "$FAILED")" = "['customize-opencode']" ] \
+  && ok "  and records what opencode offered" || bad "  offered list not parsed"
+[ "$(fk d skill_loads '→ Skill "brain-extraction"')" = 1 ] && ok "a marker line naming a skill is a load" \
+                                                          || bad "a successful call was not counted"
+[ "$(fk e skill_loads 'I will load Skill "brain-extraction" next.')" = 0 ] \
+  && ok "prose naming a skill is not a load" || bad "prose counted as a load"
+[ "$(fk e2 skill_loads '- Skill "brain-extraction" was not available')" = 0 ] \
+  && ok "a markdown bullet naming a skill is not a load" || bad "a markdown bullet counted as a load"
+[ "$(fk e3 skill_load_failures '✗ Skill "brain-extraction"')" = 1 ] \
+  && ok "the ✗ marker is a failure without the word failed" || bad "an ✗ line not counted as a failure"
+[ "$(fk e4 skills_available 'Error: Skill "x" not found. Available skills:')" = "[]" ] \
+  && ok "an empty offered list is [] (offered nothing), not None" || bad "an empty offered list read as unknown"
+o=$(fk f skill_files_read '→ Read /w/skills/brain-extraction/291f844a/brain-extraction/SKILL.md')
+has "a Read of SKILL.md is a direct skill-file read" "$o" "SKILL.md"
+o=$(fk g skill_files_read '$ cat /w/plugins/brain-extraction/brain-extraction/references/fsl-bet.md')
+has "  so is cat of a reference file" "$o" "fsl-bet.md"
+o=$(fk g2 skill_files_read '$ git show HEAD:skills/brain-extraction/291f844a/brain-extraction/SKILL.md')
+has "  so is git show of a skill file from history" "$o" "brain-extraction/SKILL.md"
+[ "$(fk h skill_files_read "\$ find / -path '*/brain-extraction/SKILL.md' | head")" = "[]" ] \
+  && ok "  a search that lists paths is not a read" || bad "  a find counted as a read"
+rm -rf "$T"
+
+echo
+echo "=== summarize: skill delivery and contamination exclusions"
+T=$(mktemp -d); TK=structural-brain-extraction
+sk() { d="$T/runs/${TK}__glm-5.2__$1__r$2"; mkdir -p "$d/submissions/$TK"
+  echo x > "$d/submissions/$TK/output.nii.gz"
+  echo '{"score":100,"verdict":"indistinguishable"}' > "$d/envelope.json"
+  echo "{\"task_id\":\"$TK\",\"model\":\"glm-5.2\",\"condition\":\"$1\",\"repeat\":$2,\"exit_code\":0,\"output_present\":true,$3}" > "$d/run.json"; }
+sk env+skill 1 '"skills_installed":"brain-extraction brain-extraction-qc ","skills_available":["customize-opencode"]'
+sk env+skill 2 '"skills_installed":"brain-extraction brain-extraction-qc ","skills_offered":["brain-extraction","brain-extraction-qc"]'
+sk env+skill 3 '"skills_installed":"brain-extraction brain-extraction-qc "'
+sk env+skill 4 '"skills_installed":"brain-extraction brain-extraction-qc ","skills_offered":["brain-extraction-qc"]'
+sk env-only 1 '"skills_installed":"","skill_files_read":["/w/skills/brain-extraction/SKILL.md"]'
+sk env-only 4 '"skills_installed":"","skill_files_read":["/w/.agents/skills/hf-cli/SKILL.md"]'
+sk env-only 2 '"skills_installed":"","skills_available":["brain-extraction"]'
+sk env-only 3 '"skills_installed":""'
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/out" >/dev/null 2>&1
+why() { "$PY" -c "import csv,sys
+for r in csv.DictReader(open(sys.argv[1])):
+    if r['arm']==sys.argv[2] and r['rep']==sys.argv[3]: print(r['exclude_reason'] or 'VALID')" \
+  "$T/out/runs_$TK.csv" "$1" "$2" | tr -d '\r'; }
+has "skill installed but not offered by opencode: excluded" "$(why env+skill 1)" "not offered"
+[ "$(why env+skill 2)" = VALID ] && ok "skill offered, not used: kept (intent to treat)" || bad "offered skill excluded: $(why env+skill 2)"
+[ "$(why env+skill 3)" = VALID ] && ok "no offered list recorded (runs before the field): kept" || bad "unrecorded list excluded: $(why env+skill 3)"
+has "only part of the skill offered: excluded" "$(why env+skill 4)" "not offered"
+[ "$(why env-only 4)" = VALID ] && ok "a control run that read some other skill's file: kept" || bad "other skill counted: $(why env-only 4)"
+has "control arm that read skill files: excluded" "$(why env-only 1)" "read skill files"
+has "control arm where opencode offered the skill: excluded" "$(why env-only 2)" "misassigned"
+[ "$(why env-only 3)" = VALID ] && ok "clean control run: kept" || bad "clean control excluded: $(why env-only 3)"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: what the agent can see while it runs"
+# A fake opencode. `debug skill` offers the built-in plus FAKE_OFFER; `debug config`
+# prints FAKE_CONFIG; `run` records the working directory and environment into the
+# transcript, the way the real agent would see them.
+T=$(mktemp -d)
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then
+  printf '[{"name":"customize-opencode","location":"<built-in>"}'
+  for s in $(echo "${FAKE_OFFER:-}" | tr ',' ' '); do printf ',{"name":"%s","location":"/x/%s/SKILL.md"}' "$s" "$s"; done
+  echo ']'; exit 0
+fi
+if [ "$1 $2" = "debug config" ]; then c=${FAKE_CONFIG:-}; [ -n "$c" ] || c='{}'; echo "$c"; exit 0; fi
+echo "CWD: $(ls -A "$3" | tr '\n' ' ')"
+echo "ENV: ARM=${ARM-unset} SKILLS_SRC=${SKILLS_SRC-unset} RUN_LABEL=${RUN_LABEL-unset} BENCH_HOME=${BENCH_HOME-unset} KEY=${NEURODESK_API_KEY-unset}"
+EOF
+chmod +x "$T/opencode"
+cat > "$T/tasks.json" <<'EOF'
+{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}
+EOF
+rb() { a=$1; shift; rm -rf "$T/bench" "$T/skills"
+  env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+    SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 NEURODESK_API_KEY=k-present \
+    ARM="$a" RUN_LABEL=exploratory OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 "$@" \
+    bash "$HERE/run_bench.sh" t-x neurodesk/m "$a" 1 >/dev/null 2>&1; }
+rb env-only; rc=$?
+R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
+tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+expect 0 $rc "a control run whose skills match (none) goes ahead"
+hasnt "run.json is not in the agent's working directory" "$tr_" "run.json"
+hasnt "prompt.txt is not in the agent's working directory" "$tr_" "prompt.txt"
+has   "harness variables are removed from the agent's environment" "$tr_" "ARM=unset SKILLS_SRC=unset RUN_LABEL=unset BENCH_HOME=unset"
+has   "  but the gateway key is still there" "$tr_" "KEY=k-present"
+[ -s "$R/run.json" ] && [ -s "$R/prompt.txt" ] && ok "both are in the run directory once the agent exits" \
+                                               || bad "run.json or prompt.txt missing after the run"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['exit_code']==0 and r['label']=='exploratory' and r['skills_offered']==[]" \
+  "$R/run.json" 2>/dev/null && ok "  and the record is complete, with skills_offered" || bad "  record incomplete"
+
+# The skill arm, with the skill installed where opencode does not discover it.
+rb env+skill SKILLS_SRC="$T/src" FAKE_OFFER=""; rc=$?
+R="$T/bench/runs/t-x__neurodesk-m__env+skill__r1"
+expect 3 $rc "a skill arm whose skill opencode does not offer stops before the agent"
+[ ! -e "$R/transcript.txt" ] && ok "  the agent was never started" || bad "  the agent ran anyway"
+[ -s "$R/run.json" ] && ok "  and the record still lands in the run directory" || bad "  record left behind in .meta"
+rb env+skill SKILLS_SRC="$T/src" FAKE_OFFER="brain-extraction,brain-extraction-qc"
+expect 0 $? "the skill arm goes ahead when opencode offers exactly its skills"
+[ -z "$(ls "$T/bench/.meta" 2>/dev/null)" ] && ok "  opencode's debug output (it holds the key) is deleted" \
+                                           || bad "  left in .meta: $(ls "$T/bench/.meta")"
+[ -z "$(ls -A "$T/skills" 2>/dev/null)" ] && ok "  and the skills directory is empty again" \
+                                          || bad "  skill links left behind: $(ls -A "$T/skills")"
+rb env-only FAKE_OFFER="astra"
+expect 3 $? "a control run offered any skill stops"
+rb env-only FAKE_CONFIG='{"instructions":["/opt/AGENTS.md"]}'
+expect 3 $? "a run whose resolved config declares instructions stops"
+rb env-only FAKE_OFFER="astra" AGENT_VIEW_CHECK=0
+expect 0 $? "without AGENT_VIEW_CHECK the mismatch is recorded, not enforced"
+rm -rf "$T"
+
+echo
+echo "=== env_check: the agent's environment matches the spec"
+T=$(mktemp -d)
+mkdir -p "$T/bin" "$T/home/.config/opencode" "$T/ws/bench/r1" "$T/skills"
+printf '#!/bin/sh\necho bet\n' > "$T/bin/bet"; chmod +x "$T/bin/bet"
+# Stand-in for Lmod: fsl/6.0.7.22 puts bet on PATH; any other module fails.
+cat > "$T/lmod.sh" <<EOF
+module() { [ "\$1" = load ] && [ "\$2" = fsl/6.0.7.22 ] || return 1; export PATH="$T/bin:\$PATH"; }
+EOF
+echo '{"provider":{}}' > "$T/home/.config/opencode/opencode.json"
+# envc [BASH_ENV] [VAR=value ...]: extra assignments override the defaults.
+envc() { be=${1-$T/lmod.sh}; [ $# -gt 0 ] && shift
+  env HOME="$T/home" BASH_ENV="$be" FSL_VERSION=6.0.7.22 \
+    BENCH_HOME="$T/ws/bench/r1" SKILLS_DST="$T/skills" PYTHON="$PY" \
+    SKILLS_SRC="" SKILL_SEARCH_ROOT="$T/home" "$@" \
+    bash "$HERE/env_check.sh" > "$T/out" 2>&1; }
+envc; expect 0 $? "passes a matching environment"
+envc ""; expect 1 $? "fails with no BASH_ENV"
+: > "$T/empty.sh"; envc "$T/empty.sh"; expect 1 $? "fails when module is not defined"
+# A `module` that loads anything passes the fsl check; only the unknown-module
+# control catches it.
+cat > "$T/noop.sh" <<EOF
+module() { export PATH="$T/bin:\$PATH"; }
+EOF
+envc "$T/noop.sh"; expect 1 $? "fails when module accepts any name"
+grep -q "accepted a nonexistent module" "$T/out" && ok "  via the nonexistent-module control" || bad "  wrong reason"
+echo '{"instructions":["/opt/AGENTS.md"]}' > "$T/home/.config/opencode/opencode.json"
+envc; expect 1 $? "fails when opencode declares instructions"
+echo '{"provider":{}}' > "$T/home/.config/opencode/opencode.json"
+touch "$T/ws/AGENTS.md"; envc; expect 1 $? "fails on AGENTS.md in a parent of BENCH_HOME"
+rm "$T/ws/AGENTS.md"
+mkdir -p "$T/home/.claude"; touch "$T/home/.claude/CLAUDE.md"
+envc; expect 1 $? "fails on CLAUDE.md in the agent's config dir"
+rm "$T/home/.claude/CLAUDE.md"
+touch "$T/skills/astra"; envc; expect 1 $? "fails when a skill is installed before the arm's"
+rm "$T/skills/astra"
+mkdir -p "$T/home/.claude/skills/x"; envc; expect 1 $? "fails on a skill in ~/.claude/skills"
+rm -r "$T/home/.claude/skills"
+mkdir -p "$T/ws/.opencode/skills/x"; envc; expect 1 $? "fails on a project-level skill in a parent"
+rm -r "$T/ws/.opencode"
+# Skill files readable by path, outside any discovery directory.
+mkdir -p "$T/home/work/skills/b/2c1e/brain-extraction"; touch "$T/home/work/skills/b/2c1e/brain-extraction/SKILL.md"
+envc; expect 1 $? "fails on a SKILL.md left elsewhere on disk"
+envc "$T/lmod.sh" SKILLS_SRC="$T/home/work/skills/b/2c1e"; expect 0 $? "  but not on the arm's own source"
+rm -r "$T/home/work"
+# A leftover skill in the default directory while SKILLS_DST points elsewhere: the
+# skills directory is not the only place opencode looks.
+mkdir -p "$T/home/.config/opencode/skills/x"; envc; expect 1 $? "fails on a skill in ~/.config/opencode/skills when SKILLS_DST is elsewhere"
+rm -r "$T/home/.config/opencode/skills"
+mkdir -p "$T/ws/bench/r1/runs"; touch "$T/ws/bench/r1/runs/AGENTS.md"
+envc; expect 1 $? "fails on AGENTS.md in the run directory's own parent"
+rm "$T/ws/bench/r1/runs/AGENTS.md"
+touch "$T/ws/CONTEXT.md"; envc; expect 1 $? "fails on CONTEXT.md, which opencode also loads"
+rm "$T/ws/CONTEXT.md"
+echo '{}' > "$T/ws/opencode.json"; envc; expect 1 $? "fails on project-level opencode config above the run"
+rm "$T/ws/opencode.json"
+envc "$T/lmod.sh" OPENCODE_CONFIG_CONTENT='{"instructions":["x"]}'; expect 1 $? "fails when OPENCODE_CONFIG_CONTENT is set"
+envc "$T/lmod.sh" SKILL_SEARCH_ROOT="$T/no-such-dir"; expect 1 $? "fails when the search root does not exist"
+envc; expect 0 $? "passes again once each fixture is removed"
+rm -rf "$T"
+
+echo
+echo "=== redact: secrets masked in text and binary, nothing else touched"
+T=$(mktemp -d); mkdir -p "$T/r"
+K=sk-test-0123456789abcdef
+printf 'token=%s end\n' "$K" > "$T/r/transcript.txt"
+printf 'abc\000%s\000xyz' "$K" > "$T/r/opencode.db"
+printf 'nothing here\n' > "$T/r/clean.txt"
+sz=$(wc -c < "$T/r/opencode.db")
+SECRET="$K" "$PY" "$HERE/redact.py" "$T/r" SECRET > "$T/out" 2>&1
+expect 0 $? "exits 0 after masking"
+grep -rqF "$K" "$T/r" && bad "a copy of the secret survived" || ok "no copy of the secret remains"
+[ "$(wc -c < "$T/r/opencode.db")" = "$sz" ] && ok "a binary file keeps its size" \
+                                             || bad "a binary file changed size"
+grep -q "::warning::" "$T/out" && ok "reports the hit as a warning" || bad "silent about the hit"
+[ "$(cat "$T/r/clean.txt")" = "nothing here" ] && ok "a file without the secret is untouched" \
+                                                || bad "a clean file changed"
+SECRET=short "$PY" "$HERE/redact.py" "$T/r" SECRET >/dev/null 2>&1
+expect 2 $? "refuses a value too short to mask safely"
+"$PY" "$HERE/redact.py" "$T/r" NOT_SET_ANYWHERE >/dev/null 2>&1
+expect 0 $? "skips an unset variable"
+# One secret containing another: the longer one must be masked whole.
+rm -rf "$T/r"; mkdir -p "$T/r"
+printf 'x=sk-abc12345-extension-private\n' > "$T/r/t.txt"
+A=sk-abc12345 B=sk-abc12345-extension-private "$PY" "$HERE/redact.py" "$T/r" A B >/dev/null 2>&1
+grep -q "extension" "$T/r/t.txt" && bad "part of the longer secret survived" \
+                                 || ok "a secret containing another is masked whole"
+# A file that cannot be written must not stop the walk or be uploaded unmasked.
+rm -rf "$T/r"; mkdir -p "$T/r"
+printf 'k=%s\n' "$K" > "$T/r/a_readonly.txt"; chmod 444 "$T/r/a_readonly.txt"
+printf 'k=%s\n' "$K" > "$T/r/z_after.txt"
+SECRET="$K" "$PY" "$HERE/redact.py" "$T/r" SECRET >/dev/null 2>&1
+expect 0 $? "a read-only file does not stop the run"
+grep -rqF "$K" "$T/r" && bad "  a copy survived next to a read-only file" \
+                      || ok "  and no copy of the secret remains anywhere"
+rm -rf "$T"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1
