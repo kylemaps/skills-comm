@@ -279,6 +279,32 @@ known-good answer confirmed on two independent environments. If a future grader
 change moves any of them, that is a regression in the grader and not a question
 about someone's machine — which is a distinction we previously could not make.
 
+### 4c. Incorporation bias — the reference is built from the tools the skill recommends
+
+Each reference mask is a STAPLE consensus of a tool panel (HD-BET, AFNI
+`3dSkullStrip`, SynthStrip; pediatric adds FSL BET `-R`), and the skill routes agents
+toward those tools. A run using a panel tool is scored against a consensus that
+includes that tool, which can only help it.
+
+In wave 0 this cannot have changed a pass/fail outcome:
+
+- **No run is near the pass line.** Every valid env-only and skill-arm run on the
+  five published tasks either scored 0 (failed a validity gate) or passed with a
+  score of 80 or more. None scored between 0 and 80.
+- **The control arm's usual tool fails by margins that do not depend on the panel**
+  (grader `PROVENANCE.md` per task): 7T, naive BET under-extracts by 557 cm³;
+  diffusion, BET `-f 0.5` misses 411 cm³ of core (Dice 0.79); stroke, BET keeps 52 %
+  of the lesion against a fixed 85 % gate; motion, BET retains about 98 cm³ of neck
+  against a fixed 40 cm³ background gate.
+- **Panel tools pass without themselves.** The pass line is the worst
+  leave-one-tool-out member with 1.5× slack, so each panel tool also passes against
+  the consensus of the others (diffusion: Dice 0.953–0.970 held out).
+
+What it does limit is the construct: a pass means agreement with robust established
+tools, not anatomical truth. The pediatric pack is the exception to the first point:
+SynthStrip scores 77.9 there, just inside the line, because its CSF rim falls in
+the consensus margin.
+
 ---
 
 ## 5. Standing caveats that must travel with any result
