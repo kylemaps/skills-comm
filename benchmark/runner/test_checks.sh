@@ -1047,7 +1047,7 @@ wc_ --wave 1 --label exploratory --task other-task --model neurodesk/kimi-k3 --a
 expect 0 $? "an exploratory run needs only the pins"
 "$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 1 --label benchmark \
   --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill --skills-hash 291f844a43ec \
-  image_version=ci-env2-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
+  image_version=ci-env3-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
 expect 0 $? "the real sweep accepts the environment run.yml declares for wave 1"
 rm -rf "$T"
 

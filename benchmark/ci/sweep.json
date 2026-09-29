@@ -69,9 +69,9 @@
     },
 
     "1": {
-      "environment": "ci-env2 (ENVIRONMENT.md version 2 in skills-benchmark)",
+      "environment": "ci-env3 (ENVIRONMENT.md version 3 in skills-benchmark)",
       "pins": {
-        "image_version": "ci-env2-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
+        "image_version": "ci-env3-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
         "tasks_sha": "e98e3b6"
       },
       "models": ["kimi-k3", "minimax-m2", "qwen3"],
