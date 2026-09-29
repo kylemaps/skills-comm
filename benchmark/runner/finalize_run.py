@@ -251,7 +251,7 @@ rec["skill_files_read"] = sorted(_reads)
 #            README.md in a graders/ or benchmark/ tree, anything under graders/,
 #            CLAIMS.md, INFRA_LEDGER.md, the grading scripts
 #   sources  the skills-comm and skills-benchmark repositories and site, and the
-#            reference dataset on Hugging Face, which is public
+#            reference dataset on Hugging Face (gated: files need a logged-in account)
 # Files count when read: the Read and Grep tools, or a command segment that is not
 # only listing or searching (find, ls, ...). Sources count when fetched or searched
 # for: WebFetch, web search, or any executed command. Scripts the agent wrote are
