@@ -610,6 +610,56 @@ done < "$T/strat.out"
 rm -rf "$T"
 
 echo
+echo "=== stratified_effect --runs: the pre-registered sensitivity analyses"
+T=$(mktemp -d); TK=diffusion-brain-mask
+# m1: control 2/5 valid + 1 timed out (excluded under the default rules); skill 5/6,
+# one pass flagged answer-key and one pass off-spec. m2: control 0/5, skill 5/5.
+sv() { d="$T/runs/${TK}__$1__$2__r$3"; mkdir -p "$d/submissions/$TK"
+  echo x > "$d/submissions/$TK/output.nii.gz"
+  echo "{\"score\":$4,\"verdict\":\"$5\"}" > "$d/envelope.json"
+  echo "{\"task_id\":\"$TK\",\"model\":\"$1\",\"condition\":\"$2\",\"repeat\":$3,\"exit_code\":${6:-0},\"output_present\":true,\"skills_installed\":\"$([ "$2" = env+skill ] && echo brain-extraction)\"${7:-}}" > "$d/run.json"
+  : > "$d/transcript.txt"; }
+P="100 indistinguishable"; F="0 invalid"
+sv m1 env-only 1 $P; sv m1 env-only 2 $P; for r in 3 4 5; do sv m1 env-only $r $F; done
+sv m1 env-only 6 $P 124
+sv m1 env+skill 1 $P 0 ',"answer_key_reads":["→ Read /ws/tasks.json"]'
+sv m1 env+skill 2 $P 0 ',"off_spec":["sudo"]'
+for r in 3 4 5; do sv m1 env+skill $r $P 0 ',"off_spec":[]'; done
+sv m1 env+skill 6 $F 0 ',"off_spec":[]'
+for r in 1 2 3 4 5; do sv m2 env-only $r $F; sv m2 env+skill $r $P; done
+# m3: 3 runs per arm, below the minimum; left out by summarize and here alike.
+for r in 1 2 3; do sv m3 env-only $r $F; sv m3 env+skill $r $P; done
+"$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/out" >/dev/null 2>&1
+"$PY" - "$HERE" "$T/out" "$TK" > "$T/sens.out" 2>&1 <<'EOF'
+import csv, json, sys
+sys.path.insert(0, sys.argv[1])
+from stratified_effect import strata_of, strata_from_runs
+rows = list(csv.DictReader(open("%s/runs_%s.csv" % (sys.argv[2], sys.argv[3]), encoding="utf-8")))
+summ = json.load(open("%s/summary_%s.json" % (sys.argv[2], sys.argv[3]), encoding="utf-8"))
+def got(sc):
+    return {m: (x0, n0, x1, n1) for m, x0, n0, x1, n1 in strata_from_runs(rows, "env+skill", sc)}
+def check(name, cond):
+    print(("OK:" if cond else "FAIL:") + name)
+prim = set(strata_from_runs(rows, "env+skill", "primary"))
+check("primary equals the summary's skill_effect (both models)",
+      prim == set(strata_of(summ, "env+skill")) and len(prim) == 2)
+check("primary: the timed-out control run is left out", got("primary")["m1"] == (2, 5, 5, 6))
+check("exclusions as fail: it counts as a control fail", got("exclusions as fail")["m1"] == (2, 6, 5, 6))
+check("exclusions as pass: it counts as a control pass", got("exclusions as pass")["m1"] == (3, 6, 5, 6))
+check("flagged removed: the answer-key run is dropped", got("flagged removed")["m1"] == (2, 5, 4, 5))
+check("on-spec only: the sudo run is dropped", got("on-spec only")["m1"] == (2, 5, 4, 5))
+check("the other model is untouched", all(got(s)["m2"] == (0, 5, 5, 5) for s in
+      ("primary", "exclusions as fail", "flagged removed", "on-spec only")))
+EOF
+while IFS= read -r line; do
+  case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
+done < "$T/sens.out"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/sens.out")" = 7 ] || bad "sensitivity checks did not all run: $(tail -3 "$T/sens.out")"
+"$PY" "$HERE/stratified_effect.py" --runs "$T/out/runs_$TK.csv" >/dev/null 2>&1
+expect 0 $? "the --runs table prints"
+rm -rf "$T"
+
+echo
 echo "=== model_probe: what the gateway serves, recorded per run"
 T=$(mktemp -d)
 echo '{"data":[{"id":"qwen3"},{"id":"kimi-k3"}]}' > "$T/roster.json"

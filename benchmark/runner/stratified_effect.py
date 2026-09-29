@@ -2,6 +2,7 @@
 """Skill effect per task, stratified by model.
 
     stratified_effect.py results/wave0/summary_*.json [--arm env+skill] [--json out.json]
+    stratified_effect.py --runs results/wave1/runs_<task>.csv [--arm env+skill] [--json out.json]
     stratified_effect.py --power
 
 Reads the `skill_effect` block of each task summary: per model, passes and runs in
@@ -19,17 +20,28 @@ Per task:
   direction    models with a positive, zero and negative difference
 Across tasks: Holm and Benjamini-Hochberg adjusted p-values.
 
+--runs reads one task's runs CSV (summarize.py) and computes the same statistics for
+the primary analysis and each sensitivity analysis:
+  primary              valid runs
+  exclusions as fail   excluded runs added, each counted as a fail
+  exclusions as pass   excluded runs added, each counted as a pass
+  flagged removed      valid runs without any flag (answer-key, arm-seen,
+                       control-read-skill)
+  on-spec only         valid runs whose off_spec is "none" or "unchecked"
+A model with fewer than 5 runs in either arm is left out (MIN_N_FOR_STATS).
+
 --power prints the probability that a single 10-vs-10 cell reaches p < 0.05 with
 Fisher's exact test, for a range of true pass rates.
 """
 import argparse
+import csv
 import json
 import math
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from summarize import fisher_exact, newcombe  # noqa: E402
+from summarize import MIN_N_FOR_STATS, fisher_exact, newcombe  # noqa: E402
 
 
 def strata_of(summary, arm):
@@ -42,6 +54,56 @@ def strata_of(summary, arm):
         s = (model, e["env_only_pass"], e["env_only_n"], e["env_skill_pass"], e["env_skill_n"])
         if s[2] and s[4]:
             out.append(s)
+    return out
+
+
+SCENARIOS = ["primary", "exclusions as fail", "exclusions as pass", "flagged removed",
+             "on-spec only"]
+
+
+def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS):
+    """(model, control passes, control n, skill passes, skill n) per model, from runs
+    CSV rows, for one of SCENARIOS. A model with fewer than min_n runs in either arm
+    is left out, as summarize.py leaves it out of skill_effect."""
+    cells = {}
+    for r in rows:
+        if r["arm"] not in ("env-only", arm):
+            continue
+        valid = r["valid"] == "True"
+        passed = r["passed"] == "True"
+        if not valid:
+            if scenario == "exclusions as fail":
+                passed = False
+            elif scenario == "exclusions as pass":
+                passed = True
+            else:
+                continue
+        elif scenario == "flagged removed" and r.get("flags"):
+            continue
+        elif (scenario == "on-spec only"
+              and (r.get("off_spec") or "unchecked") not in ("none", "unchecked")):
+            continue
+        c = cells.setdefault(r["model"], {"env-only": [0, 0], arm: [0, 0]})
+        c[r["arm"]][0] += passed
+        c[r["arm"]][1] += 1
+    return [(m, c["env-only"][0], c["env-only"][1], c[arm][0], c[arm][1])
+            for m, c in sorted(cells.items())
+            if min(c["env-only"][1], c[arm][1]) >= max(min_n, 1)]
+
+
+def sensitivity(rows, arm):
+    """One row of statistics per scenario, for one task's runs."""
+    out = []
+    for sc in SCENARIOS:
+        st = strata_from_runs(rows, arm, sc)
+        rd, ci = mh_rd(st) if st else (float("nan"), (float("nan"), float("nan")))
+        out.append({"scenario": sc, "arm": arm, "models": len(st),
+                    "control": [sum(s[1] for s in st), sum(s[2] for s in st)],
+                    "skill": [sum(s[3] for s in st), sum(s[4] for s in st)],
+                    "mh_rd": rd, "mh_ci95": list(ci),
+                    "exact_p": exact_stratified_p(st) if st else float("nan"),
+                    "positive": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 > x0 / n0),
+                    "negative": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 < x0 / n0)})
     return out
 
 
@@ -155,8 +217,29 @@ def main():
     ap.add_argument("summaries", nargs="*")
     ap.add_argument("--arm", default="env+skill")
     ap.add_argument("--json")
+    ap.add_argument("--runs", help="one task's runs CSV: primary and sensitivity analyses")
     ap.add_argument("--power", action="store_true")
     a = ap.parse_args()
+
+    if a.runs:
+        with open(a.runs, encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        out = sensitivity(rows, a.arm)
+        if not any(r["models"] for r in out):
+            print("no model has both env-only and %s runs in %s" % (a.arm, a.runs))
+            return 1
+        print("| analysis | models | control | skill | MH RD, pp (95% CI) | exact p | + / - |")
+        print("|---|---|---|---|---|---|---|")
+        for r in out:
+            print("| %s | %d | %d/%d | %d/%d | %s (%s, %s) | %.4f | %d / %d |" % (
+                r["scenario"], r["models"], r["control"][0], r["control"][1],
+                r["skill"][0], r["skill"][1], fmt_pp(r["mh_rd"]), fmt_pp(r["mh_ci95"][0]),
+                fmt_pp(r["mh_ci95"][1]), r["exact_p"], r["positive"], r["negative"]))
+        if a.json:
+            with open(a.json, "w", encoding="utf-8") as fh:
+                json.dump(out, fh, indent=2)
+                fh.write("\n")
+        return 0
 
     if a.power:
         print("P(p < 0.05, Fisher) for one 10-vs-10 cell")
