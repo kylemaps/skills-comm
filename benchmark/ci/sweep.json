@@ -91,6 +91,21 @@
         "infra_errors_from": "opencode",
         "control_skill_reads": "keep"
       },
+      "lost": {
+        "_comment": [
+          "Runs the cluster stopped before they could record anything, with no known",
+          "infrastructure fault, that cannot be re-run in the wave's environment. Each",
+          "counts in its cell as a failed run (verdict LOST, score 0; summarize.py,",
+          "assemble_cell.py); stratified_effect.py --runs also reports the analysis without",
+          "them. A run stopped by a known infrastructure fault is re-run instead.",
+          "Key: <task>__<model>__<arm>__r<n>, bare model id."
+        ],
+        "diffusion-brain-mask__NRP.qwen3__env-only__r4": {
+          "reason": "evicted: node disk pressure",
+          "ci_runs": ["37265034001"],
+          "evidence": "Both attempts (runner pods swt7d, 6nbsb) were evicted by the kubelet for node DiskPressure; on attempt 2 it was the only runner pod on its node and node root free fell to 4.38 GiB. Memory 6.4 and 1.67 of 16 GiB, work volume 6.2 and 2.65 of 40 GiB, no OOM kill. The kubelet's eviction message was not retained. Not established: whether the disk was filled by the run's writable layer (/tmp, $HOME) or by the node's CVMFS cache."
+        }
+      },
       "tasks": {
         "diffusion-brain-mask": {
           "models": ["kimi-k3", "minimax-m2", "NRP.qwen3"],

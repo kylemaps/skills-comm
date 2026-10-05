@@ -59,6 +59,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 from collections import Counter, defaultdict
 
 # Verdicts that mean "the agent did not deliver a usable result". Everything else is
@@ -540,6 +541,8 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     r["answer_key_reads"] = rec.get("answer_key_reads")
     r["arm_seen"] = rec.get("arm_seen")
     r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT
+    # Why a declared lost run was lost (lost_run); "" for every recorded run.
+    r["lost"] = ""
     # Why a run is flagged but kept: "answer-key", "arm-seen", "control-read-skill".
     r["flags"] = (["answer-key"] * bool(r["answer_key_reads"])
                   + ["arm-seen"] * bool(r["arm_seen"]))
@@ -642,6 +645,47 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     if r["timed_out"] and rules["timeout"] == "fail":
         r["passed"], r["score"], r["verdict"] = False, 0.0, "TIMEOUT"
     r["valid"] = not r["exclude_reason"]
+    return r
+
+
+def declared_lost(sweep, wave, task=None):
+    """The runs a wave declares lost (sweep.json `waves.<n>.lost`), as
+    (task, model, arm, rep, entry) tuples, optionally for one task.
+
+    A lost run started and left no record because the cluster stopped it. Each entry
+    is keyed <task>__<model>__<arm>__r<n> (bare model id) and must give a reason, the
+    evidence and the CI run ids.
+    """
+    if sweep is None or wave is None:
+        return []
+    w = (sweep.get("waves") or {}).get(str(wave)) or {}
+    out = []
+    for name, e in sorted((w.get("lost") or {}).items()):
+        if name.startswith("_"):
+            continue
+        parts = name.split("__")
+        if len(parts) != 4 or not re.match(r"r[1-9][0-9]*$", parts[3]):
+            raise SystemExit("wave %s: lost run %r is not <task>__<model>__<arm>__r<n>"
+                             % (wave, name))
+        if not all((e or {}).get(k) for k in ("reason", "evidence", "ci_runs")):
+            raise SystemExit("wave %s: lost run %s needs reason, evidence and ci_runs"
+                             % (wave, name))
+        if task is None or parts[0] == task:
+            out.append((parts[0], parts[1], parts[2], parts[3][1:], e))
+    return out
+
+
+def lost_run(task, model, arm, rep, entry):
+    """A declared lost run as a record: valid, failed, verdict LOST, score 0.
+
+    Built by load_run on a directory that does not exist, so every field a recorded
+    run has is present and says "not recorded".
+    """
+    name = "%s__%s__%s__r%s" % (task, model, arm, rep)
+    with tempfile.TemporaryDirectory() as t:
+        r = load_run(os.path.join(t, name), task)
+    r.update(dir=name, exclude_reason="", valid=True, passed=False, score=0.0,
+             verdict="LOST", lost=entry["reason"])
     return r
 
 
@@ -1124,6 +1168,8 @@ def report(runs, task, rules=None):
         "n_valid": len(valid),
         "n_excluded": len(excluded),
         "exclusions": dict(Counter(r["exclude_reason"] for r in excluded)),
+        # Declared lost runs (sweep.json), counted as failed runs: name -> reason.
+        "lost": {r["dir"]: r["lost"] for r in runs if r["lost"]},
         "provenance": {k: dict(Counter(r[k] for r in runs)) for k in PROVENANCE_KEYS},
         "poolable": not not_poolable,
         "not_poolable_because": sorted(set(not_poolable)),
@@ -1165,6 +1211,7 @@ def report(runs, task, rules=None):
                 },
                 "flags": dict(Counter(f for r in rs for f in r["flags"])),
                 "timed_out": sum(1 for r in rs if r["timed_out"]),
+                "lost": sum(1 for r in rs if r["lost"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
                 "methods": dict(Counter(m for r in rs for m in r["methods"])),
                 "decided": dict(Counter(t for r in rs for t in r["decided_tools"])),
@@ -1189,7 +1236,7 @@ def report(runs, task, rules=None):
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "skill_load_failures", "off_spec", "answer_key_reads",
-            "arm_seen", "flags", "timed_out", "dataset_pin", "not_found_claims",
+            "arm_seen", "flags", "timed_out", "lost", "dataset_pin", "not_found_claims",
             "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
             "tokens_input", "tokens_output", "tokens_reasoning",
@@ -1209,13 +1256,13 @@ def main():
     ap.add_argument("task")
     ap.add_argument("--out-dir", default=None,
                     help="where to write summary.json / runs.csv (default: runs_dir)")
-    ap.add_argument("--sweep", help="sweep.json declaring the wave's rules")
+    ap.add_argument("--sweep", help="sweep.json declaring the wave's rules and lost runs")
     ap.add_argument("--wave", help="classify with this wave's rules (needs --sweep)")
     a = ap.parse_args()
     if bool(a.sweep) != bool(a.wave):
         ap.error("--sweep and --wave go together")
-    rules = rules_for(json.load(open(a.sweep, encoding="utf-8")) if a.sweep else None,
-                      a.wave)
+    sweep = json.load(open(a.sweep, encoding="utf-8")) if a.sweep else None
+    rules = rules_for(sweep, a.wave)
 
     dirs = sorted(d for d in glob.glob(os.path.join(a.runs_dir, a.task + "__*"))
                   if os.path.isdir(d))
@@ -1229,6 +1276,13 @@ def main():
     tokens_available = any(r.get("tokens_total") for r in probe)
     runs = ([load_run(d, a.task, True, rules) for d in dirs] if tokens_available
             else probe)
+    lost = [lost_run(*x) for x in declared_lost(sweep, a.wave, a.task)]
+    have = {(r["model"], r["arm"], r["rep"]) for r in runs}
+    both = sorted(r["dir"] for r in lost if (r["model"], r["arm"], r["rep"]) in have)
+    if both:
+        sys.exit("declared lost in the sweep but recorded in %s: %s"
+                 % (a.runs_dir, ", ".join(both)))
+    runs += lost
     summary = report(runs, a.task, rules)
 
     # Task-scoped filenames. These used to be plain summary.json / runs.csv, so

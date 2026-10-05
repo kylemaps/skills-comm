@@ -28,6 +28,8 @@ the primary analysis and each sensitivity analysis:
   flagged removed      valid runs without any flag (answer-key, arm-seen,
                        control-read-skill)
   on-spec only         valid runs whose off_spec is "none" or "unchecked"
+  lost removed         valid runs without the declared lost runs (sweep.json `lost`)
+  lost as pass         valid runs, each declared lost run counted as a pass
 A model with fewer than 5 runs in either arm is left out (MIN_N_FOR_STATS).
 
 --power prints the probability that a single 10-vs-10 cell reaches p < 0.05 with
@@ -58,7 +60,7 @@ def strata_of(summary, arm):
 
 
 SCENARIOS = ["primary", "exclusions as fail", "exclusions as pass", "flagged removed",
-             "on-spec only"]
+             "on-spec only", "lost removed", "lost as pass"]
 
 
 def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS):
@@ -83,6 +85,10 @@ def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS):
         elif (scenario == "on-spec only"
               and (r.get("off_spec") or "unchecked") not in ("none", "unchecked")):
             continue
+        elif scenario == "lost removed" and r.get("lost"):
+            continue
+        elif scenario == "lost as pass" and r.get("lost"):
+            passed = True
         c = cells.setdefault(r["model"], {"env-only": [0, 0], arm: [0, 0]})
         c[r["arm"]][0] += passed
         c[r["arm"]][1] += 1

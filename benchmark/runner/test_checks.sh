@@ -1101,6 +1101,74 @@ grep -q "changed during rep" "$T/o" && ok "  and names the rep" || bad "  wrong 
 rm -rf "$T"
 
 echo
+echo "=== declared lost runs: counted as failed runs, never as records"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"reps":3,"arms":{"env-only":{"skills_hash":null},"env+skill":{"skills_hash":"291f844a43ec"}},
+ "waves":{"1":{"pins":{"image_version":"i"},"model_fingerprints":{"NRP.qwen3":"757ac9b30f73"},
+  "lost":{"_comment":["x"],
+   "diffusion-brain-mask__NRP.qwen3__env-only__r3":{"reason":"evicted: node disk pressure","ci_runs":["1"],"evidence":"e"},
+   "diffusion-brain-mask__NRP.qwen3__env+skill__r3":{"reason":"evicted: node disk pressure","ci_runs":["1"],"evidence":"e"}},
+  "tasks":{"diffusion-brain-mask":{"models":["NRP.qwen3"],"arms":["env-only","env+skill"]}}}}}
+J
+ml() { d="$T/runs/diffusion-brain-mask__neurodesk-NRP.qwen3__$1__r$2"; mkdir -p "$d/submissions/diffusion-brain-mask"
+  echo x > "$d/submissions/diffusion-brain-mask/output.nii.gz"; echo '{"score":100,"verdict":"PASS"}' > "$d/envelope.json"
+  if [ "$1" = env-only ]; then si=""; hs=noskill; else si=brain-extraction; hs=291f844a43ec; fi
+  cat > "$d/run.json" <<J
+{"task_id":"diffusion-brain-mask","model":"neurodesk/NRP.qwen3","condition":"$1","repeat":"$2",
+ "exit_code":0,"output_present":true,"skills_seen":[],"skills_installed":"$si","image_version":"i",
+ "opencode_version":"o","skills_sha":"a","skills_hash":"$hs","prompt_hash":"p","tasks_sha":"t",
+ "label":"benchmark","model_fingerprint":"757ac9b30f73","model_changed":false}
+J
+}
+gl() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task diffusion-brain-mask --model NRP.qwen3 \
+  --arm "$1" --sweep "${2:-$SW}" --wave 1 ${3:+--stage "$3"} >"$T/o" 2>&1; }
+sm() { "$PY" "$HERE/summarize.py" "$1" diffusion-brain-mask --out-dir "$2" ${3:+--sweep "$3" --wave 1} >"$T/o" 2>&1; }
+cell() { "$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); c=s['cells']['NRP.qwen3|env-only']
+print(c['n'], c['passes'], c['lost'], s['n_valid'])" "$1/summary_diffusion-brain-mask.json" 2>/dev/null | tr -d '\r'; }
+rm -rf "$T/runs"; ml env-only 1; ml env-only 2
+gl env-only; expect 0 $? "2 recorded runs and 1 declared lost make a complete cell"
+grep -q "rep 3 declared lost" "$T/o" && ok "  and the gate names the lost rep" || bad "  the lost rep is not named"
+"$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); del s['waves']['1']['lost']
+json.dump(s, open(sys.argv[2], 'w'))" "$SW" "$T/sw_nolost.json"
+gl env-only "$T/sw_nolost.json"; expect 1 $? "without the declaration the same cell is incomplete"
+rm -rf "$T/runs"; ml env+skill 1; ml env+skill 2
+gl env+skill; expect 0 $? "a lost run is not held to the pins, model and arm gates (no record)"
+rm -rf "$T/runs"; ml env-only 1; ml env-only 2; ml env-only 3
+gl env-only; expect 1 $? "a rep both recorded and declared lost is refused"
+grep -q "more than once" "$T/o" && ok "  as a repeated rep" || bad "  wrong reason: $(cat "$T/o")"
+sm "$T/runs" "$T/sum" "$SW"; expect 1 $? "  and summarize refuses it too"
+rm -rf "$T/runs"; ml env-only 1; ml env-only 2
+sm "$T/runs" "$T/sum" "$SW"; expect 0 $? "summarize adds the declared lost run"
+[ "$(cell "$T/sum")" = "3 2 1 4" ] && ok "  as a valid failed run: n 3, passes 2, lost 1 (n_valid 4 with the other arm's)" || bad "  counted as: $(cell "$T/sum")"
+grep -q ',LOST,' "$T/sum/runs_diffusion-brain-mask.csv" && ok "  verdict LOST in the runs CSV" || bad "  no LOST row"
+sm "$T/runs" "$T/sum0"
+[ "$(cell "$T/sum0")" = "2 2 0 2" ] && ok "  only when the wave is given" || bad "  added without a wave: $(cell "$T/sum0")"
+sed 's/"evidence":"e"/"evidence":""/' "$SW" > "$T/sw_noev.json"
+gl env-only "$T/sw_noev.json"; expect 1 $? "a declaration without evidence is refused"
+sm "$T/runs" "$T/sum" "$T/sw_noev.json"; expect 1 $? "  by summarize too"
+sed 's/env-only__r3/env-only__3/' "$SW" > "$T/sw_badkey.json"
+gl env-only "$T/sw_badkey.json"; expect 1 $? "a declaration not named <task>__<model>__<arm>__r<n> is refused"
+rm -rf "$T/stage"
+gl env-only "$SW" "$T/stage"; expect 0 $? "a cell with a lost run stages"
+[ "$(ls "$T/stage/diffusion-brain-mask" | wc -l | tr -d ' ')" = 2 ] && ok "  only the 2 recorded runs are written" \
+  || bad "  staged: $(ls "$T/stage/diffusion-brain-mask")"
+sm "$T/stage/diffusion-brain-mask" "$T/pub" "$SW"
+[ "$(cell "$T/pub")" = "3 2 1 4" ] && ok "  and the summary of the staged tree counts the lost run" || bad "  published: $(cell "$T/pub")"
+{ echo "task,model,arm,rep,valid,passed,flags,off_spec,lost"
+  for i in 1 2 3 4 5; do echo "t,m,env-only,$i,True,False,,none,"; done
+  echo "t,m,env-only,6,True,False,,unchecked,evicted"
+  for i in 1 2 3 4 5 6; do echo "t,m,env+skill,$i,True,True,,none,"; done; } > "$T/runs.csv"
+"$PY" "$HERE/stratified_effect.py" --runs "$T/runs.csv" > "$T/o" 2>&1
+grep -q '^| primary | 1 | 0/6 | 6/6' "$T/o" && ok "stratified_effect: a lost run is a fail in the primary analysis" || bad "primary: $(grep primary "$T/o")"
+grep -q '^| lost removed | 1 | 0/5 | 6/6' "$T/o" && ok "  and left out in 'lost removed'" || bad "lost removed: $(grep 'lost removed' "$T/o")"
+grep -q '^| lost as pass | 1 | 1/6 | 6/6' "$T/o" && ok "  and a pass in 'lost as pass'" || bad "lost as pass: $(grep 'lost as pass' "$T/o")"
+"$PY" -c "import json,sys; sys.path.insert(0, sys.argv[2]); from summarize import declared_lost
+declared_lost(json.load(open(sys.argv[1], encoding='utf-8')), '1')" "$HERE/../ci/sweep.json" "$HERE" >/dev/null 2>&1
+expect 0 $? "the real sweep's lost declarations are well formed"
+rm -rf "$T"
+
+echo
 echo "=== mkprompt --prompts-only: the task pack without its answers"
 T=$(mktemp -d)
 cat > "$T/tasks.json" <<'EOF'
