@@ -10,6 +10,12 @@ Fails (exit 1) when:
   - the label is `benchmark` and the task, model or arm is not declared for the wave,
     or the arm declares a skills_hash (`arms.<arm>`) and --skills-hash differs.
 
+--record RUN_JSON also checks the run's model_fingerprint (written by model_probe.py)
+against `waves.<n>.model_fingerprints` for the model. It fails when the wave declares a
+fingerprint for the model and the record's differs or is missing: the gateway serves a
+different model or serving engine than the wave's. A model the wave declares no
+fingerprint for is not checked. --fingerprint-only skips the other checks.
+
 assemble_cell.py applies the same pins and declarations when a cell is published; this
 stops a run that would be refused there from being paid for.
 """
@@ -47,6 +53,29 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
     return out
 
 
+def declared_fingerprint(sweep, wave, model):
+    """The fingerprint the wave declares for a model (provider prefix stripped), or None."""
+    w = (sweep.get("waves") or {}).get(str(wave)) or {}
+    fps = w.get("model_fingerprints") or {}
+    return fps.get((model or "").split("/", 1)[-1])
+
+
+def check_fingerprint(sweep, wave, model, record):
+    """A list of problems with the record's model_fingerprint; empty when it matches or
+    the wave declares none for this model."""
+    want = declared_fingerprint(sweep, wave, model)
+    if not want:
+        return []
+    got = (record or {}).get("model_fingerprint")
+    if got is None:
+        return ["wave %s declares fingerprint %s for %s and the probe recorded none"
+                % (wave, want, model)]
+    if got != want:
+        return ["%s is served with fingerprint %s; wave %s declares %s (model or serving "
+                "engine changed)" % (model, got, wave, want)]
+    return []
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -57,6 +86,9 @@ def main():
     ap.add_argument("--model")
     ap.add_argument("--arm")
     ap.add_argument("--skills-hash", help="content hash of the arm's snapshot; empty for none")
+    ap.add_argument("--record", help="run.json whose model_fingerprint is checked")
+    ap.add_argument("--fingerprint-only", action="store_true",
+                    help="check only the record's fingerprint")
     ap.add_argument("fields", nargs="*", metavar="KEY=VALUE")
     a = ap.parse_args()
     given = {}
@@ -65,8 +97,17 @@ def main():
         if not sep:
             ap.error("expected KEY=VALUE, got %r" % f)
         given[k] = v
-    problems = check(json.load(open(a.sweep, encoding="utf-8")), a.wave, given,
-                     a.label, a.task, a.model, a.arm, a.skills_hash)
+    sweep = json.load(open(a.sweep, encoding="utf-8"))
+    problems = [] if a.fingerprint_only else check(
+        sweep, a.wave, given, a.label, a.task, a.model, a.arm, a.skills_hash)
+    if a.fingerprint_only and str(a.wave) not in (sweep.get("waves") or {}):
+        problems.append("wave %s is not declared in the sweep" % a.wave)
+    if a.record:
+        try:
+            rec = json.load(open(a.record, encoding="utf-8"))
+        except (OSError, ValueError):
+            rec = {}
+        problems += check_fingerprint(sweep, a.wave, a.model, rec)
     for p in problems:
         print("FAIL: " + p)
     if problems:

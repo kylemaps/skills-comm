@@ -1046,9 +1046,58 @@ wc_ --wave 1 --label exploratory --task other-task --model neurodesk/kimi-k3 --a
   image_version=ci-env2-x tasks_sha=e98e3b6
 expect 0 $? "an exploratory run needs only the pins"
 "$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 1 --label benchmark \
-  --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill --skills-hash 291f844a43ec \
+  --task diffusion-brain-mask --model neurodesk/NRP.qwen3 --arm env+skill --skills-hash 291f844a43ec \
   image_version=ci-env3-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
 expect 0 $? "the real sweep accepts the environment run.yml declares for wave 1"
+rm -rf "$T"
+
+echo
+echo "=== model fingerprint: the run stops, and the cell is refused, when the model changed"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"reps":2,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"1":{"model_fingerprints":{"_comment":["x"],"NRP.qwen3":"757ac9b30f73"},
+  "tasks":{"diffusion-brain-mask":{"models":["NRP.qwen3","m"],"arms":["env-only"]}}}}}
+J
+fp() { echo "{\"model_fingerprint\":$1}" > "$T/r.json"
+  "$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 1 --model "$2" --record "$T/r.json" --fingerprint-only >"$T/o" 2>&1; }
+fp '"757ac9b30f73"' neurodesk/NRP.qwen3; expect 0 $? "the declared fingerprint passes"
+fp '"c0e7d1c7d27c"' neurodesk/NRP.qwen3; expect 1 $? "another fingerprint (engine changed) is stopped"
+grep -q "engine changed" "$T/o" && ok "  and says why" || bad "  wrong reason: $(cat "$T/o")"
+fp 'null' neurodesk/NRP.qwen3; expect 1 $? "no fingerprint recorded (probe failed) is stopped"
+fp '"anything"' neurodesk/m; expect 0 $? "a model the wave declares no fingerprint for is not checked"
+fp '"757ac9b30f73"' neurodesk/NRP.qwen3
+"$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 9 --model neurodesk/NRP.qwen3 --record "$T/r.json" --fingerprint-only >/dev/null 2>&1
+expect 1 $? "an undeclared wave is stopped in fingerprint-only mode"
+# assemble: one fingerprint per cell, none changed during a rep, the declared one.
+mf() { d="$T/runs/diffusion-brain-mask__neurodesk-NRP.qwen3__env-only__r$1"; mkdir -p "$d/submissions/diffusion-brain-mask"
+  echo x > "$d/submissions/diffusion-brain-mask/output.nii.gz"; echo '{"score":100}' > "$d/envelope.json"
+  cat > "$d/run.json" <<J
+{"task_id":"diffusion-brain-mask","model":"neurodesk/NRP.qwen3","condition":"env-only","repeat":"$1",
+ "exit_code":0,"output_present":true,"skills_seen":[],"skills_installed":"","image_version":"i",
+ "opencode_version":"o","skills_sha":"a","skills_hash":"noskill","prompt_hash":"p","tasks_sha":"t",
+ "model_fingerprint":"$2","model_changed":${3:-false}}
+J
+}
+ga() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task diffusion-brain-mask --model NRP.qwen3 \
+  --arm env-only --sweep "$SW" --wave 1 >"$T/o" 2>&1; }
+rm -rf "$T/runs"; mf 1 757ac9b30f73; mf 2 757ac9b30f73
+ga; expect 0 $? "a cell on the declared fingerprint passes"
+rm -rf "$T/runs"; mf 1 757ac9b30f73; mf 2 c0e7d1c7d27c
+ga; expect 1 $? "a cell answered by two fingerprints is refused"
+grep -q "FAIL  one model" "$T/o" && ok "  via the one-model gate" || bad "  refused by the wrong gate"
+# With no fingerprint declared, only the mixed-fingerprint check can refuse.
+sed 's/"NRP.qwen3":"757ac9b30f73"/"other":"x"/' "$SW" > "$T/sw_nodecl.json"
+rm -rf "$T/runs"; mf 1 757ac9b30f73; mf 2 c0e7d1c7d27c
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task diffusion-brain-mask --model NRP.qwen3 \
+  --arm env-only --sweep "$T/sw_nodecl.json" --wave 1 >"$T/o" 2>&1
+expect 1 $? "two fingerprints are refused even when the wave declares none"
+grep -q "varies within the cell" "$T/o" && ok "  by the mixed-fingerprint check" || bad "  wrong reason"
+rm -rf "$T/runs"; mf 1 c0e7d1c7d27c; mf 2 c0e7d1c7d27c
+ga; expect 1 $? "a consistent cell on an undeclared fingerprint is refused"
+rm -rf "$T/runs"; mf 1 757ac9b30f73; mf 2 757ac9b30f73 true
+ga; expect 1 $? "a rep whose fingerprint changed during the run is refused"
+grep -q "changed during rep" "$T/o" && ok "  and names the rep" || bad "  wrong reason"
 rm -rf "$T"
 
 echo
@@ -1166,6 +1215,30 @@ assert r['skills_hash']=='noskill' and r['skills_offered']==[]" "$R/run.json" 2>
 sleep 4
 [ ! -e "$R/late.txt" ] && ok "a process the agent left running is stopped when it exits" \
                        || bad "a background process kept writing after the run"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: a model the wave declares must match its fingerprint before the agent"
+T=$(mktemp -d)
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then echo '[{"name":"customize-opencode","location":"<built-in>"}]'; exit 0; fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+echo "AGENT STARTED"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+rbf() { env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+    SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 NEURODESK_API_KEY=k \
+    OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 NEURODESK_GATEWAY=http://127.0.0.1:9 RUN_WAVE=1 \
+    bash "$HERE/run_bench.sh" t-x "$1" env-only 1 >/dev/null 2>&1; }
+# The gateway is unreachable, so the probe records no fingerprint: a model whose
+# fingerprint wave 1 declares must stop; one it does not declare goes ahead.
+rbf neurodesk/NRP.qwen3; expect 3 $? "a declared model with no confirmed fingerprint stops"
+grep -q "AGENT STARTED" "$T/bench/runs/t-x__neurodesk-NRP.qwen3__env-only__r1/transcript.txt" 2>/dev/null \
+  && bad "  the agent ran anyway" || ok "  before the agent started"
+rbf neurodesk/m; expect 0 $? "a model with no declared fingerprint goes ahead"
 rm -rf "$T"
 
 echo

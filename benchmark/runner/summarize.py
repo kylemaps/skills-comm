@@ -533,6 +533,10 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     r["off_spec"] = rec.get("off_spec")
     # Reads of grading material (see finalize_run.py). A list; [] is clean, None is
     # not checked. Flagged, never excluded.
+    # What the gateway served (model_probe.py): the fingerprint before the agent and
+    # whether it differed after. None when not recorded.
+    r["model_fingerprint"] = rec.get("model_fingerprint")
+    r["model_changed"] = rec.get("model_changed")
     r["answer_key_reads"] = rec.get("answer_key_reads")
     r["arm_seen"] = rec.get("arm_seen")
     r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT

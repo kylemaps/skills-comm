@@ -301,6 +301,17 @@ rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
 # it ends (the same with _end, and model_changed). Record only.
 python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" || true
 
+# The model must be the one the wave declares (waves.<n>.model_fingerprints in
+# sweep.json). A different or missing fingerprint means the gateway serves another
+# model or serving engine under this name; the run stops before the agent starts.
+SWEEP_FILE="$HERE/../ci/sweep.json"
+if [ -n "${RUN_WAVE:-}" ] && [ -f "$SWEEP_FILE" ]; then
+  python "$HERE/wave_check.py" --sweep "$SWEEP_FILE" --wave "$RUN_WAVE" --model "$MODEL" \
+    --record "$RECORD" --fingerprint-only >&2 || {
+    echo "ABORT: the model served is not the one wave $RUN_WAVE declares. Only the probe was spent." >&2
+    exit 3; }
+fi
+
 timeout "$TIMEOUT" "${AGENT_ENV[@]}" \
   "$OPENCODE_BIN" run --dir "$WORK" -m "$MODEL" --auto "$(cat "$PROMPT")" \
   < /dev/null > "$TRANSCRIPT" 2>&1 &

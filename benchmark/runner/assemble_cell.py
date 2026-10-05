@@ -136,7 +136,8 @@ def wave_spec(spec, wave):
     return w
 
 
-def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None):
+def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None,
+              fingerprint=None):
     g = []
 
     # ---- complete ----------------------------------------------------------
@@ -177,6 +178,23 @@ def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None
         if len(vals) > 1:
             p.fail("%s varies within the cell: %s" % (k, ", ".join(sorted(vals))))
     g.append(p)
+
+    # ---- one model -----------------------------------------------------------
+    one = Gate("one model",
+               "The gateway can change the model or serving engine behind a name. A "
+               "cell answered by two of them averages over the change.")
+    fps = Counter(r.get("model_fingerprint") for r in runs
+                  if r.get("model_fingerprint") not in UNRECORDED)
+    if len(fps) > 1:
+        one.fail("model_fingerprint varies within the cell: %s" % ", ".join(
+            "%s x%d" % (f, n) for f, n in sorted(fps.items())))
+    changed = [r["rep"] for r in runs if r.get("model_changed") is True]
+    if changed:
+        one.fail("the fingerprint changed during rep(s) %s" % ", ".join(sorted(changed)))
+    if fingerprint and fps and set(fps) != {fingerprint}:
+        one.fail("the wave declares fingerprint %s for this model; runs carry %s"
+                 % (fingerprint, ", ".join(sorted(fps))))
+    g.append(one)
 
     # ---- the wave's environment -------------------------------------------
     if pins:
@@ -324,7 +342,7 @@ def main():
                          "complete one -- check the model prefix and the arm label.")
 
     gates = gates_for(runs, a.task, model, a.arm, spec, a.stage, a.replace,
-                      w.get("pins"))
+                      w.get("pins"), (w.get("model_fingerprints") or {}).get(model))
     for g in gates:
         print("  %-5s %s" % ("ok" if g.ok else "FAIL", g.name))
         for f in g.failures:

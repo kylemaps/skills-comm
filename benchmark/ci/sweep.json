@@ -74,7 +74,18 @@
         "image_version": "ci-env3-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
         "tasks_sha": "e98e3b6"
       },
-      "models": ["kimi-k3", "minimax-m2", "qwen3"],
+      "models": ["kimi-k3", "minimax-m2", "NRP.qwen3"],
+      "model_fingerprints": {
+        "_comment": [
+          "model_fingerprint every run of a model must record (model_probe.py). The run",
+          "stops before the agent if the probe differs, and assemble refuses a cell",
+          "with more than one. qwen3 changed serving engine and gateway id during the",
+          "wave; its cells run as NRP.qwen3 on the engine fingerprinted here."
+        ],
+        "kimi-k3": "06a11174e0f4",
+        "minimax-m2": "3b35ce116294",
+        "NRP.qwen3": "757ac9b30f73"
+      },
       "rules": {
         "timeout": "fail",
         "infra_errors_from": "opencode",
@@ -82,11 +93,11 @@
       },
       "tasks": {
         "diffusion-brain-mask": {
-          "models": ["kimi-k3", "minimax-m2", "qwen3"],
+          "models": ["kimi-k3", "minimax-m2", "NRP.qwen3"],
           "arms": ["env-only", "env+skill"]
         },
         "structural-brain-extraction-pediatric": {
-          "models": ["kimi-k3", "minimax-m2", "qwen3"],
+          "models": ["kimi-k3", "minimax-m2", "NRP.qwen3"],
           "arms": ["env-only", "env+skill"]
         },
         "structural-brain-extraction": {
