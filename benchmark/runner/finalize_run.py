@@ -29,8 +29,11 @@ agent chose. This reads them back out of the transcript once the run is over:
   opencode_errors      opencode's own error messages, excluding tool-call errors
   off_spec       why this run left the benchmark environment: "sudo",
                  "package-install", "external-image". [] is clean; None means
-                 the transcript could not be read, which is NOT clean.
+                 no commands could be read, which is NOT clean.
   used_sudo / installed_packages / external_images   the evidence behind it
+  commands_from  where the executed commands were read: "opencode-db" (every
+                 bash tool call, in full) or "transcript" (first line of each)
+  bash_calls     number of bash tool calls (None when read from the transcript)
   exit_code / output_present / end
 
 Safe to re-run: it only adds keys. Also usable to backfill older runs.
@@ -122,11 +125,99 @@ rec["qc_ran"] = bool(re.search(
 #   package-install  an apt/pip/conda/npm install
 #   external-image   a container image fetched from outside CVMFS
 #
-# Only executed commands are read: transcript lines opencode prefixes with `$ `,
-# and the lines of shell scripts the agent wrote (it runs them by name, so their
-# content is not in the transcript). Text the agent writes is not a command.
+# Only executed commands are read. Preferred source: the bash tool calls in
+# opencode's database, which hold each command in full. Fallback: transcript lines
+# opencode prefixes with `$ `, which show only the first line of a multi-line
+# command (the rest is indistinguishable from output). Plus the lines of shell
+# scripts the agent wrote (it runs them by name, so their content is not in the
+# transcript). Text the agent writes is not a command.
+def _open_db(run_dir):
+    """(connection, path) of the opencode database this run used, or None."""
+    candidates = [
+        os.environ.get("OPENCODE_DB"),
+        os.path.join(run_dir, ".xdg-data", "opencode", "opencode.db"),
+        os.path.expanduser("~/.local/share/opencode/opencode.db"),
+    ]
+    db = next((c for c in candidates if c and os.path.exists(c)), None)
+    if db is None:
+        return None
+    try:
+        import sqlite3
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        return con, db
+    except Exception:
+        return None
+
+
+def _session_dirs(run_dir):
+    # The agent may have run in a working directory that was renamed to run_dir
+    # afterwards (`workdir` in the record). Each as given and resolved.
+    wd = rec.get("workdir")
+    return sorted({d for d in (wd, wd and os.path.realpath(wd),
+                               os.path.abspath(run_dir), os.path.realpath(run_dir))
+                   if d})
+
+
+def _db_bash_commands(run_dir):
+    """The bash tool calls of this run's session, in order; None if unavailable."""
+    opened = _open_db(run_dir)
+    if opened is None:
+        return None
+    con, _ = opened
+    try:
+        dirs = _session_dirs(run_dir)
+        sid = con.execute(
+            "select id from session where directory in (%s) order by time_created "
+            "desc limit 1" % ",".join("?" * len(dirs)), dirs).fetchone()
+        if sid is None:
+            return None
+        out = []
+        for row in con.execute("select data from part where session_id = ? "
+                               "order by time_created", (sid[0],)):
+            try:
+                d = json.loads(row["data"])
+            except Exception:
+                continue
+            if d.get("type") == "tool" and d.get("tool") == "bash":
+                cmd = ((d.get("state") or {}).get("input") or {}).get("command")
+                if isinstance(cmd, str):
+                    out.append(cmd)
+        return out
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+
+
+def _shell_lines(text):
+    """The lines of a shell text that are commands: a here-document's body is data
+    (`cat <<EOF` ... `EOF`), so those lines are left out."""
+    out, terms = [], []
+    for line in text.splitlines():
+        if terms:
+            if line.strip() == terms[0]:
+                terms.pop(0)
+            continue
+        if line.strip():
+            out.append(line)
+        terms += [m.group(2) for m in _HEREDOC_RE.finditer(line)]
+    return out
+
+
 _tr_cmds = [l[2:] for l in plain.splitlines() if l.startswith("$ ")]
-_cmds = list(_tr_cmds)
+_db_cmds = _db_bash_commands(run_dir)
+if _db_cmds is not None:
+    rec["bash_calls"] = len(_db_cmds)
+    rec["commands_from"] = "opencode-db"
+    _cmds = [l for c in _db_cmds for l in _shell_lines(c)]
+else:
+    rec["bash_calls"] = None
+    rec["commands_from"] = "transcript"
+    _cmds = list(_tr_cmds)
 # Non-comment lines of the .sh and .py files the agent wrote, by extension.
 _script_lines = {".sh": [], ".py": []}
 for _root, _dirs, _files in os.walk(run_dir):
@@ -145,8 +236,11 @@ for _root, _dirs, _files in os.walk(run_dir):
         if _ext in _script_lines:
             try:
                 with open(os.path.join(_root, _f), encoding="utf-8", errors="replace") as fh:
-                    _script_lines[_ext] += [l for l in fh.read().splitlines()
-                                            if l.strip() and not l.lstrip().startswith("#")]
+                    _lines = fh.read().splitlines()
+                if _ext == ".sh":
+                    _lines = _shell_lines("\n".join(_lines))
+                _script_lines[_ext] += [l for l in _lines
+                                        if l.strip() and not l.lstrip().startswith("#")]
             except OSError:
                 pass
 _cmds += _script_lines[".sh"]
@@ -154,10 +248,13 @@ _cmds += _script_lines[".sh"]
 # Command position: start of a line, after a shell separator, after then/do/else,
 # `{` or xargs, or inside the quoted argument of `bash -c` / `eval`. A quote
 # anywhere else is an argument: `echo "sudo ..."` runs echo. Optional `VAR=x`,
-# env, nohup, time, exec and command in front.
+# env, nohup, time, exec, command, nice, ionice and `timeout [flags] DURATION`
+# in front.
 _AT = (r"(?:^|[;&|(`]|\$\(|\b(?:then|do|else)\s|\{\s|(?:ba)?sh\s+-c\s+['\"]"
        r"|\beval\s+['\"]?|\bxargs\s+(?:-\S+\s+)*)\s*(?:\w+=\S*\s+)*"
-       r"(?:(?:env|nohup|time|exec|command)\s+(?:\w+=\S*\s+)*)*")
+       r"(?:(?:env|nohup|time|exec|command"
+       r"|(?:nice|ionice)(?:\s+-\S+(?:\s+\d+)?)*"
+       r"|timeout(?:\s+-\S+(?:\s+[\w.]+)?)*\s+\d+(?:\.\d+)?[smhd]?)\s+(?:\w+=\S*\s+)*)*")
 _SUDO = r"(?:sudo(?:\s+-u\s+\S+)?(?:\s+-\S+)*\s+)?"
 SUDO_RE = re.compile(_AT + r"sudo\b")
 INSTALL_RE = re.compile(
@@ -184,9 +281,9 @@ IMAGE_RE = re.compile(
     r"|(?:apptainer|singularity)\s+(?:exec|run|shell)\s+"
     r"(?:-\S+(?:\s+(?!" + _REMOTE + r")[^-\s]\S*)?\s+)*" + _REMOTE + r"([\w./:@+-]+))")
 
-if not _tr_cmds:
-    # No command lines in the transcript: unreadable, not clean. Scripts alone
-    # are not enough, since most commands never reach a script.
+if not _tr_cmds and _db_cmds is None:
+    # No command lines anywhere: unreadable, not clean. Scripts alone are not
+    # enough, since most commands never reach a script.
     rec["off_spec"] = None
 else:
     rec["used_sudo"] = sum(1 for c in _cmds if SUDO_RE.search(c))
@@ -339,25 +436,13 @@ def _session_row(run_dir):
     # With OPENCODE_ISOLATE=1 each run has its own database under the run
     # directory; otherwise every run shares the one in $HOME. Prefer the local
     # copy so isolated runs still get token accounting.
-    candidates = [
-        os.environ.get("OPENCODE_DB"),
-        os.path.join(run_dir, ".xdg-data", "opencode", "opencode.db"),
-        os.path.expanduser("~/.local/share/opencode/opencode.db"),
-    ]
-    db = next((c for c in candidates if c and os.path.exists(c)), None)
-    if db is None:
+    opened = _open_db(run_dir)
+    if opened is None:
         return None
+    con, _ = opened
     try:
-        import sqlite3
-        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
-        con.row_factory = sqlite3.Row
-        # A directory can be reused across sweeps, so take the newest session. The
-        # agent may have run in a working directory that was renamed to run_dir
-        # afterwards (`workdir` in the record). Each as given and resolved.
-        wd = rec.get("workdir")
-        dirs = sorted({d for d in (wd, wd and os.path.realpath(wd),
-                                   os.path.abspath(run_dir), os.path.realpath(run_dir))
-                       if d})
+        # A directory can be reused across sweeps, so take the newest session.
+        dirs = _session_dirs(run_dir)
         cur = con.execute(
             "select * from session where directory in (%s) order by time_created desc "
             "limit 1" % ",".join("?" * len(dirs)), dirs)

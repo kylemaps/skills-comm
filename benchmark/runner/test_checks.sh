@@ -433,10 +433,69 @@ mkdir -p "$T/i/data/ds"; printf 'sudo make install\n' > "$T/i/data/ds/setup.sh"
 o=$(fin i '$ ls')
 [ "$o" = "[]" ] && ok "  but not scripts inside a fetched dataset" || bad "  dataset script counted: $o"
 
+o=$(fin g6 '$ cd /w && timeout 300 apptainer pull docker://busybox:latest')
+has   "a timeout-wrapped pull is an external image" "$o" "external-image"
+o=$(fin g7 '$ timeout -k 10 5m sudo apt-get install -y x')
+has   "timeout with flags and a unit still reaches sudo" "$o" "sudo"
+o=$(fin g8 '$ nice -n 10 pip install antspyx')
+has   "nice in front of pip install" "$o" "package-install"
+
 # No command lines: unreadable, reported as None rather than clean.
 o=$(fin j 'some output with no command lines at all')
 [ "$o" = "None" ] && ok "an unreadable transcript is None, not a clean []" \
                   || bad "unreadable transcript reported as $o"
+
+# With opencode's database present, commands come from the bash tool calls in
+# full, so the later lines of a multi-line command are read too.
+mkdb() { mkdir -p "$1/.xdg-data/opencode"; db="$1/.xdg-data/opencode/opencode.db"; shift
+  "$PY" -c "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1])
+c.execute('create table session (id text, directory text, time_created int, time_updated int)')
+c.execute(\"insert into session values ('s1',?,1000,2000)\", (sys.argv[2],))
+c.execute('create table part (id text, message_id text, session_id text, time_created int, time_updated int, data text)')
+for i, cmd in enumerate(sys.argv[3:]):
+    c.execute('insert into part values (?,?,?,?,?,?)', ('p%d' % i, 'm', 's1', 1000 + i, 1000 + i,
+      json.dumps({'type': 'tool', 'tool': 'bash', 'state': {'input': {'command': cmd}}})))
+c.execute('insert into part values (?,?,?,?,?,?)', ('px', 'm', 's1', 1500, 1500,
+  json.dumps({'type': 'tool', 'tool': 'read', 'state': {'input': {'filePath': 'sudo.txt'}}})))
+c.commit()" "$db" "$@"; }
+# The session is found by the recorded workdir (a plain name: Git Bash rewrites
+# path-like arguments before Python sees them).
+d="$T/k"; mkdir -p "$d"; mkdb "$d" "sess-k" 'mkdir -p tools && cd tools
+time apptainer pull --name s.sif docker://freesurfer/synthstrip:1.8 2>&1 | tail -20
+ls -lh'
+echo '{"task_id":"t","workdir":"sess-k"}' > "$d/run.json"; printf '$ mkdir -p tools && cd tools\nls output\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['off_spec'], r['commands_from'], r['bash_calls'])" "$d/run.json" | tr -d '\r')
+has   "a pull on the second line of a multi-line command is read from the database" "$o" "external-image"
+has   "  and the record says where commands came from" "$o" "opencode-db 1"
+d="$T/k2"; mkdir -p "$d"; mkdb "$d" "/somewhere/else" 'sudo ls'
+echo '{"task_id":"t"}' > "$d/run.json"; printf '$ ls\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['off_spec'], r['commands_from'])" "$d/run.json" | tr -d '\r')
+[ "$o" = "[] transcript" ] && ok "a database with no session for this run falls back to the transcript" || bad "fallback wrong: $o"
+d="$T/k4"; mkdir -p "$d"; mkdb "$d" "sess-k4" 'cat > notes.sh <<'"'"'EOF'"'"'
+sudo apt-get install -y curl
+EOF
+echo written' 'cat <<EOF > x.txt
+docker pull a/b
+EOF
+nice -n 5 pip install nibabel'
+echo '{"task_id":"t","workdir":"sess-k4"}' > "$d/run.json"; printf '$ cat > notes.sh\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$d/run.json" | tr -d '\r')
+hasnt "a here-document's body is data, not a command (sudo inside it)" "$o" "sudo"
+hasnt "  nor the docker pull inside the second one" "$o" "external-image"
+has   "  but the command after the here-document counts" "$o" "package-install"
+mkdir -p "$T/k5"; printf 'cat <<EOF\nsudo make install\nEOF\npip install x\n' > "$T/k5/setup.sh"
+echo '{"task_id":"t"}' > "$T/k5/run.json"; printf '$ bash setup.sh\n' > "$T/k5/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$T/k5" 0
+o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$T/k5/run.json" | tr -d '\r')
+[ "$o" = "['package-install']" ] && ok "  the same rule applies to scripts the agent wrote" || bad "  script heredoc: $o"
+d="$T/k3"; mkdir -p "$d"; mkdb "$d" "sess-k3" 'echo "sudo ls"'
+echo '{"task_id":"t","workdir":"sess-k3"}' > "$d/run.json"; printf '$ echo "sudo ls"\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$d/run.json" | tr -d '\r')
+[ "$o" = "[]" ] && ok "  database commands get the same prose/quote rules" || bad "  quoted word flagged from db: $o"
 rm -rf "$T"
 
 echo
@@ -1166,6 +1225,91 @@ grep -q '^| lost as pass | 1 | 1/6 | 6/6' "$T/o" && ok "  and a pass in 'lost as
 "$PY" -c "import json,sys; sys.path.insert(0, sys.argv[2]); from summarize import declared_lost
 declared_lost(json.load(open(sys.argv[1], encoding='utf-8')), '1')" "$HERE/../ci/sweep.json" "$HERE" >/dev/null 2>&1
 expect 0 $? "the real sweep's lost declarations are well formed"
+# Rule lost=exclude: the declared run is excluded and its cell stays short.
+sed 's/"model_fingerprints"/"rules":{"lost":"exclude"},"model_fingerprints"/' "$SW" > "$T/sw_excl.json"
+rm -rf "$T/runs"; ml env-only 1; ml env-only 2
+gl env-only "$T/sw_excl.json"; expect 1 $? "under lost=exclude the cell with a lost run is refused"
+grep -q "the cell is short" "$T/o" && ok "  as short, by the complete gate" || bad "  wrong reason: $(cat "$T/o")"
+sm "$T/runs" "$T/sum_excl" "$T/sw_excl.json"; expect 0 $? "  summarize runs"
+[ "$(cell "$T/sum_excl")" = "2 2 0 2" ] && ok "  and excludes the lost run (cell n 2, passes 2)" || bad "  counted as: $(cell "$T/sum_excl")"
+"$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['n_excluded']==2 and any(k.startswith('lost: ') for k in s['exclusions']), s['exclusions']" \
+  "$T/sum_excl/summary_diffusion-brain-mask.json" 2>/dev/null && ok "  both declared lost runs listed under exclusions" || bad "  not listed as an exclusion"
+rm -rf "$T"
+
+echo
+echo "=== measured environment: what the pod has must be what the wave declares"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"reps":2,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"2":{"pins":{"image_version":"i"},
+  "measured":{"cpus":4,"memory_limit_gib":16,"work_volume_gib_min":55,"tmp_on_work_volume":true},
+  "tasks":{"diffusion-brain-mask":{"models":["m"],"arms":["env-only"]}}}}}
+J
+wm() { "$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 2 --measured-only "$@" >"$T/o" 2>&1; }
+wm cpus=4 memory_limit_gib=16 work_volume_gib=59 tmp_on_work_volume=true
+expect 0 $? "matching measurements pass (volume above the minimum)"
+wm cpus=4 memory_limit_gib=16 work_volume_gib=55 tmp_on_work_volume=True
+expect 0 $? "  exactly the minimum passes; booleans compare case-insensitively"
+wm cpus=16 memory_limit_gib=16 work_volume_gib=59 tmp_on_work_volume=true
+expect 1 $? "a pod with the node's CPUs is stopped"
+grep -q "cpus is 16" "$T/o" && ok "  and says which value" || bad "  wrong reason: $(cat "$T/o")"
+wm cpus=4 memory_limit_gib=8 work_volume_gib=59 tmp_on_work_volume=true
+expect 1 $? "a smaller memory limit is stopped"
+wm cpus=4 memory_limit_gib=16 work_volume_gib=40 tmp_on_work_volume=true
+expect 1 $? "a work volume under the minimum is stopped"
+wm cpus=4 memory_limit_gib=16 work_volume_gib=59 tmp_on_work_volume=false
+expect 1 $? "/tmp off the work volume is stopped"
+wm cpus=4 memory_limit_gib=16 work_volume_gib=59
+expect 1 $? "a declared field that was not measured is stopped"
+grep -q "nothing was measured" "$T/o" && ok "  as unmeasured, not as a mismatch" || bad "  wrong reason: $(cat "$T/o")"
+"$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 2 --label benchmark --task diffusion-brain-mask --model neurodesk/m --arm env-only \
+  image_version=i cpus=4 memory_limit_gib=16 work_volume_gib=59 tmp_on_work_volume=true >/dev/null 2>&1
+expect 0 $? "the full check accepts pins and measurements together"
+"$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 2 --label benchmark --task diffusion-brain-mask --model neurodesk/m --arm env-only \
+  image_version=i cpus=4 memory_limit_gib=16 work_volume_gib=59 tmp_on_work_volume=false >/dev/null 2>&1
+expect 1 $? "  and refuses a measurement mismatch alongside matching pins"
+"$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 7 --measured-only cpus=4 >/dev/null 2>&1
+expect 1 $? "an undeclared wave is stopped in measured-only mode"
+# env_record measures the same keys, from a cgroup when there is one.
+mkdir -p "$T/cg"; echo "200000 100000" > "$T/cg/cpu.max"; echo 17179869184 > "$T/cg/memory.max"
+"$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); from env_record import measured
+m = measured(cgroup=sys.argv[2], work=sys.argv[3], tmp=sys.argv[3])
+assert m['cpus'] == 2 and m['memory_limit_gib'] == 16, m
+assert m['tmp_on_work_volume'] is True and isinstance(m['work_volume_gib'], int), m
+m2 = measured(cgroup=sys.argv[2] + '/none', work=sys.argv[3], tmp=sys.argv[3])
+assert m2['cpus'] and (m2['memory_limit_gib'] is None or isinstance(m2['memory_limit_gib'], int)), m2" "$HERE" "$T/cg" "$T" 2>/dev/null \
+  && ok "env_record reads cpus and memory from the cgroup, falls back without one, sees /tmp's filesystem" \
+  || bad "env_record measured wrong"
+echo '{"task_id":"t"}' > "$T/r.json"
+CVMFS_ROOT="$T/no" BENCH_HOME="$T" "$PY" "$HERE/env_record.py" --record "$T/r.json" >/dev/null 2>&1
+"$PY" -c "import json,sys; m=json.load(open(sys.argv[1]))['measured']; assert set(m) >= {'cpus','memory_limit_gib','work_volume_gib','tmp_on_work_volume'}" "$T/r.json" 2>/dev/null \
+  && ok "  and writes them into the record" || bad "  measured block missing from the record"
+# assemble: a cell whose runs measured something else is refused; unrecorded is noted.
+mr() { d="$T/runs/diffusion-brain-mask__neurodesk-m__env-only__r$1"; mkdir -p "$d/submissions/diffusion-brain-mask"
+  echo x > "$d/submissions/diffusion-brain-mask/output.nii.gz"; echo '{"score":100,"verdict":"PASS"}' > "$d/envelope.json"
+  m=""; [ -n "${2:-}" ] && m=",\"measured\":$2"
+  cat > "$d/run.json" <<J
+{"task_id":"diffusion-brain-mask","model":"neurodesk/m","condition":"env-only","repeat":"$1","exit_code":0,
+ "output_present":true,"skills_seen":[],"skills_installed":"","image_version":"i","opencode_version":"o",
+ "skills_sha":"a","skills_hash":"noskill","prompt_hash":"p","tasks_sha":"t","label":"benchmark"$m}
+J
+}
+gm() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task diffusion-brain-mask --model m --arm env-only --sweep "$SW" --wave 2 >"$T/o" 2>&1; }
+ok_m='{"cpus":4,"memory_limit_gib":16,"work_volume_gib":59,"tmp_on_work_volume":true}'
+rm -rf "$T/runs"; mr 1 "$ok_m"; mr 2 "$ok_m"
+gm; expect 0 $? "a cell measured as declared passes"
+rm -rf "$T/runs"; mr 1 "$ok_m"; mr 2 '{"cpus":4,"memory_limit_gib":16,"work_volume_gib":40,"tmp_on_work_volume":false}'
+gm; expect 1 $? "a cell with one run measured differently is refused"
+grep -q "FAIL  the wave's environment" "$T/o" && ok "  via the wave's-environment gate" || bad "  refused by the wrong gate"
+rm -rf "$T/runs"; mr 1 "$ok_m"; mr 2 ""
+gm; expect 0 $? "a run that recorded no measurements is noted, not refused"
+grep -q "UNVERIFIABLE" "$T/o" && ok "  and the note says so" || bad "  no note"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 2 --measured-only \
+  cpus=4 memory_limit_gib=16 work_volume_gib=60 tmp_on_work_volume=true >/dev/null 2>&1
+expect 0 $? "the real sweep's wave 2 accepts the version 4 pod"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 2 --measured-only \
+  cpus=4 memory_limit_gib=16 work_volume_gib=40 tmp_on_work_volume=false >/dev/null 2>&1
+expect 1 $? "  and refuses a version 3 pod"
 rm -rf "$T"
 
 echo
@@ -1212,6 +1356,32 @@ expect 0 $? "exits 0"
 assert r['cvmfs_revision'] is None and r['harness_sha']=='abc1234' and r['ci_run']=='9/2/rep' and r['session_id_sent']=='s123'
 assert 'python_packages' in r and 'kernel' in r" "$T/r.json" 2>/dev/null \
   && ok "records harness, CI run and session id; an unreadable CVMFS revision is None" || bad "record wrong: $(cat "$T/r.json")"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: an agent that ignores SIGTERM is killed after the wall"
+T=$(mktemp -d)
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then echo '[{"name":"customize-opencode","location":"<built-in>"}]'; exit 0; fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+trap '' TERM
+sleep 40
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+t0=$(date +%s)
+env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+  SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=2 RUN_KILL_AFTER=2 NEURODESK_API_KEY=k \
+  OPENCODE_ISOLATE=0 NEURODESK_GATEWAY=http://127.0.0.1:9 \
+  bash "$HERE/run_bench.sh" t-x neurodesk/m env-only 1 >/dev/null 2>&1
+dt=$(( $(date +%s) - t0 ))
+# The harness's own steps around the agent take ~25 s here; the agent's sleep is 40.
+[ "$dt" -lt 38 ] && ok "the run ended in ${dt}s, before the agent's 40 s sleep" || bad "the run took ${dt}s: SIGTERM was ignored and nothing escalated"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['exit_code'] in (124, 137), r['exit_code']" \
+  "$T/bench/runs/t-x__neurodesk-m__env-only__r1/run.json" 2>/dev/null \
+  && ok "  and the record carries the timeout exit code" || bad "  exit code not recorded as a timeout"
 rm -rf "$T"
 
 echo

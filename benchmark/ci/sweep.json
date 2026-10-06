@@ -23,6 +23,9 @@
       "per wave under results/wave<n>/ and never pooled across waves.",
       "",
       "pins: run.json fields every run in the wave must carry with exactly this value.",
+      "measured: what every pod must have, as read from the kernel (env_record.py",
+      "`measured`, checked by wave_check.py before the agent and by assemble_cell.py);",
+      "a key ending in _min is a lower bound.",
       "rules: how runs are classified (summarize.py DEFAULT_RULES; keys left out keep",
       "the default)."
     ],
@@ -118,6 +121,52 @@
         "structural-brain-extraction": {
           "_comment": "Models are added when this task is scheduled.",
           "models": [],
+          "arms": ["env-only", "env+skill"]
+        }
+      }
+    },
+
+    "2": {
+      "environment": "ci-env4 (ENVIRONMENT.md version 4 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env4-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "e98e3b6"
+      },
+      "measured": {
+        "cpus": 4,
+        "memory_limit_gib": 16,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true
+      },
+      "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
+      "model_fingerprints": {
+        "_comment": [
+          "From the gateway probe of 2026-10-05. EGI.kimi-k3 serves the same model as",
+          "wave 1's kimi-k3; NRP.minimax-m2 the same weights as wave 1's minimax-m2 on a",
+          "newer serving engine; NRP.qwen3 is unchanged; EGI.glm-5.3 is new."
+        ],
+        "EGI.kimi-k3": "06a11174e0f4",
+        "NRP.minimax-m2": "84d7e4bdbd52",
+        "NRP.qwen3": "757ac9b30f73",
+        "EGI.glm-5.3": "9db6ffa73e72"
+      },
+      "rules": {
+        "_comment": [
+          "Stated before the first dispatch. A run stopped by the cluster for what it",
+          "did (evicted, OOM-killed) with no record is declared in `lost` and counts as",
+          "a failed run (lost=fail); a run stopped by an infrastructure fault not of its",
+          "making (gateway outage, node failure, harness error) is re-run. A run at the",
+          "90-minute wall is a failed run (timeout=fail)."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "lost": {},
+      "tasks": {
+        "diffusion-brain-mask": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
           "arms": ["env-only", "env+skill"]
         }
       }

@@ -7,8 +7,12 @@
 Fails (exit 1) when:
   - the wave is not declared in sweep.json;
   - a pinned field (`waves.<n>.pins`) is not given, or differs from the value given;
+  - a measured field (`waves.<n>.measured`: what the pod has, read from the kernel)
+    is not given or does not match: equal, or at least the value for a key ending in
+    `_min`, compared as numbers when both sides are numbers;
   - the label is `benchmark` and the task, model or arm is not declared for the wave,
     or the arm declares a skills_hash (`arms.<arm>`) and --skills-hash differs.
+--measured-only checks only the measured fields (preflight, before any run).
 
 --record RUN_JSON also checks the run's model_fingerprint (written by model_probe.py)
 against `waves.<n>.model_fingerprints` for the model. It fails when the wave declares a
@@ -24,6 +28,43 @@ import json
 import sys
 
 
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def measured_problems(declared, given):
+    """Problems between a wave's `measured` declaration and values read on the pod.
+
+    Keys ending in `_min` pass when the given value is at least the declared one;
+    other keys must be equal. Numbers compare as numbers, anything else as the
+    lower-cased string (so true/True/"true" agree). A key with no given value is a
+    problem: an unmeasured environment is not a matching one.
+    """
+    out = []
+    for k, want in sorted((declared or {}).items()):
+        if k.startswith("_"):
+            continue
+        # `work_volume_gib_min` is checked against the measured `work_volume_gib`.
+        field = k[:-4] if k.endswith("_min") else k
+        if field not in given or given[field] in ("", None):
+            out.append("the wave declares %s=%s and nothing was measured" % (k, want))
+            continue
+        got = given[field]
+        gn, wn = _num(got), _num(want)
+        if k.endswith("_min"):
+            if gn is None or wn is None or gn < wn:
+                out.append("%s is %s; wave declares at least %s" % (field, got, want))
+        elif gn is not None and wn is not None:
+            if gn != wn:
+                out.append("%s is %s; wave declares %s" % (k, got, want))
+        elif str(got).strip().lower() != str(want).strip().lower():
+            out.append("%s is %s; wave declares %s" % (k, got, want))
+    return out
+
+
 def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
           skills_hash=None):
     """A list of problems; empty when the run belongs to the wave."""
@@ -36,6 +77,7 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
             out.append("the wave pins %s=%s and no value was given to check" % (k, want))
         elif given[k] != want:
             out.append("%s is %s; wave %s pins %s" % (k, given[k], wave, want))
+    out += measured_problems(w.get("measured"), given)
     if label == "benchmark":
         t = (w.get("tasks") or {}).get(task)
         if t is None:
@@ -89,6 +131,8 @@ def main():
     ap.add_argument("--record", help="run.json whose model_fingerprint is checked")
     ap.add_argument("--fingerprint-only", action="store_true",
                     help="check only the record's fingerprint")
+    ap.add_argument("--measured-only", action="store_true",
+                    help="check only the measured fields given as KEY=VALUE")
     ap.add_argument("fields", nargs="*", metavar="KEY=VALUE")
     a = ap.parse_args()
     given = {}
@@ -98,10 +142,15 @@ def main():
             ap.error("expected KEY=VALUE, got %r" % f)
         given[k] = v
     sweep = json.load(open(a.sweep, encoding="utf-8"))
-    problems = [] if a.fingerprint_only else check(
-        sweep, a.wave, given, a.label, a.task, a.model, a.arm, a.skills_hash)
-    if a.fingerprint_only and str(a.wave) not in (sweep.get("waves") or {}):
-        problems.append("wave %s is not declared in the sweep" % a.wave)
+    w = (sweep.get("waves") or {}).get(str(a.wave))
+    if a.fingerprint_only or a.measured_only:
+        problems = [] if isinstance(w, dict) else [
+            "wave %s is not declared in the sweep" % a.wave]
+        if a.measured_only and isinstance(w, dict):
+            problems += measured_problems(w.get("measured"), given)
+    else:
+        problems = check(sweep, a.wave, given, a.label, a.task, a.model, a.arm,
+                         a.skills_hash)
     if a.record:
         try:
             rec = json.load(open(a.record, encoding="utf-8"))

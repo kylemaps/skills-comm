@@ -312,7 +312,9 @@ if [ -n "${RUN_WAVE:-}" ] && [ -f "$SWEEP_FILE" ]; then
     exit 3; }
 fi
 
-timeout "$TIMEOUT" "${AGENT_ENV[@]}" \
+# -k: SIGKILL if the agent ignores the SIGTERM at the wall. Without it a hung
+# child holds the run until the job's own timeout, which keeps no artifact.
+timeout -k "${RUN_KILL_AFTER:-60}" "$TIMEOUT" "${AGENT_ENV[@]}" \
   "$OPENCODE_BIN" run --dir "$WORK" -m "$MODEL" --auto "$(cat "$PROMPT")" \
   < /dev/null > "$TRANSCRIPT" 2>&1 &
 AGENT_PID=$!

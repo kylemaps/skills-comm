@@ -44,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from summarize import (PROVENANCE_KEYS, UNRECORDED, RETRYABLE_EXCLUSIONS,  # noqa: E402
                        declared_lost, load_run, lost_run, rules_for)
+from wave_check import measured_problems  # noqa: E402
 
 # Provenance that must not vary inside one cell. skills_sha is excluded for the same
 # reason summarize.py excludes it from pooling: the commit a snapshot came from can
@@ -137,7 +138,7 @@ def wave_spec(spec, wave):
 
 
 def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None,
-              fingerprint=None):
+              fingerprint=None, measured=None):
     g = []
     # Declared lost runs (sweep.json) count toward the cell and carry no record, so
     # every gate after `complete` checks only the recorded runs.
@@ -157,8 +158,14 @@ def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None
     if dupes:
         c.fail("repeat(s) present more than once: %s" % ", ".join(sorted(dupes)))
     for r in lost:
-        c.note("rep %s declared lost in the sweep (%s); counted as a failed run"
-               % (r["rep"], r["lost"]))
+        if r.get("exclude_reason"):
+            # Wave rule lost=exclude: the run is declared and excluded, so the cell
+            # is short and stays unpublished.
+            c.fail("rep %s declared lost in the sweep (%s); the wave excludes lost "
+                   "runs, so the cell is short" % (r["rep"], r["lost"]))
+        else:
+            c.note("rep %s declared lost in the sweep (%s); counted as a failed run"
+                   % (r["rep"], r["lost"]))
     g.append(c)
     runs = recorded
 
@@ -205,16 +212,29 @@ def gates_for(runs, task, model, arm, spec, stage=None, replace=False, pins=None
     g.append(one)
 
     # ---- the wave's environment -------------------------------------------
-    if pins:
+    if pins or measured:
         w = Gate("the wave's environment",
                  "A wave is one environment. Runs from another environment or task "
                  "pack belong to another wave, even when they are consistent with "
                  "each other.")
-        for k, want_v in sorted(pins.items()):
+        for k, want_v in sorted((pins or {}).items()):
             off = Counter(str(r.get(k)) for r in runs if r.get(k) != want_v)
             if off:
                 w.fail("%s must be %s; %s" % (k, want_v, ", ".join(
                     "%d run(s) carry %s" % (n, v) for v, n in sorted(off.items()))))
+        # What each pod had (run.json `measured`) against what the wave declares.
+        # A run that recorded nothing predates the field: noted, not refused, the
+        # same rule as unrecorded provenance.
+        if measured:
+            unrecorded = [r["rep"] for r in runs if not isinstance(r.get("measured"), dict)]
+            for r in runs:
+                if isinstance(r.get("measured"), dict):
+                    for p in measured_problems(measured, r["measured"]):
+                        w.fail("rep %s: %s" % (r["rep"], p))
+            if unrecorded:
+                w.note("%d run(s) recorded no measured environment (rep %s); the "
+                       "wave's declaration is UNVERIFIABLE for them"
+                       % (len(unrecorded), ", ".join(sorted(unrecorded))))
         g.append(w)
 
     # ---- the arm is the arm ------------------------------------------------
@@ -348,13 +368,14 @@ def main():
     if not runs:
         raise SystemExit("REFUSED: no runs matched this cell. An empty cell is not a "
                          "complete one -- check the model prefix and the arm label.")
-    lost = [lost_run(*x) for x in declared_lost(spec, a.wave, a.task)
+    lost = [lost_run(*x, rules=rules) for x in declared_lost(spec, a.wave, a.task)
             if (x[1], x[2]) == (model, a.arm)]
     print("%d run(s) declared lost in the sweep\n" % len(lost))
     runs += lost
 
     gates = gates_for(runs, a.task, model, a.arm, spec, a.stage, a.replace,
-                      w.get("pins"), (w.get("model_fingerprints") or {}).get(model))
+                      w.get("pins"), (w.get("model_fingerprints") or {}).get(model),
+                      w.get("measured"))
     for g in gates:
         print("  %-5s %s" % ("ok" if g.ok else "FAIL", g.name))
         for f in g.failures:

@@ -158,11 +158,16 @@ INFRA_ERROR_RES = [
 #                        (`opencode_errors`, recorded by finalize_run.py).
 #   control_skill_reads  a control run that read the skill's files. "exclude": excluded
 #                        as contaminated. "keep": kept in its arm and flagged.
+#   lost                 a run the wave declares lost (`waves.<n>.lost`: stopped by the
+#                        cluster before it recorded anything, no known infrastructure
+#                        fault). "fail": counted as a failed run. "exclude": excluded,
+#                        so its cell stays short and is not published.
 DEFAULT_RULES = {"timeout": "exclude", "infra_errors_from": "transcript",
-                 "control_skill_reads": "exclude"}
+                 "control_skill_reads": "exclude", "lost": "fail"}
 RULE_VALUES = {"timeout": ("exclude", "fail"),
                "infra_errors_from": ("transcript", "opencode"),
-               "control_skill_reads": ("exclude", "keep")}
+               "control_skill_reads": ("exclude", "keep"),
+               "lost": ("fail", "exclude")}
 
 
 def rules_for(sweep, wave):
@@ -174,6 +179,8 @@ def rules_for(sweep, wave):
     if w is None:
         raise SystemExit("wave %s is not declared in the sweep" % wave)
     for k, v in (w.get("rules") or {}).items():
+        if k.startswith("_"):
+            continue
         if k not in RULE_VALUES or v not in RULE_VALUES[k]:
             raise SystemExit("wave %s: unknown rule %s=%s" % (wave, k, v))
         rules[k] = v
@@ -538,6 +545,8 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # whether it differed after. None when not recorded.
     r["model_fingerprint"] = rec.get("model_fingerprint")
     r["model_changed"] = rec.get("model_changed")
+    # What the pod had (env_record.py `measured`); None when not recorded.
+    r["measured"] = rec.get("measured")
     r["answer_key_reads"] = rec.get("answer_key_reads")
     r["arm_seen"] = rec.get("arm_seen")
     r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT
@@ -675,17 +684,22 @@ def declared_lost(sweep, wave, task=None):
     return out
 
 
-def lost_run(task, model, arm, rep, entry):
-    """A declared lost run as a record: valid, failed, verdict LOST, score 0.
+def lost_run(task, model, arm, rep, entry, rules=None):
+    """A declared lost run as a record: verdict LOST, score 0; valid and failed under
+    rule lost=fail, excluded under lost=exclude.
 
     Built by load_run on a directory that does not exist, so every field a recorded
     run has is present and says "not recorded".
     """
+    rules = dict(DEFAULT_RULES, **(rules or {}))
     name = "%s__%s__%s__r%s" % (task, model, arm, rep)
     with tempfile.TemporaryDirectory() as t:
         r = load_run(os.path.join(t, name), task)
-    r.update(dir=name, exclude_reason="", valid=True, passed=False, score=0.0,
-             verdict="LOST", lost=entry["reason"])
+    r.update(dir=name, passed=False, score=0.0, verdict="LOST", lost=entry["reason"])
+    if rules["lost"] == "exclude":
+        r.update(exclude_reason="lost: %s" % entry["reason"], valid=False)
+    else:
+        r.update(exclude_reason="", valid=True)
     return r
 
 
@@ -1276,7 +1290,7 @@ def main():
     tokens_available = any(r.get("tokens_total") for r in probe)
     runs = ([load_run(d, a.task, True, rules) for d in dirs] if tokens_available
             else probe)
-    lost = [lost_run(*x) for x in declared_lost(sweep, a.wave, a.task)]
+    lost = [lost_run(*x, rules=rules) for x in declared_lost(sweep, a.wave, a.task)]
     have = {(r["model"], r["arm"], r["rep"]) for r in runs}
     both = sorted(r["dir"] for r in lost if (r["model"], r["arm"], r["rep"]) in have)
     if both:
