@@ -103,7 +103,7 @@
         "diffusion-brain-mask__NRP.qwen3__env-only__r4": {
           "reason": "evicted: node disk pressure",
           "ci_runs": ["37265034001"],
-          "evidence": "Both attempts (runner pods swt7d, 6nbsb) were evicted by the kubelet for node DiskPressure; on attempt 2 it was the only runner pod on its node and node root free fell to 4.38 GiB. Memory 6.4 and 1.67 of 16 GiB, work volume 6.2 and 2.65 of 40 GiB, no OOM kill. The kubelet's eviction message was not retained. Not established: whether the disk was filled by the run's writable layer (/tmp, $HOME) or by the node's CVMFS cache."
+          "evidence": "Both attempts (runner pods swt7d, 6nbsb) were evicted by the kubelet for node DiskPressure; on attempt 2 it was the only runner pod on its node and node root free fell to 4.38 GiB. Memory 6.4 and 1.67 of 16 GiB, work volume 6.2 and 2.65 of 40 GiB, no OOM kill. Kubelet journal: both pods were evicted to reclaim ephemeral storage and ranked first for eviction, which the kubelet does for a pod over its ephemeral-storage request (2 GiB), so the run's own writes outside the work volume exceeded 2 GiB; before the second eviction the node's image filesystem was already at 85%. The share of the node disk taken by the run versus shared node storage was not measured."
         }
       },
       "tasks": {
