@@ -141,14 +141,15 @@
       "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
       "model_fingerprints": {
         "_comment": [
-          "From the gateway probe of 2026-10-05. EGI.kimi-k3 serves the same model as",
-          "wave 1's kimi-k3; NRP.minimax-m2 the same weights as wave 1's minimax-m2 on a",
-          "newer serving engine; NRP.qwen3 is unchanged; EGI.glm-5.3 is new."
+          "From the gateway probe of 2026-10-06 (preflight 37546910417). EGI.kimi-k3",
+          "serves the same model as wave 1's kimi-k3; NRP.minimax-m2 the same weights as",
+          "wave 1's minimax-m2 on a newer serving engine; NRP.qwen3 is unchanged;",
+          "EGI.glm-5.3 is new (glm-5.3 on vLLM 0.31.1rc1)."
         ],
         "EGI.kimi-k3": "06a11174e0f4",
         "NRP.minimax-m2": "84d7e4bdbd52",
         "NRP.qwen3": "757ac9b30f73",
-        "EGI.glm-5.3": "9db6ffa73e72"
+        "EGI.glm-5.3": "276a2c6afe40"
       },
       "rules": {
         "_comment": [
