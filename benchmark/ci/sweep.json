@@ -127,6 +127,12 @@
     },
 
     "2": {
+      "_status": [
+        "Stopped on 2026-10-07 after 18 runs (16 finished, 2 lost to the memory limit),",
+        "unpublished. Environment 4 left $HOME on the node's disk, which agents filled with",
+        "package installs and container caches. Its runs are exploratory; wave 3 runs the",
+        "same design on environment 5."
+      ],
       "environment": "ci-env4 (ENVIRONMENT.md version 4 in skills-benchmark)",
       "pins": {
         "image_version": "ci-env4-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
@@ -158,6 +164,51 @@
           "a failed run (lost=fail); a run stopped by an infrastructure fault not of its",
           "making (gateway outage, node failure, harness error) is re-run. A run at the",
           "90-minute wall is a failed run (timeout=fail)."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "lost": {},
+      "tasks": {
+        "diffusion-brain-mask": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
+          "arms": ["env-only", "env+skill"]
+        }
+      }
+    },
+
+    "3": {
+      "environment": "ci-env5 (ENVIRONMENT.md version 5 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env5-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "e98e3b6"
+      },
+      "measured": {
+        "cpus": 4,
+        "memory_limit_gib": 18,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true
+      },
+      "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
+      "model_fingerprints": {
+        "_comment": [
+          "From the gateway probe of 2026-10-07 (preflight 37551331961), the same as wave 2.",
+          "Declared once, before the first run; a model whose fingerprint changes during",
+          "the wave is reported incomplete and its runs are exploratory."
+        ],
+        "EGI.kimi-k3": "06a11174e0f4",
+        "NRP.minimax-m2": "84d7e4bdbd52",
+        "NRP.qwen3": "757ac9b30f73",
+        "EGI.glm-5.3": "276a2c6afe40"
+      },
+      "rules": {
+        "_comment": [
+          "Stated before the first dispatch, as in wave 2. A run stopped by the cluster for",
+          "what it did (evicted, OOM-killed) with no record is declared in `lost` and counts",
+          "as a failed run; a run stopped by a fault not of its making is re-run. A run at",
+          "the 90-minute wall is a failed run."
         ],
         "timeout": "fail",
         "infra_errors_from": "opencode",

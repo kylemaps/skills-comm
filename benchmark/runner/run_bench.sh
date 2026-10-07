@@ -24,7 +24,25 @@ BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 TASKS="${TASKS_JSON:-$HOME/grader-repo/benchmark/tasks.json}"
 # Default only when unset. Empty means no skill source (env-only in CI).
 SKILLSRC="${SKILLS_SRC-$HOME/skills-comm/plugins/brain-extraction}"
-SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
+# AGENT_HOME: when set, the agent runs with this as its HOME instead of the runner's.
+# In CI it is on the job's work volume, so whatever the agent writes under $HOME
+# (package installs, a cache it points at $HOME, ~/.apptainer) stays off the node's
+# disk, which every runner on a node shares. It starts empty except for opencode's
+# provider config, copied from the runner's HOME; the arm's skills install into it.
+if [ -n "${AGENT_HOME:-}" ]; then
+  mkdir -p "$AGENT_HOME/.config/opencode"
+  if [ -f "$HOME/.config/opencode/opencode.json" ]; then
+    cp "$HOME/.config/opencode/opencode.json" "$AGENT_HOME/.config/opencode/opencode.json"
+  fi
+  SKILLDST="${SKILLS_DST:-$AGENT_HOME/.config/opencode/skills}"
+else
+  SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
+fi
+# AGENT_THREADS: when set, the thread count the agent's numerical libraries use
+# (OpenMP, MKL, OpenBLAS, numexpr, ITK). They size their pools from the CPUs they
+# see, which in a pod are the node's, not the pod's limit.
+AGENT_THREADS="${AGENT_THREADS:-}"
+case "$AGENT_THREADS" in ''|*[!0-9]*) AGENT_THREADS="" ;; esac
 # The wall. It was 2700 by default, and that default was a trap: the working value
 # lives in ~/bench/.env on the VM, which exists on exactly one machine. A fresh pod
 # has no .env, so CI would have fallen back to 45 minutes -- the wall that sat INSIDE
@@ -215,11 +233,14 @@ IDENT=$(printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"skill
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "$SKILLS_HASH" "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}")
-printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_sha":"%s","node":"%s","workdir":"%s","start":"%s"}\n' \
+# agent_home: the agent's HOME when it is not the runner's (AGENT_HOME), else "".
+# agent_threads: the thread count set for its numerical libraries, else null.
+printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_sha":"%s","node":"%s","workdir":"%s","start":"%s","agent_home":"%s","agent_threads":%s}\n' \
   "${NEURODESKTOP_VERSION:-unknown}" "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "${PROMPT_HASH:-none}" \
   "${TASKS_SHA:-$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)}" \
-  "${NODE_NAME:-}" "$WORK" "$(date -u +%FT%TZ)" > "$RECORD"
+  "${NODE_NAME:-}" "$WORK" "$(date -u +%FT%TZ)" "${AGENT_HOME:-}" \
+  "${AGENT_THREADS:-null}" > "$RECORD"
 
 # A random id for this run, sent to the gateway on every model call as
 # x-litellm-session-id (write_opencode_config.py) and recorded by env_record.py.
@@ -268,11 +289,18 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 AGENT_ENV=(env)
 for v in SKILLS_SRC SKILLS_DST RUN_LABEL RUN_WAVE ARM TASK MODEL REP TASKS_JSON \
          BENCH_HOME TASKS_SHA NEURODESKTOP_VERSION AGENT_VIEW_CHECK AGENT_BASH_ENV \
-         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT \
+         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT AGENT_HOME AGENT_THREADS \
          $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_)' \
                       | grep -vx RUNNER_TRACKING_ID); do
   AGENT_ENV+=(-u "$v")
 done
+[ -n "${AGENT_HOME:-}" ] && AGENT_ENV+=("HOME=$AGENT_HOME")
+if [ -n "$AGENT_THREADS" ]; then
+  for v in OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS \
+           NUMEXPR_MAX_THREADS ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS; do
+    AGENT_ENV+=("$v=$AGENT_THREADS")
+  done
+fi
 
 # What opencode will give the agent, resolved by opencode itself from the agent's
 # working directory and environment: the skills it offers, and any instructions,

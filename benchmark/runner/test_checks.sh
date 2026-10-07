@@ -1310,6 +1310,10 @@ expect 0 $? "the real sweep's wave 2 accepts the version 4 pod"
 "$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 2 --measured-only \
   cpus=4 memory_limit_gib=16 work_volume_gib=40 tmp_on_work_volume=false >/dev/null 2>&1
 expect 1 $? "  and refuses a version 3 pod"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 3 --measured-only   cpus=4 memory_limit_gib=18 work_volume_gib=58 tmp_on_work_volume=true >/dev/null 2>&1
+expect 0 $? "the real sweep's wave 3 accepts the version 5 pod (18 GiB)"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 3 --measured-only   cpus=4 memory_limit_gib=16 work_volume_gib=58 tmp_on_work_volume=true >/dev/null 2>&1
+expect 1 $? "  and refuses a 16 GiB pod"
 rm -rf "$T"
 
 echo
@@ -1356,6 +1360,58 @@ expect 0 $? "exits 0"
 assert r['cvmfs_revision'] is None and r['harness_sha']=='abc1234' and r['ci_run']=='9/2/rep' and r['session_id_sent']=='s123'
 assert 'python_packages' in r and 'kernel' in r" "$T/r.json" 2>/dev/null \
   && ok "records harness, CI run and session id; an unreadable CVMFS revision is None" || bad "record wrong: $(cat "$T/r.json")"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: the agent's HOME on the work volume, threads matched to the pod"
+T=$(mktemp -d)
+mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc" "$T/runnerhome/.config/opencode"
+printf -- '---\nname: brain-extraction\n---\n' > "$T/src/brain-extraction/SKILL.md"
+printf -- '---\nname: brain-extraction-qc\n---\n' > "$T/src/brain-extraction-qc/SKILL.md"
+echo '{"provider":{"neurodesk":{}}}' > "$T/runnerhome/.config/opencode/opencode.json"
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then
+  printf '[{"name":"customize-opencode","location":"<built-in>"}'
+  for d in "$HOME"/.config/opencode/skills/*; do
+    [ -e "$d" ] && printf ',{"name":"%s","location":"%s"}' "$(basename "$d")" "$d"
+  done
+  echo ']'; exit 0
+fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+echo "HOME=$HOME"
+echo "CFG=$(cat "$HOME/.config/opencode/opencode.json" 2>/dev/null)"
+echo "THREADS=${OMP_NUM_THREADS-unset} ${ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS-unset} ${OPENBLAS_NUM_THREADS-unset}"
+echo "LEAK=${AGENT_HOME-unset} ${AGENT_THREADS-unset}"
+echo x > "$HOME/written-by-agent"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+rb() { env HOME="$T/runnerhome" BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+  SKILLS_SRC="$T/src" RUN_TIMEOUT=60 NEURODESK_API_KEY=k OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 \
+  NEURODESK_GATEWAY=http://127.0.0.1:9 "$@" bash "$HERE/run_bench.sh" t-x neurodesk/m env+skill 1 >/dev/null 2>&1; }
+rb AGENT_HOME="$T/bench/home" AGENT_THREADS=4
+R="$T/bench/runs/t-x__neurodesk-m__env+skill__r1"; tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+case "$tr_" in *"HOME=$T/bench/home"*) ok "the agent runs with HOME on the work volume";; *) bad "agent HOME: $(echo "$tr_" | grep HOME=)";; esac
+has   "  with opencode's provider config copied into it" "$tr_" 'CFG={"provider":{"neurodesk":{}}}'
+has   "  and the arm's skills installed there (opencode offered them, the run went ahead)" "$tr_" "THREADS="
+has   "the numerical libraries get the pod's thread count" "$tr_" "THREADS=4 4 4"
+has   "  and the harness's own settings are not in the agent's environment" "$tr_" "LEAK=unset unset"
+[ -f "$T/bench/home/written-by-agent" ] && [ ! -f "$T/runnerhome/written-by-agent" ] \
+  && ok "what the agent writes under HOME lands on the volume, not in the runner's HOME" \
+  || bad "agent's HOME write landed in the wrong place"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['agent_threads']==4 and r['agent_home'].endswith('bench/home'), (r.get('agent_threads'), r.get('agent_home'))
+assert 'brain-extraction' in r['skills_installed'], r['skills_installed']" "$R/run.json" 2>/dev/null \
+  && ok "  the record says so (agent_home, agent_threads, skills installed)" || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
+rm -rf "$T/bench"
+rb
+tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+case "$tr_" in *"HOME=$T/runnerhome"*) ok "without AGENT_HOME the agent keeps the runner's HOME";; *) bad "HOME changed without AGENT_HOME: $(echo "$tr_" | grep HOME=)";; esac
+has   "  and no thread count is imposed" "$tr_" "THREADS=unset unset unset"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['agent_threads'] is None and r['agent_home']=='', r" "$R/run.json" 2>/dev/null \
+  && ok "  recorded as such" || bad "  record without AGENT_HOME wrong"
 rm -rf "$T"
 
 echo
