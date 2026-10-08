@@ -21,8 +21,9 @@ Written into the record (each null when it cannot be read):
                    cpus (cgroup cpu.max, else nproc), memory_limit_gib (cgroup
                    memory.max, else MemTotal), work_volume_gib (size of the filesystem
                    holding $BENCH_HOME), tmp_on_work_volume (/tmp is on that same
-                   filesystem), tmp_free_gib. wave_check.py compares them with the
-                   wave's `measured` declaration before the agent starts.
+                   filesystem), tmp_free_gib, no_new_privs (/proc/self/status), sudo
+                   (whether `sudo -n true` succeeds). wave_check.py compares them with
+                   the wave's `measured` declaration before the agent starts.
 
 Always exits 0.
 """
@@ -74,7 +75,25 @@ def _fs_id(path):
         return None
 
 
-def measured(cgroup="/sys/fs/cgroup", meminfo="/proc/meminfo", work=None, tmp="/tmp"):
+def no_new_privs(status="/proc/self/status"):
+    """True when the kernel's no_new_privs flag is set for this process (setuid
+    binaries such as sudo cannot gain privilege); None when it cannot be read."""
+    for line in (_read(status) or "").splitlines():
+        if line.startswith("NoNewPrivs:"):
+            return line.split()[1] == "1"
+    return None
+
+
+def sudo_works(cmd=("sudo", "-n", "true")):
+    """Whether a non-interactive sudo succeeds. No sudo binary means no sudo."""
+    try:
+        return subprocess.run(list(cmd), capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def measured(cgroup="/sys/fs/cgroup", meminfo="/proc/meminfo", work=None, tmp="/tmp",
+             status="/proc/self/status", sudo_cmd=("sudo", "-n", "true")):
     """The pod's resources as the kernel reports them. Values are integers or booleans;
     None when a source cannot be read."""
     work = work or os.environ.get("BENCH_HOME") or os.getcwd()
@@ -109,6 +128,8 @@ def measured(cgroup="/sys/fs/cgroup", meminfo="/proc/meminfo", work=None, tmp="/
         "work_volume_gib": work_total // 2**30 if work_total is not None else None,
         "tmp_on_work_volume": (wf == tf) if wf is not None and tf is not None else None,
         "tmp_free_gib": free_tmp // 2**30 if free_tmp is not None else None,
+        "no_new_privs": no_new_privs(status),
+        "sudo": sudo_works(sudo_cmd),
     }
 
 

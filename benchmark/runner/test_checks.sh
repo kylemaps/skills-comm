@@ -1284,6 +1284,41 @@ echo '{"task_id":"t"}' > "$T/r.json"
 CVMFS_ROOT="$T/no" BENCH_HOME="$T" "$PY" "$HERE/env_record.py" --record "$T/r.json" >/dev/null 2>&1
 "$PY" -c "import json,sys; m=json.load(open(sys.argv[1]))['measured']; assert set(m) >= {'cpus','memory_limit_gib','work_volume_gib','tmp_on_work_volume'}" "$T/r.json" 2>/dev/null \
   && ok "  and writes them into the record" || bad "  measured block missing from the record"
+# Root is measured too: the no_new_privs flag, and whether sudo works.
+printf 'Name:\tx\nNoNewPrivs:\t1\n' > "$T/st1"; printf 'Name:\tx\nNoNewPrivs:\t0\n' > "$T/st0"; printf 'Name:\tx\n' > "$T/stn"
+"$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); from env_record import measured
+t = sys.argv[2]
+a = measured(work=t, tmp=t, status=t + '/st1', sudo_cmd=[sys.executable, '-c', 'raise SystemExit(1)'])
+b = measured(work=t, tmp=t, status=t + '/st0', sudo_cmd=[sys.executable, '-c', 'raise SystemExit(0)'])
+c = measured(work=t, tmp=t, status=t + '/stn', sudo_cmd=[t + '/no-such-sudo'])
+assert a['no_new_privs'] is True and a['sudo'] is False, a
+assert b['no_new_privs'] is False and b['sudo'] is True, b
+assert c['no_new_privs'] is None and c['sudo'] is False, c" "$HERE" "$T" 2>/dev/null \
+  && ok "env_record reads NoNewPrivs and whether sudo works (no sudo binary = no sudo; unreadable = null)" \
+  || bad "env_record root measurement wrong"
+cat > "$T/sw6.json" <<'J'
+{"reps":2,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"6":{"measured":{"cpus":4,"no_new_privs":true,"sudo":false},
+  "tasks":{"t":{"models":["m"],"arms":["env-only"]}}}}}
+J
+w6() { "$PY" "$HERE/wave_check.py" --sweep "$T/sw6.json" --wave 6 --measured-only "$@" >"$T/o" 2>&1; }
+w6 cpus=4 no_new_privs=true sudo=false
+expect 0 $? "a pod without root passes a wave that declares none"
+w6 cpus=4 no_new_privs=true sudo=true
+expect 1 $? "a pod where sudo works is stopped"
+grep -q "sudo is true" "$T/o" && ok "  and says sudo" || bad "  wrong reason: $(cat "$T/o")"
+w6 cpus=4 no_new_privs=false sudo=false
+expect 1 $? "a pod without no_new_privs is stopped"
+w6 cpus=4 no_new_privs=True sudo=False
+expect 0 $? "  Python's True/False compare like true/false"
+w6 cpus=4 sudo=false
+expect 1 $? "an unmeasured no_new_privs is stopped"
+"$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); from wave_check import measured_problems
+d = {'no_new_privs': True, 'sudo': False}
+assert measured_problems(d, {'no_new_privs': True, 'sudo': False}) == []
+assert measured_problems(d, {'no_new_privs': True, 'sudo': True})
+assert measured_problems(d, {'no_new_privs': False, 'sudo': False})" "$HERE" 2>/dev/null \
+  && ok "  the record's booleans (assemble's gate) compare the same way" || bad "  record booleans compare wrong"
 # assemble: a cell whose runs measured something else is refused; unrecorded is noted.
 mr() { d="$T/runs/diffusion-brain-mask__neurodesk-m__env-only__r$1"; mkdir -p "$d/submissions/diffusion-brain-mask"
   echo x > "$d/submissions/diffusion-brain-mask/output.nii.gz"; echo '{"score":100,"verdict":"PASS"}' > "$d/envelope.json"
@@ -1423,7 +1458,7 @@ cat > "$T/opencode" <<'EOF'
 if [ "$1 $2" = "debug skill" ]; then echo '[{"name":"customize-opencode","location":"<built-in>"}]'; exit 0; fi
 if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
 trap '' TERM
-sleep 40
+sleep 120
 EOF
 chmod +x "$T/opencode"
 echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
@@ -1433,8 +1468,9 @@ env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" 
   OPENCODE_ISOLATE=0 NEURODESK_GATEWAY=http://127.0.0.1:9 \
   bash "$HERE/run_bench.sh" t-x neurodesk/m env-only 1 >/dev/null 2>&1
 dt=$(( $(date +%s) - t0 ))
-# The harness's own steps around the agent take ~25 s here; the agent's sleep is 40.
-[ "$dt" -lt 38 ] && ok "the run ended in ${dt}s, before the agent's 40 s sleep" || bad "the run took ${dt}s: SIGTERM was ignored and nothing escalated"
+# The harness's own steps around the agent take ~25-35 s here, more under load; the
+# agent sleeps 120 s, so only a run that never escalated can reach 100 s.
+[ "$dt" -lt 100 ] && ok "the run ended in ${dt}s, well before the agent's 120 s sleep" || bad "the run took ${dt}s: SIGTERM was ignored and nothing escalated"
 "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['exit_code'] in (124, 137), r['exit_code']" \
   "$T/bench/runs/t-x__neurodesk-m__env-only__r1/run.json" 2>/dev/null \
   && ok "  and the record carries the timeout exit code" || bad "  exit code not recorded as a timeout"
