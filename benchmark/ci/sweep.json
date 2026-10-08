@@ -222,6 +222,52 @@
           "arms": ["env-only", "env+skill"]
         }
       }
+    },
+    "4": {
+      "environment": "ci-env6 (ENVIRONMENT.md version 6 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env6-apptainer1.4.5-lmod8.7.25-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "e98e3b6"
+      },
+      "measured": {
+        "cpus": 4,
+        "memory_limit_gib": 18,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true,
+        "no_new_privs": true,
+        "sudo": false
+      },
+      "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+      "model_fingerprints": {
+        "_comment": [
+          "From the gateway probe of 2026-10-08 (preflight 37722971752), the same as wave 3.",
+          "Declared once, before the first run; a model whose fingerprint changes during",
+          "the wave is reported incomplete and its runs are exploratory."
+        ],
+        "EGI.kimi-k3": "06a11174e0f4",
+        "NRP.minimax-m2": "84d7e4bdbd52",
+        "NRP.qwen3": "757ac9b30f73"
+      },
+      "rules": {
+        "_comment": [
+          "Stated before the first dispatch, as in waves 2 and 3. A run stopped by the cluster",
+          "for what it did (evicted, including for exceeding the pod's 2 GiB disk limit,",
+          "OOM-killed) with no record is declared in `lost` and counts as a failed run; a run",
+          "stopped by a fault not of its making is re-run. A run at the 90-minute wall is a",
+          "failed run."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "lost": {},
+      "tasks": {
+        "diffusion-brain-mask": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+          "arms": ["env-only", "env+skill"]
+        }
+      }
     }
   }
 }
