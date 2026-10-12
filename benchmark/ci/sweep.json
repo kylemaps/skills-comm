@@ -268,6 +268,61 @@
           "arms": ["env-only", "env+skill"]
         }
       }
+    },
+    "5": {
+      "environment": "ci-env7 (ENVIRONMENT.md version 7 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env7-apptainer1.4.5-lmod8.7.25-uv0.12.24-astra0.2.18-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "e98e3b6"
+      },
+      "measured": {
+        "cpus": 4,
+        "memory_limit_gib": 18,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true,
+        "no_new_privs": true,
+        "sudo": false
+      },
+      "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+      "model_fingerprints": {
+        "_comment": [
+          "From the gateway probe of 2026-10-12 (preflight 38200552268). EGI.kimi-k3's differs from waves 3 and 4 (06a11174e0f4):",
+          "the gateway now serves it on vllm-0.31.0.",
+          "Declared once, before the first run; a model whose fingerprint changes during",
+          "the wave is reported incomplete and its runs are exploratory."
+        ],
+        "EGI.kimi-k3": "c25fc2b29533",
+        "NRP.minimax-m2": "84d7e4bdbd52",
+        "NRP.qwen3": "757ac9b30f73"
+      },
+      "rules": {
+        "_comment": [
+          "As in wave 4. A run stopped by the cluster for what it did (evicted, including for",
+          "exceeding the pod's 2 GiB disk limit, OOM-killed) with no record is declared in",
+          "`lost` and counts as a failed run; a run stopped by a fault not of its making is",
+          "re-run. A run at the 90-minute wall is a failed run. Pass or fail comes from the",
+          "graded output only; a run without an astra.yaml is not a failed run."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "lost": {},
+      "tasks": {
+        "diffusion-brain-mask": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+          "arms": ["env-only", "env+skill"]
+        },
+        "structural-brain-extraction-motion": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+          "arms": ["env-only", "env+skill"]
+        },
+        "structural-brain-extraction-stroke": {
+          "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
+          "arms": ["env-only", "env+skill"]
+        }
+      }
     }
   }
 }
