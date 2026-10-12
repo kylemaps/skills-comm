@@ -108,7 +108,8 @@ def collisions(runs, task, stage):
         moved = []
         for k in DECIDES:
             o, new = old.get(k), r.get(k)
-            if o == new:
+            # A field neither run recorded is not a difference.
+            if o == new or (o in UNRECORDED and new in UNRECORDED):
                 continue
             if o in UNRECORDED:
                 # Not a divergence in the value, but still a replacement, and saying
