@@ -308,7 +308,30 @@
         "control_skill_reads": "keep",
         "lost": "fail"
       },
-      "lost": {},
+      "lost": {
+        "_comment": [
+          "Runs the cluster stopped before they could record anything, with no known",
+          "infrastructure fault, that cannot be re-run in the wave's environment. Each",
+          "counts in its cell as a failed run (verdict LOST, score 0; summarize.py,",
+          "assemble_cell.py); stratified_effect.py --runs also reports the analysis without",
+          "them. A run stopped by a known infrastructure fault is re-run instead.",
+          "Key: <task>__<model>__<arm>__r<n>, bare model id."
+        ],
+        "structural-brain-extraction-motion__NRP.qwen3__env-only__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "38227381435"
+          ],
+          "evidence": "Job 114738167545, runner pod gdbmn on node 2khwb. Killed in the Run step by the pod's memory cgroup (18 GiB limit): kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 10.4 GB, UID 1001\", then the runner; kubelet OOMKilled, exit 137. Node memory available ~59 GiB (not an eviction). No run record or artifact."
+        },
+        "structural-brain-extraction-stroke__NRP.minimax-m2__env+skill__r5": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "38227517383"
+          ],
+          "evidence": "Job 114738629989, runner pod fnbn6 on node 2khwb. Killed in the Run step by the pod's memory cgroup (18 GiB limit): kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,034,516 kB, UID 1001\", then the runner; kubelet OOMKilled, exit 137. Pod working set 13.47 GiB 13 s before the limit; node memory available 51-57 GiB (not an eviction). No run record or artifact."
+        }
+      },
       "tasks": {
         "diffusion-brain-mask": {
           "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3"],
