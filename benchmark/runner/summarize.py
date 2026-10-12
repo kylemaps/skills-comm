@@ -189,9 +189,11 @@ def rules_for(sweep, wave):
 
 # skills_hash is here on purpose: a collaborator's skill drop leaves skills_sha
 # unchanged while the skill content is entirely different, so the commit alone would
-# silently pool two different experiments.
+# silently pool two different experiments. env_skills_hash and instructions_hash are
+# the environment's own skills and instruction file (every arm); runs that predate
+# them carry neither, which reads as unrecorded, not as a difference.
 PROVENANCE_KEYS = ["image_version", "opencode_version", "skills_sha", "skills_hash",
-                   "prompt_hash", "tasks_sha"]
+                   "prompt_hash", "tasks_sha", "env_skills_hash", "instructions_hash"]
 
 # Values meaning "we did not record this", as opposed to a real differing value.
 # Runs predating a field carry these, and treating them as a difference would flag

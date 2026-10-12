@@ -12,11 +12,13 @@
 #                ~/.config/opencode/skills; checked along with every other directory
 #                opencode discovers skills in
 #   SKILLS_SRC   the arm's skill source; empty for env-only
+#   ENV_SKILLS_SRC  the environment's own skills (installed in every arm), if any
 #   SKILL_SEARCH_ROOT  tree searched for leftover SKILL.md files and grading material
 #                (default $HOME)
 #
 # The spec: Neurodesk tools through Lmod, no standing instructions, no skills except
-# the arm's, no grading material. run_bench.sh also checks, after installing the
+# the arm's and the environment's, no grading material. The environment's instruction
+# file, if any, goes into the agent's own config later (run_bench.sh), not here. run_bench.sh also checks, after installing the
 # skill, what opencode itself resolves (`opencode debug skill`, `opencode debug config`).
 set -u
 fail() { echo "FAIL: $*"; exit 1; }
@@ -85,13 +87,15 @@ ok "no skill in any directory opencode discovers skills in"
 
 # --- no other skill content on disk ----------------------------------------------
 # Outside the discovery directories the agent can still read skill files by path.
-# The only SKILL.md allowed under SKILL_SEARCH_ROOT is the arm's own source.
+# The only SKILL.md files allowed under SKILL_SEARCH_ROOT are the arm's own source
+# and the environment's.
 root="${SKILL_SEARCH_ROOT:-$HOME}"
 [ -d "$root" ] || fail "SKILL_SEARCH_ROOT $root does not exist"
 found=$(find "$root" -name SKILL.md -not -path '*/node_modules/*' 2>/dev/null \
-        | grep -v "^${SKILLS_SRC:-/nonexistent}/" || true)
+        | grep -v "^${SKILLS_SRC:-/nonexistent}/" \
+        | grep -v "^${ENV_SKILLS_SRC:-/nonexistent}/" || true)
 [ -z "$found" ] || fail "skill files readable outside the arm's source: $(echo "$found" | head -3 | tr '\n' ' ')"
-ok "no skill files under $root except the arm's own"
+ok "no skill files under $root except the arm's and the environment's"
 
 # --- no grading material on disk -----------------------------------------------
 # The task pack with its solution blocks, rubrics, grader scripts, published results

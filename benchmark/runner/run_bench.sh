@@ -38,6 +38,35 @@ if [ -n "${AGENT_HOME:-}" ]; then
 else
   SKILLDST="${SKILLS_DST:-$HOME/.config/opencode/skills}"
 fi
+# ENV_SKILLS_SRC: skills that are part of the environment, installed in EVERY arm
+# (each subdirectory holding a SKILL.md). ENV_INSTRUCTIONS: a standing instruction
+# file, given to every arm through `instructions` in the agent's opencode config.
+# Both unset: no environment skills and no instructions.
+ENV_SKILLSRC="${ENV_SKILLS_SRC:-}"
+ENV_INSTR="${ENV_INSTRUCTIONS:-}"
+ENV_SKILL_NAMES=""
+if [ -n "$ENV_SKILLSRC" ]; then
+  for d in "$ENV_SKILLSRC"/*/; do
+    [ -f "$d/SKILL.md" ] && ENV_SKILL_NAMES="$ENV_SKILL_NAMES $(basename "$d")"
+  done
+  ENV_SKILL_NAMES="${ENV_SKILL_NAMES# }"
+  [ -n "$ENV_SKILL_NAMES" ] || { echo "FATAL: ENV_SKILLS_SRC $ENV_SKILLSRC holds no skill" >&2; exit 1; }
+fi
+if [ -n "$ENV_INSTR" ]; then
+  # Only into the agent's own config: never edit the runner's.
+  [ -n "${AGENT_HOME:-}" ] || { echo "FATAL: ENV_INSTRUCTIONS needs AGENT_HOME" >&2; exit 1; }
+  [ -s "$ENV_INSTR" ] || { echo "FATAL: ENV_INSTRUCTIONS $ENV_INSTR is missing or empty" >&2; exit 1; }
+  mkdir -p "$AGENT_HOME/.config/opencode/instructions"
+  INSTR_COPY="$AGENT_HOME/.config/opencode/instructions/$(basename "$ENV_INSTR")"
+  cp "$ENV_INSTR" "$INSTR_COPY"
+  python - "$AGENT_HOME/.config/opencode/opencode.json" "$INSTR_COPY" <<'PY' || { echo "FATAL: could not set instructions" >&2; exit 1; }
+import json, os, sys
+p, f = sys.argv[1], sys.argv[2]
+c = json.load(open(p)) if os.path.exists(p) else {}
+c["instructions"] = [f]
+json.dump(c, open(p, "w"), indent=2)
+PY
+fi
 # AGENT_THREADS: when set, the thread count the agent's numerical libraries use
 # (OpenMP, MKL, OpenBLAS, numexpr, ITK). They size their pools from the CPUs they
 # see, which in a pod are the node's, not the pod's limit.
@@ -88,6 +117,7 @@ RUN="$BENCH_HOME/runs/$NAME"
 # two skills against one shared baseline is impossible to express.
 # Avoid ':' as the separator -- tar and rsync read `foo:bar` as a remote path.
 rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
+for s in $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done
 case "$COND" in
   env+skill*)
     mkdir -p "$SKILLDST"
@@ -95,6 +125,10 @@ case "$COND" in
     ln -sfn "$SKILLSRC/brain-extraction-qc" "$SKILLDST/brain-extraction-qc"
     ;;
 esac
+for s in $ENV_SKILL_NAMES; do
+  mkdir -p "$SKILLDST"
+  ln -sfn "$ENV_SKILLSRC/$s" "$SKILLDST/$s"
+done
 
 # --- fresh directories. git-annex marks its objects read-only, so chmod first
 #     or a leftover datalad clone survives rm -rf and silently contaminates. ---
@@ -158,7 +192,8 @@ stop_agent() {
 trap 'stop_agent
       land
       rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
-      rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"' EXIT
+      rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
+      for s in $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -196,6 +231,12 @@ SKILLS_HASH=$(LC_ALL=C find "$SKILLSRC" -type f \( -name '*.md' -o -name '*.json
 case "$SKILLS_HASH" in
   d41d8cd98f00|"") SKILLS_HASH=noskill ;;
 esac
+# The environment's own skills and instruction file, hashed the same way; "" when unset.
+ENV_SKILLS_HASH=""
+[ -n "$ENV_SKILLSRC" ] && ENV_SKILLS_HASH=$(LC_ALL=C find "$ENV_SKILLSRC" -type f \( -name '*.md' -o -name '*.json' \
+  -o -name '*.py' -o -name '*.sh' \) 2>/dev/null | LC_ALL=C sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -c1-12)
+INSTR_HASH=""
+[ -n "$ENV_INSTR" ] && INSTR_HASH=$(md5sum "$ENV_INSTR" 2>/dev/null | cut -c1-12)
 
 # "The prompt is byte-identical across arms" is the central claim of the whole
 # comparison, and until now we asserted it rather than checked it. Hashing it
@@ -228,11 +269,14 @@ PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 # records it, and finalize_run.py looks the session up by it.
 # wave: the wave the run was dispatched for (RUN_WAVE), empty outside one.
 # The fields that name the run are held in IDENT and added to the record by land().
-IDENT=$(printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s"}' \
+# env_skills, env_skills_hash, instructions_hash: the environment's skills (every
+# arm) and standing instruction file, "" when there are none.
+IDENT=$(printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s","env_skills":"%s","env_skills_hash":"%s","instructions_hash":"%s"}' \
   "$TASK" "$MODEL" "$COND" "$REP" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "$SKILLS_HASH" "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
-  "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}")
+  "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}" \
+  "$ENV_SKILL_NAMES" "$ENV_SKILLS_HASH" "$INSTR_HASH")
 # agent_home: the agent's HOME when it is not the runner's (AGENT_HOME), else "".
 # agent_threads: the thread count set for its numerical libraries, else null.
 printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_sha":"%s","node":"%s","workdir":"%s","start":"%s","agent_home":"%s","agent_threads":%s}\n' \
@@ -311,11 +355,14 @@ case "$COND" in
   env+skill*) EXPECT="brain-extraction,brain-extraction-qc" ;;
   *)          EXPECT="" ;;
 esac
+for s in $ENV_SKILL_NAMES; do EXPECT="${EXPECT:+$EXPECT,}$s"; done
+EXPECT_INSTR=""; [ -n "$ENV_INSTR" ] && EXPECT_INSTR="$INSTR_COPY"
 (cd "$WORK" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug skill)  > "$META/$ID.skills.json" 2>/dev/null
 (cd "$WORK" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug config) > "$META/$ID.config.json" 2>/dev/null
 ENFORCE=""; [ "${AGENT_VIEW_CHECK:-0}" = 1 ] && ENFORCE=--enforce
 python "$HERE/agent_view.py" --skills "$META/$ID.skills.json" \
-  --config "$META/$ID.config.json" --record "$RECORD" --expect "$EXPECT" $ENFORCE
+  --config "$META/$ID.config.json" --record "$RECORD" --expect "$EXPECT" \
+  --expect-instructions "$EXPECT_INSTR" $ENFORCE
 VIEW_RC=$?
 # Deleted before the agent starts: the config holds the resolved gateway key, and the
 # skill list names the arm's skills.

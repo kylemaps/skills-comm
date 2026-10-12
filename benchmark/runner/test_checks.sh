@@ -624,11 +624,11 @@ expect 0 $? "the skill arm goes ahead when opencode offers exactly its skills"
                                            || bad "  left in .meta: $(ls "$T/bench/.meta")"
 [ -z "$(ls -A "$T/skills" 2>/dev/null)" ] && ok "  and the skills directory is empty again" \
                                           || bad "  skill links left behind: $(ls -A "$T/skills")"
-rb env-only FAKE_OFFER="astra"
+rb env-only FAKE_OFFER="stray"
 expect 3 $? "a control run offered any skill stops"
 rb env-only FAKE_CONFIG='{"instructions":["/opt/AGENTS.md"]}'
 expect 3 $? "a run whose resolved config declares instructions stops"
-rb env-only FAKE_OFFER="astra" AGENT_VIEW_CHECK=0
+rb env-only FAKE_OFFER="stray" AGENT_VIEW_CHECK=0
 expect 0 $? "without AGENT_VIEW_CHECK the mismatch is recorded, not enforced"
 rm -rf "$T"
 
@@ -777,8 +777,8 @@ rm "$T/ws/AGENTS.md"
 mkdir -p "$T/home/.claude"; touch "$T/home/.claude/CLAUDE.md"
 envc; expect 1 $? "fails on CLAUDE.md in the agent's config dir"
 rm "$T/home/.claude/CLAUDE.md"
-touch "$T/skills/astra"; envc; expect 1 $? "fails when a skill is installed before the arm's"
-rm "$T/skills/astra"
+touch "$T/skills/stray"; envc; expect 1 $? "fails when a skill is installed before the arm's"
+rm "$T/skills/stray"
 mkdir -p "$T/home/.claude/skills/x"; envc; expect 1 $? "fails on a skill in ~/.claude/skills"
 rm -r "$T/home/.claude/skills"
 mkdir -p "$T/ws/.opencode/skills/x"; envc; expect 1 $? "fails on a project-level skill in a parent"
@@ -787,6 +787,8 @@ rm -r "$T/ws/.opencode"
 mkdir -p "$T/home/work/skills/b/2c1e/brain-extraction"; touch "$T/home/work/skills/b/2c1e/brain-extraction/SKILL.md"
 envc; expect 1 $? "fails on a SKILL.md left elsewhere on disk"
 envc "$T/lmod.sh" SKILLS_SRC="$T/home/work/skills/b/2c1e"; expect 0 $? "  but not on the arm's own source"
+envc "$T/lmod.sh" ENV_SKILLS_SRC="$T/home/work/skills/b/2c1e"; expect 0 $? "  nor on the environment's skills"
+envc "$T/lmod.sh" ENV_SKILLS_SRC="$T/home/work/skills/b/other"; expect 1 $? "  but a different environment source does not excuse it"
 rm -r "$T/home/work"
 # A leftover skill in the default directory while SKILLS_DST points elsewhere: the
 # skills directory is not the only place opencode looks.
@@ -1447,6 +1449,91 @@ case "$tr_" in *"HOME=$T/runnerhome"*) ok "without AGENT_HOME the agent keeps th
 has   "  and no thread count is imposed" "$tr_" "THREADS=unset unset unset"
 "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['agent_threads'] is None and r['agent_home']=='', r" "$R/run.json" 2>/dev/null \
   && ok "  recorded as such" || bad "  record without AGENT_HOME wrong"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: the environment's own skills and instructions, in every arm"
+T=$(mktemp -d)
+mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc" "$T/envskills/astra" "$T/runnerhome/.config/opencode"
+printf -- '---\nname: brain-extraction\n---\n' > "$T/src/brain-extraction/SKILL.md"
+printf -- '---\nname: brain-extraction-qc\n---\n' > "$T/src/brain-extraction-qc/SKILL.md"
+printf -- '---\nname: astra\n---\n' > "$T/envskills/astra/SKILL.md"
+printf 'Use ASTRA as the scientific record.\n' > "$T/astra.instructions.md"
+echo '{"provider":{"neurodesk":{}}}' > "$T/runnerhome/.config/opencode/opencode.json"
+# Offers what is actually installed and prints the agent's actual config, so the
+# checks see the wiring, not a stub. FAKE_DROP hides one skill, FAKE_INSTR replaces
+# the instructions opencode reports.
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then
+  printf '[{"name":"customize-opencode","location":"<built-in>"}'
+  for d in "$HOME"/.config/opencode/skills/*; do
+    n=$(basename "$d"); [ -e "$d" ] && [ "$n" != "${FAKE_DROP:-}" ] && printf ',{"name":"%s","location":"%s"}' "$n" "$d"
+  done
+  echo ']'; exit 0
+fi
+if [ "$1 $2" = "debug config" ]; then
+  if [ -n "${FAKE_INSTR:-}" ]; then echo "{\"instructions\":[\"$FAKE_INSTR\"]}"; else cat "$HOME/.config/opencode/opencode.json"; fi
+  exit 0
+fi
+echo "SKILLS=$(ls "$HOME/.config/opencode/skills" | tr '\n' ' ')"
+echo "INSTR=$(cat "$HOME"/.config/opencode/instructions/* 2>/dev/null)"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+# rbe ARM [VAR=value ...]: v7 settings by default; extra assignments override them.
+rbe() { a=$1; shift; rm -rf "$T/bench"
+  env HOME="$T/runnerhome" BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+    SKILLS_SRC="" RUN_TIMEOUT=60 NEURODESK_API_KEY=k OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 \
+    NEURODESK_GATEWAY=http://127.0.0.1:9 AGENT_HOME="$T/bench/home" \
+    ENV_SKILLS_SRC="$T/envskills" ENV_INSTRUCTIONS="$T/astra.instructions.md" "$@" \
+    bash "$HERE/run_bench.sh" t-x neurodesk/m "$a" 1 >/dev/null 2>&1; }
+want_ih=$(md5sum "$T/astra.instructions.md" | cut -c1-12)
+rbe env-only; rc=$?
+R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"; tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+expect 0 $rc "a control run with the environment's skill and instructions goes ahead"
+has "  the agent has the environment's skill" "$tr_" "SKILLS=astra "
+has "  and the instruction file, byte for byte" "$tr_" "INSTR=Use ASTRA as the scientific record."
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['skills_offered']==['astra'] and r['env_skills']=='astra' and len(r['env_skills_hash'])==12, r
+assert r['instructions_hash']==sys.argv[2] and r['skills_hash']=='noskill', r" "$R/run.json" "$want_ih" 2>/dev/null \
+  && ok "  recorded: skills_offered, env_skills, env_skills_hash, instructions_hash" || bad "  record: $(head -c 400 "$R/run.json" 2>/dev/null)"
+c_hash=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['env_skills_hash'], r['instructions_hash'])" "$R/run.json" 2>/dev/null)
+[ "$(cat "$T/runnerhome/.config/opencode/opencode.json")" = '{"provider":{"neurodesk":{}}}' ] \
+  && ok "  the runner's own opencode config is untouched" || bad "  runner config changed: $(cat "$T/runnerhome/.config/opencode/opencode.json")"
+rbe env+skill SKILLS_SRC="$T/src"; rc=$?
+R="$T/bench/runs/t-x__neurodesk-m__env+skill__r1"; tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+expect 0 $rc "the skill arm goes ahead with its skills plus the environment's"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['skills_offered']==['astra','brain-extraction','brain-extraction-qc'], r['skills_offered']
+assert '%s %s' % (r['env_skills_hash'], r['instructions_hash'])==sys.argv[2], r" "$R/run.json" "$c_hash" 2>/dev/null \
+  && ok "  with the same environment hashes as the control arm" || bad "  record: $(head -c 400 "$R/run.json" 2>/dev/null)"
+# Only where ln makes real links: Git Bash on Windows copies the directory instead.
+ln -s "$T/src" "$T/.lprobe" 2>/dev/null
+if [ -L "$T/.lprobe" ]; then
+  [ -z "$(ls -A "$T/bench/home/.config/opencode/skills" 2>/dev/null)" ] && ok "  and no skill link is left after the run" \
+    || bad "  links left: $(ls -A "$T/bench/home/.config/opencode/skills")"
+else
+  echo "  skip  link cleanup (no symlinks on this system)"
+fi
+rm -rf "$T/.lprobe"
+rbe env-only FAKE_DROP=astra
+expect 3 $? "a run where opencode does not offer the environment's skill stops before the agent"
+rbe env+skill SKILLS_SRC="$T/src" FAKE_INSTR=/opt/AGENTS.md
+expect 3 $? "a run whose resolved instructions are not the environment's stops"
+rbe env-only AGENT_HOME=
+expect 1 $? "instructions without AGENT_HOME stop (the runner's config is never edited)"
+mkdir -p "$T/noskills/empty"
+rbe env-only ENV_SKILLS_SRC="$T/noskills"
+expect 1 $? "an environment skill source with no skill in it stops"
+rbe env-only ENV_INSTRUCTIONS="$T/missing.md"
+expect 1 $? "a missing instruction file stops"
+rbe env-only ENV_SKILLS_SRC= ENV_INSTRUCTIONS=
+R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['skills_offered']==[] and r['env_skills']=='' and r['env_skills_hash']=='' and r['instructions_hash']=='', r" "$R/run.json" 2>/dev/null \
+  && ok "unset, the run is as before: no environment skill, no instructions, empty fields" || bad "  record: $(head -c 400 "$R/run.json" 2>/dev/null)"
 rm -rf "$T"
 
 echo

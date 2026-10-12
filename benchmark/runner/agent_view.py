@@ -2,7 +2,7 @@
 """Check what opencode will give the agent, as opencode itself resolves it.
 
     agent_view.py --skills SKILLS.json --config CONFIG.json --record run.json \
-        [--expect a,b] [--enforce]
+        [--expect a,b] [--expect-instructions FILE] [--enforce]
 
 SKILLS.json is the output of `opencode debug skill`, CONFIG.json of `opencode debug
 config`, both run from the agent's working directory with the agent's environment.
@@ -10,7 +10,8 @@ config`, both run from the agent's working directory with the agent's environmen
 Writes `skills_offered` (sorted names, built-in skills excluded) into the run record.
 With --enforce, exits 1 unless:
   - the skills offered are exactly --expect (empty for env-only);
-  - the resolved config declares no `instructions`, `skills` or `references`.
+  - the resolved config declares no `skills` or `references`, and its
+    `instructions` are exactly --expect-instructions (none when empty).
 A file that cannot be parsed records `skills_offered: null` and, with --enforce,
 also exits 1.
 """
@@ -33,6 +34,7 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--record", required=True)
     ap.add_argument("--expect", default="")
+    ap.add_argument("--expect-instructions", default="")
     ap.add_argument("--enforce", action="store_true")
     a = ap.parse_args()
 
@@ -60,9 +62,14 @@ def main():
     if not isinstance(config, dict):
         problems.append("could not read opencode's resolved config (%s)" % a.config)
     else:
-        for k in ("instructions", "skills", "references"):
+        for k in ("skills", "references"):
             if config.get(k):
                 problems.append("resolved config declares %s: %s" % (k, config[k]))
+        want = [a.expect_instructions] if a.expect_instructions else []
+        got = config.get("instructions") or []
+        if got != want:
+            problems.append("resolved config declares instructions %s, the environment expects %s"
+                            % (got, want))
 
     print("skills offered: %s" % (offered if offered is not None else "unknown"))
     for p in problems:

@@ -660,6 +660,13 @@ class TestPoolingDecision(unittest.TestCase):
         self.assertIn("skills_hash", self.m.PROVENANCE_KEYS)
         self.assertNotIn('k != "skills_hash"', self.src)
 
+    def test_environment_skills_and_instructions_decide(self):
+        """The environment's skills and instruction file are in every arm. Runs
+        made with two different ones are two environments, whatever the arm."""
+        for k in ("env_skills_hash", "instructions_hash"):
+            self.assertIn(k, self.m.PROVENANCE_KEYS)
+            self.assertNotIn('k != "%s"' % k, self.src)
+
     def test_the_flag_is_not_bare_heterogeneity(self):
         """"Did any field vary" flagged skill provenance differing BETWEEN arms,
         which is the experiment, not a defect."""
