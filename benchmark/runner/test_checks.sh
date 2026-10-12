@@ -496,6 +496,52 @@ echo '{"task_id":"t","workdir":"sess-k3"}' > "$d/run.json"; printf '$ echo "sudo
 "$PY" "$HERE/finalize_run.py" "$d" 0
 o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$d/run.json" | tr -d '\r')
 [ "$o" = "[]" ] && ok "  database commands get the same prose/quote rules" || bad "  quoted word flagged from db: $o"
+
+echo
+echo "=== finalize_run off_spec: external-download and tool_routes"
+# finr prints BOTH fields ("off_spec | tool_routes") so one fixture can check both.
+finr() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$2" > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['off_spec'], '|', r['tool_routes'])" \
+    "$d/run.json" | tr -d '\r'; }
+
+o=$(finr l1 '$ curl -O https://s3.amazonaws.com/openneuro.org/ds000001/sub-01/anat/sub-01_T1w.nii.gz')
+hasnt "an OpenNeuro S3 download is the task's data, not external-download" "$o" "external-download"
+o=$(finr l2 '$ curl -O https://raw.githubusercontent.com/freesurfer/freesurfer/dev/mri_synthstrip/mri_synthstrip')
+has   "curl from raw.githubusercontent.com IS external-download" "$o" "external-download"
+has   "  and the route is download" "$o" "download"
+o=$(finr l3 '$ apptainer exec /cvmfs/neurodesk.ardc.edu.au/containers/synthstrip_1.1.0_20220827/synthstrip.simg mri_synthstrip -i in.nii.gz -o out.nii.gz')
+[ "$o" = "[] | ['cvmfs-direct']" ] && ok "the CVMFS container run by path is tool_routes cvmfs-direct, no off-spec" \
+                                   || bad "cvmfs-direct: $o"
+o=$(finr l4 '$ uvx astra-tools@0.2.18 validate')
+[ "$o" = "[] | []" ] && ok "uvx astra-tools is off-spec clean and routeless" || bad "astra-tools: $o"
+o=$(finr l5 '$ curl -sL -o mm.tar.bz2 https://micro.mamba.pm/api/micromamba/linux-64/latest')
+has   "the micromamba installer curl IS external-download" "$o" "external-download"
+o=$(finr l6 '$ git clone https://github.com/freesurfer/freesurfer.git')
+has   "git clone of a tool repo IS external-download" "$o" "external-download"
+o=$(finr l7 '$ git clone https://github.com/OpenNeuroDatasets/ds000001.git data')
+hasnt "git clone of an OpenNeuro dataset mirror is NOT external-download" "$o" "external-download"
+o=$(finr l8 '$ datalad clone https://github.com/OpenNeuroDatasets/ds000001.git data')
+hasnt "datalad clone is NOT external-download (it is the documented data route)" "$o" "external-download"
+o=$(finr l9 '$ pip download nibabel')
+has   "pip download IS external-download" "$o" "external-download"
+hasnt "  and is NOT routed as pip (no install happened)" "$o" "'pip'"
+o=$(finr l10 '$ pip install nibabel')
+hasnt "pip install stays package-install, not ALSO external-download" "$o" "external-download"
+has   "  and routes as pip" "$o" "'pip'"
+o=$(finr l11 '$ conda create -n env -y python=3.11')
+has   "conda create routes as conda" "$o" "'conda'"
+o=$(finr l12 '$ curl -O https://huggingface.co/datasets/foo/bar/resolve/main/x.json')
+hasnt "a Hugging Face DATASET path is not external-download" "$o" "external-download"
+o=$(finr l13 '$ curl -O https://huggingface.co/openai/whisper/resolve/main/pytorch_model.bin')
+has   "a Hugging Face MODEL path (no /datasets/) IS external-download" "$o" "external-download"
+o=$(finr l14 '$ wget https://example.org/weights/model_v2.pt')
+has   "a .pt weights file off an unlisted host is still caught by extension" "$o" "external-download"
+o=$(finr l15 '$ curl -O https://example.org/readme.txt')
+hasnt "an ordinary file from an unlisted host is not flagged" "$o" "external-download"
+o=$(finr l16 '$ module load fsl/6.0.7.22')
+[ "$o" = "[] | ['lmod']" ] && ok "a plain module load routes as lmod, no off-spec" || bad "lmod route: $o"
 rm -rf "$T"
 
 echo

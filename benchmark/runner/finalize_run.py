@@ -28,9 +28,14 @@ agent chose. This reads them back out of the transcript once the run is over:
   arm_seen             transcript lines naming an arm label; [] is clean
   opencode_errors      opencode's own error messages, excluding tool-call errors
   off_spec       why this run left the benchmark environment: "sudo",
-                 "package-install", "external-image". [] is clean; None means
-                 no commands could be read, which is NOT clean.
-  used_sudo / installed_packages / external_images   the evidence behind it
+                 "package-install", "external-image", "external-download". [] is
+                 clean; None means no commands could be read, which is NOT clean.
+  used_sudo / installed_packages / external_images / external_downloads
+                 the evidence behind it
+  tool_routes    how tools were obtained, any of "lmod", "cvmfs-direct",
+                 "external-image", "pip", "conda", "download". Descriptive, not
+                 an exclusion: a clean run can still show "cvmfs-direct". None
+                 under the same condition as off_spec.
   commands_from  where the executed commands were read: "opencode-db" (every
                  bash tool call, in full) or "transcript" (first line of each)
   bash_calls     number of bash tool calls (None when read from the transcript)
@@ -121,9 +126,30 @@ rec["qc_ran"] = bool(re.search(
 # --- off_spec: did the run leave the benchmark environment? -------------------
 # The benchmark environment provides Neurodesk tools through Lmod and nothing else.
 # The runner allows sudo, so leaving the environment is detected, not prevented:
-#   sudo             a command run with sudo
-#   package-install  an apt/pip/conda/npm install
-#   external-image   a container image fetched from outside CVMFS
+#   sudo               a command run with sudo
+#   package-install    an apt/pip/conda/npm install
+#   external-image     a container image fetched from outside CVMFS
+#   external-download  a tool, its source, or model weights fetched from outside
+#                      the environment: curl/wget, `git clone`, or `pip download`.
+#                      NOT the task's DATA: anything naming OpenNeuro, a Hugging
+#                      Face *dataset* path (.../datasets/...), or fetched with
+#                      datalad/the openneuro CLI (different verbs, so they never
+#                      match the patterns below anyway). NOT `uvx astra-tools`
+#                      (the one external CLI this environment provides on
+#                      purpose) and NOT a bare `pip install` (already
+#                      package-install). curl/wget only count against a
+#                      conservative allowlist of hosts that serve software
+#                      (github/githubusercontent, the micromamba installer,
+#                      conda/pytorch/pypi mirrors, huggingface) or a
+#                      software-shaped extension (.whl/.pt/.pth/.ckpt/
+#                      .safetensors); an unlisted host is read as innocent, not
+#                      guilty, same as everything else this file flags.
+#
+# tool_routes is a separate, non-exclusionary field (see near `tools_loaded`
+# below): which of lmod / cvmfs-direct / external-image / pip / conda / download
+# a run actually used to obtain its tools, so "ran the CVMFS container directly
+# instead of `module load`" -- in-spec, but a different route -- is visible
+# without being off_spec.
 #
 # Only executed commands are read. Preferred source: the bash tool calls in
 # opencode's database, which hold each command in full. Fallback: transcript lines
@@ -281,6 +307,56 @@ IMAGE_RE = re.compile(
     r"|(?:apptainer|singularity)\s+(?:exec|run|shell)\s+"
     r"(?:-\S+(?:\s+(?!" + _REMOTE + r")[^-\s]\S*)?\s+)*" + _REMOTE + r"([\w./:@+-]+))")
 
+# external-download: curl/wget, `git clone`, or `pip download`. git/pip are
+# judged by VERB alone (the environment never hands out tools that way, so any
+# use is suspect) and then cleared by _DATA_SRC; curl/wget additionally need a
+# host/extension hit, since they are used for too many innocent things (health
+# checks, polling a job's status) to flag on the verb alone.
+_DATA_SRC = re.compile(r"openneuro|/datasets/", re.I)
+_DOWNLOAD_HOST = re.compile(
+    r"(?:[\w-]+\.)?github(?:usercontent)?\.com"
+    r"|micro\.mamba\.pm|repo\.anaconda\.com|(?:conda\.)?anaconda\.org"
+    r"|download\.pytorch\.org|files\.pythonhosted\.org"
+    r"|huggingface\.co|hf\.co", re.I)
+_DOWNLOAD_EXT = re.compile(r"\.(?:whl|pt|pth|ckpt|safetensors)(?:[?#'\"]|\s|$)", re.I)
+DOWNLOAD_RE = re.compile(
+    _AT + _SUDO + r"(?:\w+=\S*\s+)*((?:curl|wget)\s[^;&|<>]*)"
+    r"|" + _AT + _SUDO + r"(?:\w+=\S*\s+)*(git\s+clone\s[^;&|<>]*)"
+    r"|" + _AT + _SUDO + r"(?:\w+=\S*\s+)*"
+    r"((?:(?:\S*/)?pip(?:3(?:\.\d+)?)?|uv\s+pip|python3?(?:\.\d+)?\s+-m\s+pip)"
+    r"\s+download\b[^;&|<>]*)")
+
+
+def _download_hits(cmds):
+    """Evidence for external-download: matched text, cleared of data sources and
+    (for curl/wget only) of hosts not on the software allowlist."""
+    hits = []
+    for c in cmds:
+        for m in DOWNLOAD_RE.finditer(c):
+            text = m.group(1) or m.group(2) or m.group(3)
+            if _DATA_SRC.search(text):
+                continue
+            if m.group(1) and not (_DOWNLOAD_HOST.search(text) or _DOWNLOAD_EXT.search(text)):
+                continue
+            hits.append(re.sub(r"\s+", " ", text).strip()[:120])
+    return sorted(set(hits))
+
+
+# cvmfs-direct: apptainer/singularity exec|run of a path under /cvmfs/ -- the
+# provided containers run BY PATH instead of through `module load`. In-spec (it
+# is still the environment's own container) but a different route, so this
+# feeds tool_routes only and is never added to off_spec.
+CVMFS_RE = re.compile(
+    _AT + _SUDO + r"(?:apptainer|singularity)\s+(?:exec|run)\s+"
+    r"(?:-\S+(?:\s+(?!/cvmfs/)[^-\s]\S*)?\s+)*['\"]?/cvmfs/")
+# pip vs conda/mamba/micromamba, read back out of installed_packages (below) so
+# this can never disagree with what off_spec itself counted as a package-install.
+_PIP_EVIDENCE = re.compile(
+    r"^(?:\S*/)?pip(?:3(?:\.\d+)?)?\b|^uv\s+pip\b|^pipx\b"
+    r"|^python3?(?:\.\d+)?\s+-m\s+pip\b", re.I)
+_CONDA_EVIDENCE = re.compile(r"^(?:conda|mamba|micromamba)\b", re.I)
+
+_cvmfs_direct = _pip_seen = _conda_seen = False
 if not _tr_cmds and _db_cmds is None:
     # No command lines anywhere: unreadable, not clean. Scripts alone are not
     # enough, since most commands never reach a script.
@@ -293,14 +369,34 @@ else:
         for c in _cmds for m in INSTALL_RE.finditer(c)))
     rec["external_images"] = sorted(set(
         next(g for g in m.groups() if g) for c in _cmds for m in IMAGE_RE.finditer(c)))
+    rec["external_downloads"] = _download_hits(_cmds)
+    _cvmfs_direct = any(CVMFS_RE.search(c) for c in _cmds)
+    _pip_seen = any(_PIP_EVIDENCE.match(p) for p in rec["installed_packages"])
+    _conda_seen = any(_CONDA_EVIDENCE.match(p) for p in rec["installed_packages"])
     rec["off_spec"] = (["sudo"] * bool(rec["used_sudo"])
                        + ["package-install"] * bool(rec["installed_packages"])
-                       + ["external-image"] * bool(rec["external_images"]))
+                       + ["external-image"] * bool(rec["external_images"])
+                       + ["external-download"] * bool(rec["external_downloads"]))
 
 # Modules loaded, from the same executed commands and scripts. A module named in
 # the agent's text, a diff it printed, or a script comment was not loaded.
 _MODLOAD = re.compile(_AT + r"(?:module\s+load|ml)\s+((?:[\w.+-]+/[\w.+-]+\s*)+)")
 rec["tools_loaded"] = sorted({m for c in _cmds for g in _MODLOAD.findall(c) for m in g.split()})
+
+# tool_routes: see the comment above off_spec. "pip"/"conda" mean the run used
+# that manager to INSTALL something (off_spec already has it as package-install);
+# a bare fetch with no manager is "download" instead, whether that was curl/wget,
+# `git clone`, or `pip download`.
+if rec["off_spec"] is None:
+    rec["tool_routes"] = None
+else:
+    rec["tool_routes"] = sorted(set(
+        (["lmod"] if rec["tools_loaded"] else [])
+        + (["cvmfs-direct"] if _cvmfs_direct else [])
+        + (["external-image"] if rec["external_images"] else [])
+        + (["pip"] if _pip_seen else [])
+        + (["conda"] if _conda_seen else [])
+        + (["download"] if rec["external_downloads"] else [])))
 
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
