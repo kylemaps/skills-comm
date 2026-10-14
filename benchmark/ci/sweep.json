@@ -317,6 +317,13 @@
           "them. A run stopped by a known infrastructure fault is re-run instead.",
           "Key: <task>__<model>__<arm>__r<n>, bare model id."
         ],
+        "diffusion-brain-mask__EGI.kimi-k3__env+skill__r10": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "38227366153"
+          ],
+          "evidence": "Job 114738132234, runner pod vht5l on node 2khwb. Killed in the Run step by the pod's memory cgroup (18 GiB limit): node event OOMKilling, process python, anon-rss 18,066,172 kB, then the rep's run.sh; pod phase Failed, terminated OOMKilled. No run record or artifact."
+        },
         "structural-brain-extraction-motion__NRP.qwen3__env-only__r2": {
           "reason": "OOM-killed: pod memory limit",
           "ci_runs": [
