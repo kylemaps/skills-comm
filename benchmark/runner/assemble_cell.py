@@ -395,9 +395,10 @@ def main():
     print("\nPASSED all %d gates." % len(gates))
     if a.stage:
         # Only the graded facts. Transcripts stay in the artifact: they are the bulk,
-        # and they are evidence rather than result. run.json and envelope.json are
-        # what summarize.py reads, so the task summary stays fully re-derivable from
-        # what is committed.
+        # and they are evidence rather than result. run.json, envelope.json and the
+        # agent's own decision record astra.yaml are what summarize.py reads, so the
+        # task summary stays fully re-derivable from what is committed. Without the
+        # astra.yaml a published cell reports no ASTRA record.
         dest = os.path.join(a.stage, a.task)
         os.makedirs(dest, exist_ok=True)
         n = 0
@@ -412,7 +413,7 @@ def main():
             if os.path.isdir(d):
                 shutil.rmtree(d)
             os.makedirs(d, exist_ok=True)
-            for f in ("run.json", "envelope.json"):
+            for f in ("run.json", "envelope.json", "astra.yaml"):
                 src = os.path.join(r["dir"], f)
                 if os.path.exists(src):
                     shutil.copy2(src, os.path.join(d, f))

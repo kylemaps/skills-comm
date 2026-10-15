@@ -201,10 +201,17 @@ expect 1 $? "refuses an arm nobody declared"
 # published cell produces exactly the names already in its results tree.
 rm -rf "$T/runs" "$T/stage"; mkdir -p "$T/stage"
 for r in 1 2 3; do mkrun env+skill $r graded brain-extraction; done
+# The agent's own decision record travels with its run: summarize.py reads astra.yaml
+# from the published run directory, so a cell staged without it reports no record.
+printf 'version: "1.0"\ndecisions: {}\n' > "$T/runs/${TASK}__kimi-k3__env+skill__r1/astra.yaml"
 stage_gate() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" \
   --model kimi-k3 --arm env+skill --sweep "$SW" --stage "$T/stage" \
   ${1:+--replace} >"$T/out" 2>&1; }
 stage_gate; expect 0 $? "stages into an empty tree"
+[ -f "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r1/astra.yaml" ] \
+  && ok "  the run's astra.yaml is staged with it" || bad "  astra.yaml not staged"
+[ ! -e "$T/stage/$TASK/${TASK}__kimi-k3__env+skill__r2/astra.yaml" ] \
+  && ok "  and a run without one gets none" || bad "  an astra.yaml appeared for a run without one"
 
 rm -rf "$T/runs"
 for r in 1 2 3; do mkrun env+skill $r graded brain-extraction 2026-09-01; done
