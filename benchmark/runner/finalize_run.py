@@ -39,6 +39,13 @@ agent chose. This reads them back out of the transcript once the run is over:
   commands_from  where the executed commands were read: "opencode-db" (every
                  bash tool call, in full) or "transcript" (first line of each)
   bash_calls     number of bash tool calls (None when read from the transcript)
+  web_fetches    WebFetch tool calls (the database when readable, else the
+                 transcript's `% WebFetch` lines)
+  web_searches   web search calls (the transcript's `◈` lines)
+  web_hosts      hosts named in executed commands, fetches and the scripts the
+                 agent wrote. Descriptive, never an exclusion: the task's data
+                 comes over the network too. All three None when neither the
+                 transcript nor the database could be read.
   exit_code / output_present / end
 
 Safe to re-run: it only adds keys. Also usable to backfill older runs.
@@ -185,8 +192,8 @@ def _session_dirs(run_dir):
                    if d})
 
 
-def _db_bash_commands(run_dir):
-    """The bash tool calls of this run's session, in order; None if unavailable."""
+def _db_tool_calls(run_dir):
+    """(tool, input) of this run's session's tool calls, in order; None if unavailable."""
     opened = _open_db(run_dir)
     if opened is None:
         return None
@@ -205,10 +212,10 @@ def _db_bash_commands(run_dir):
                 d = json.loads(row["data"])
             except Exception:
                 continue
-            if d.get("type") == "tool" and d.get("tool") == "bash":
-                cmd = ((d.get("state") or {}).get("input") or {}).get("command")
-                if isinstance(cmd, str):
-                    out.append(cmd)
+            if d.get("type") == "tool":
+                inp = (d.get("state") or {}).get("input")
+                if isinstance(inp, dict):
+                    out.append((d.get("tool"), inp))
         return out
     except Exception:
         return None
@@ -235,7 +242,10 @@ def _shell_lines(text):
 
 
 _tr_cmds = [l[2:] for l in plain.splitlines() if l.startswith("$ ")]
-_db_cmds = _db_bash_commands(run_dir)
+_db_calls = _db_tool_calls(run_dir)
+_db_cmds = None if _db_calls is None else [
+    inp["command"] for tool, inp in _db_calls
+    if tool == "bash" and isinstance(inp.get("command"), str)]
 if _db_cmds is not None:
     rec["bash_calls"] = len(_db_cmds)
     rec["commands_from"] = "opencode-db"
@@ -398,6 +408,26 @@ else:
         + (["conda"] if _conda_seen else [])
         + (["download"] if rec["external_downloads"] else [])))
 
+# --- web use ------------------------------------------------------------------------
+# Descriptive, never an exclusion: the environment leaves the internet open and the
+# task's data comes over it. Fetches are the WebFetch tool's calls (the database when
+# readable, else the transcript's `% WebFetch` lines); searches are the transcript's
+# `◈` lines; hosts are every host named in an executed command, a fetch or a script
+# the agent wrote, so a run that only fetched its data still names its data host.
+_URL_HOST = re.compile(r"https?://([\w.-]+)")
+_tr_fetches = [l[len("% WebFetch "):] for l in plain.splitlines() if l.startswith("% WebFetch ")]
+_db_fetches = None if _db_calls is None else [
+    inp["url"] for tool, inp in _db_calls if tool == "webfetch" and isinstance(inp.get("url"), str)]
+if not txt and _db_calls is None:
+    rec["web_fetches"] = rec["web_searches"] = rec["web_hosts"] = None
+else:
+    _fetches = _db_fetches if _db_fetches is not None else _tr_fetches
+    rec["web_fetches"] = len(_fetches)
+    rec["web_searches"] = sum(1 for l in plain.splitlines() if l.startswith("◈ "))
+    rec["web_hosts"] = sorted({m.group(1).lower()
+                               for text in _cmds + _fetches + _script_lines[".sh"] + _script_lines[".py"]
+                               for m in _URL_HOST.finditer(text)})
+
 rec["dataset_pin"] = sorted(set(
     re.findall(r"checkout\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)", txt)))
 # --- skill loads -----------------------------------------------------------------
@@ -457,11 +487,16 @@ _KEY_FILE = re.compile(
     r"|grade_wrapper\.py|fetch_reference\.py|run_manifest\.json)\b"
     r"|(?<![\w.-])(?:graders|benchmark)/\S*(?:PROVENANCE|README)\.md"
     r"|(?<![\w.-])graders/\S")
+# The OSF projects that hold reference outputs (the task pack's datasets_catalog names
+# them as ground-truth sources: zjqey main, y2dq4 MRtrix diffusion, q7v8c QSIPrep)
+# count as sources too. ru43c holds a task's DATA on OSF and is not one of them.
+_OSF_REFS = r"(?<![\w])(?:zjqey|y2dq4|q7v8c)(?![\w])"
 _KEY_SRC = re.compile(
     r"(?:github\.com|githubusercontent\.com|github\.io|huggingface\.co|hf\.co)"
     r"[^\s'\"]*skills[-_](?:comm|benchmark)"
-    r"|skills-comm-ground-truth|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)", re.I)
-_KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)", re.I)
+    r"|skills-comm-ground-truth|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)"
+    r"|" + _OSF_REFS, re.I)
+_KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)|" + _OSF_REFS, re.I)
 _LISTS = ("find", "ls", "locate", "which", "echo", "printf", "mkdir", "cd", "stat")
 
 

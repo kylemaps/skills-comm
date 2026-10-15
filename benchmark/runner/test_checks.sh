@@ -542,6 +542,39 @@ o=$(finr l15 '$ curl -O https://example.org/readme.txt')
 hasnt "an ordinary file from an unlisted host is not flagged" "$o" "external-download"
 o=$(finr l16 '$ module load fsl/6.0.7.22')
 [ "$o" = "[] | ['lmod']" ] && ok "a plain module load routes as lmod, no off-spec" || bad "lmod route: $o"
+
+echo
+echo "=== finalize_run: web use, and the reference sources on OSF"
+d="$T/w1"; mkdir -p "$d"
+mkdb "$d" "sess-w1" 'curl -sO https://pypi.org/simple/nibabel/' 'datalad install https://github.com/OpenNeuroDatasets/ds000001.git'
+"$PY" -c "import sqlite3,sys,json; c=sqlite3.connect(sys.argv[1])
+c.execute('insert into part values (?,?,?,?,?,?)', ('pw', 'm', 's1', 1600, 1600,
+  json.dumps({'type': 'tool', 'tool': 'webfetch', 'state': {'input': {'url': 'https://fsl.fmrib.ox.ac.uk/fsl/docs/'}}})))
+c.commit()" "$d/.xdg-data/opencode/opencode.db"
+echo '{"task_id":"t","workdir":"sess-w1"}' > "$d/run.json"
+printf '$ curl -sO https://pypi.org/simple/nibabel/\n◈ fsl bet options\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['web_fetches'], r['web_searches'], r['web_hosts'])" "$d/run.json" | tr -d '\r')
+[ "$o" = "1 1 ['fsl.fmrib.ox.ac.uk', 'github.com', 'pypi.org']" ] \
+  && ok "web use: fetches from the database, searches from the transcript, hosts from commands and fetches" \
+  || bad "web use: $o"
+d="$T/w2"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+printf '%% WebFetch https://example.org/page\n%% WebFetch https://example.org/other\n$ echo hi\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['web_fetches'], r['web_searches'], r['web_hosts'])" "$d/run.json" | tr -d '\r')
+[ "$o" = "2 0 ['example.org']" ] && ok "  without a database, fetches come from the transcript" || bad "transcript fetches: $o"
+keyr() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$2" > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))['answer_key_reads']; print(';'.join(r).encode('ascii', 'replace').decode() or '[]')" "$d/run.json" | tr -d '\r'; }
+o=$(keyr ks1 '% WebFetch https://osf.io/zjqey/')
+has   "a fetch of the OSF ground-truth project is an answer-key read" "$o" "zjqey"
+o=$(keyr ks2 '$ osf -p y2dq4 clone .')
+has   "the osf CLI on the diffusion reference project is one too" "$o" "y2dq4"
+o=$(keyr ks3 '$ osf -p ru43c clone .')
+[ "$o" = "[]" ] && ok "a task's DATA project on OSF (ru43c) is not" || bad "ru43c flagged: $o"
+o=$(keyr ks4 '◈ q7v8c qsiprep outputs')
+has   "a web search naming a reference project is a read" "$o" "q7v8c"
 rm -rf "$T"
 
 echo

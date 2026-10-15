@@ -550,6 +550,11 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # What the pod had (env_record.py `measured`); None when not recorded.
     r["measured"] = rec.get("measured")
     r["answer_key_reads"] = rec.get("answer_key_reads")
+    # Web use (finalize_run.py): fetch and search counts and the hosts named.
+    # Descriptive; None when not recorded.
+    r["web_fetches"] = rec.get("web_fetches")
+    r["web_searches"] = rec.get("web_searches")
+    r["web_hosts"] = rec.get("web_hosts")
     r["arm_seen"] = rec.get("arm_seen")
     r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT
     # Why a declared lost run was lost (lost_run); "" for every recorded run.
@@ -1221,6 +1226,9 @@ def report(runs, task, rules=None):
                     "flagged": sum(1 for r in rs if r["answer_key_reads"]),
                     "unchecked": sum(1 for r in rs if r["answer_key_reads"] is None),
                 },
+                # Runs that fetched a web page or searched the web (finalize_run.py).
+                "web_use": sum(1 for r in rs
+                               if (r.get("web_fetches") or 0) + (r.get("web_searches") or 0) > 0),
                 "arm_seen": {
                     "flagged": sum(1 for r in rs if r["arm_seen"]),
                     "unchecked": sum(1 for r in rs if r["arm_seen"] is None),
@@ -1263,7 +1271,9 @@ CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_err
             # content hashes are what prove which skill was tested and that the prompt
             # was byte-identical across arms.
             "skills_hash", "prompt_hash",
-            "tasks_sha", "start", "end", "duration_s"]
+            "tasks_sha", "start", "end", "duration_s",
+            # At the end, so earlier columns keep their place.
+            "web_fetches", "web_searches", "web_hosts"]
 
 
 def main():
@@ -1321,7 +1331,7 @@ def main():
                       "decided_tools", "considered_tools", "flags"):
                 row[k] = ";".join(row.get(k) or [])
             # Three states, so an empty cell cannot be read as clean.
-            for k in ("off_spec", "answer_key_reads", "arm_seen"):
+            for k in ("off_spec", "answer_key_reads", "arm_seen", "web_hosts"):
                 v = row.get(k)
                 row[k] = "unchecked" if v is None else ";".join(v) if v else "none"
             w.writerow(row)
