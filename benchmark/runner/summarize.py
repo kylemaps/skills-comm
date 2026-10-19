@@ -1226,9 +1226,14 @@ def report(runs, task, rules=None):
                     "flagged": sum(1 for r in rs if r["answer_key_reads"]),
                     "unchecked": sum(1 for r in rs if r["answer_key_reads"] is None),
                 },
-                # Runs that fetched a web page or searched the web (finalize_run.py).
-                "web_use": sum(1 for r in rs
-                               if (r.get("web_fetches") or 0) + (r.get("web_searches") or 0) > 0),
+                # Runs that fetched a web page or searched the web (finalize_run.py);
+                # unchecked: the run's record has no web fields.
+                "web_use": {
+                    "flagged": sum(1 for r in rs
+                                   if (r.get("web_fetches") or 0) + (r.get("web_searches") or 0) > 0),
+                    "unchecked": sum(1 for r in rs
+                                     if r.get("web_fetches") is None and r.get("web_searches") is None),
+                },
                 "arm_seen": {
                     "flagged": sum(1 for r in rs if r["arm_seen"]),
                     "unchecked": sum(1 for r in rs if r["arm_seen"] is None),

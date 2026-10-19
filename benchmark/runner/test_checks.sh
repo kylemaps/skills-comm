@@ -774,6 +774,9 @@ sv m1 env+skill 6 $F 0 ',"off_spec":[]'
 for r in 1 2 3 4 5; do sv m2 env-only $r $F; sv m2 env+skill $r $P; done
 # m3: 3 runs per arm, below the minimum; left out by summarize and here alike.
 for r in 1 2 3; do sv m3 env-only $r $F; sv m3 env+skill $r $P; done
+# Web use on two m2 skill runs: one fetched, one recorded none; the other three record nothing.
+sv m2 env+skill 1 $P 0 ',"web_fetches":2,"web_searches":0,"web_hosts":["osf.io"]'
+sv m2 env+skill 2 $P 0 ',"web_fetches":0,"web_searches":0,"web_hosts":[]'
 "$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/out" >/dev/null 2>&1
 "$PY" - "$HERE" "$T/out" "$TK" > "$T/sens.out" 2>&1 <<'EOF'
 import csv, json, sys
@@ -795,11 +798,15 @@ check("flagged removed: the answer-key run is dropped", got("flagged removed")["
 check("on-spec only: the sudo run is dropped", got("on-spec only")["m1"] == (2, 5, 4, 5))
 check("the other model is untouched", all(got(s)["m2"] == (0, 5, 5, 5) for s in
       ("primary", "exclusions as fail", "flagged removed", "on-spec only")))
+check("web use: the fetching run is flagged, runs without web fields are unchecked",
+      summ["cells"]["m2|env+skill"]["web_use"] == {"flagged": 1, "unchecked": 3})
+check("web use: a cell that recorded none is all unchecked, not clean",
+      summ["cells"]["m1|env-only"]["web_use"] == {"flagged": 0, "unchecked": 5})
 EOF
 while IFS= read -r line; do
   case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
 done < "$T/sens.out"
-[ "$(grep -c '^OK:\|^FAIL:' "$T/sens.out")" = 7 ] || bad "sensitivity checks did not all run: $(tail -3 "$T/sens.out")"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/sens.out")" = 9 ] || bad "sensitivity checks did not all run: $(tail -3 "$T/sens.out")"
 "$PY" "$HERE/stratified_effect.py" --runs "$T/out/runs_$TK.csv" >/dev/null 2>&1
 expect 0 $? "the --runs table prints"
 rm -rf "$T"
