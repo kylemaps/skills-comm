@@ -402,7 +402,14 @@
           "assemble_cell.py); stratified_effect.py --runs also reports the analysis without",
           "them. A run stopped by a known infrastructure fault is re-run instead.",
           "Key: <task>__<model>__<arm>__r<n>, bare model id."
-        ]
+        ],
+        "structural-brain-extraction-7t-nodura__NRP.minimax-m2__env-only__r4": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "39297204358"
+          ],
+          "evidence": "Job 118212796331, runner pod nwk8w on node g2xgr. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 18:45:48Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,110,112 kB, UID 1001\", then the runner; container OOMKilled, exit 137. Working set under 2 GiB until 18:45:00Z, at the limit by 18:45:48Z. Ephemeral storage 3 MiB of 2 GiB (not an eviction); node Ready throughout. No run record or job log."
+        }
       },
       "tasks": {
         "structural-brain-extraction-7t": {
