@@ -45,6 +45,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from summarize import MIN_N_FOR_STATS, fisher_exact, newcombe  # noqa: E402
 
+CONTROL = "env-only"   # the arm compared against, unless --control names another
+
 
 def strata_of(summary, arm):
     """(model, control passes, control n, skill passes, skill n) per model."""
@@ -63,13 +65,14 @@ SCENARIOS = ["primary", "exclusions as fail", "exclusions as pass", "flagged rem
              "on-spec only", "lost removed", "lost as pass"]
 
 
-def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS):
+def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS, control=CONTROL):
     """(model, control passes, control n, skill passes, skill n) per model, from runs
     CSV rows, for one of SCENARIOS. A model with fewer than min_n runs in either arm
-    is left out, as summarize.py leaves it out of skill_effect."""
+    is left out, as summarize.py leaves it out of skill_effect. `control` is the arm
+    compared against: env-only, or another skill arm for a skill-against-skill test."""
     cells = {}
     for r in rows:
-        if r["arm"] not in ("env-only", arm):
+        if r["arm"] not in (control, arm):
             continue
         valid = r["valid"] == "True"
         passed = r["passed"] == "True"
@@ -89,21 +92,21 @@ def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS):
             continue
         elif scenario == "lost as pass" and r.get("lost"):
             passed = True
-        c = cells.setdefault(r["model"], {"env-only": [0, 0], arm: [0, 0]})
+        c = cells.setdefault(r["model"], {control: [0, 0], arm: [0, 0]})
         c[r["arm"]][0] += passed
         c[r["arm"]][1] += 1
-    return [(m, c["env-only"][0], c["env-only"][1], c[arm][0], c[arm][1])
+    return [(m, c[control][0], c[control][1], c[arm][0], c[arm][1])
             for m, c in sorted(cells.items())
-            if min(c["env-only"][1], c[arm][1]) >= max(min_n, 1)]
+            if min(c[control][1], c[arm][1]) >= max(min_n, 1)]
 
 
-def sensitivity(rows, arm):
-    """One row of statistics per scenario, for one task's runs."""
+def sensitivity(rows, arm, control=CONTROL):
+    """One row of statistics per scenario, for one task's runs: `arm` against `control`."""
     out = []
     for sc in SCENARIOS:
-        st = strata_from_runs(rows, arm, sc)
+        st = strata_from_runs(rows, arm, sc, control=control)
         rd, ci = mh_rd(st) if st else (float("nan"), (float("nan"), float("nan")))
-        out.append({"scenario": sc, "arm": arm, "models": len(st),
+        out.append({"scenario": sc, "arm": arm, "control_arm": control, "models": len(st),
                     "control": [sum(s[1] for s in st), sum(s[2] for s in st)],
                     "skill": [sum(s[3] for s in st), sum(s[4] for s in st)],
                     "mh_rd": rd, "mh_ci95": list(ci),
@@ -222,18 +225,29 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("summaries", nargs="*")
     ap.add_argument("--arm", default="env+skill")
+    ap.add_argument("--control", default=CONTROL,
+                    help="the arm compared against (default env-only); another skill arm "
+                         "gives a skill-against-skill test. With --runs only")
     ap.add_argument("--json")
     ap.add_argument("--runs", help="one task's runs CSV: primary and sensitivity analyses")
     ap.add_argument("--power", action="store_true")
     a = ap.parse_args()
 
+    if a.control != CONTROL and not a.runs:
+        print("--control needs --runs: the summaries hold only comparisons against env-only")
+        return 2
+    if a.control == a.arm:
+        print("--control and --arm are the same arm")
+        return 2
     if a.runs:
         with open(a.runs, encoding="utf-8", newline="") as fh:
             rows = list(csv.DictReader(fh))
-        out = sensitivity(rows, a.arm)
+        out = sensitivity(rows, a.arm, control=a.control)
         if not any(r["models"] for r in out):
-            print("no model has both env-only and %s runs in %s" % (a.arm, a.runs))
+            print("no model has both %s and %s runs in %s" % (a.control, a.arm, a.runs))
             return 1
+        if a.control != CONTROL:
+            print("%s against %s (control = %s)" % (a.arm, a.control, a.control))
         print("| analysis | models | control | skill | MH RD, pp (95% CI) | exact p | + / - |")
         print("|---|---|---|---|---|---|---|")
         for r in out:

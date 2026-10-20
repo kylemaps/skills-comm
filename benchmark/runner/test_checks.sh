@@ -762,7 +762,7 @@ T=$(mktemp -d); TK=diffusion-brain-mask
 sv() { d="$T/runs/${TK}__$1__$2__r$3"; mkdir -p "$d/submissions/$TK"
   echo x > "$d/submissions/$TK/output.nii.gz"
   echo "{\"score\":$4,\"verdict\":\"$5\"}" > "$d/envelope.json"
-  echo "{\"task_id\":\"$TK\",\"model\":\"$1\",\"condition\":\"$2\",\"repeat\":$3,\"exit_code\":${6:-0},\"output_present\":true,\"skills_installed\":\"$([ "$2" = env+skill ] && echo brain-extraction)\"${7:-}}" > "$d/run.json"
+  echo "{\"task_id\":\"$TK\",\"model\":\"$1\",\"condition\":\"$2\",\"repeat\":$3,\"exit_code\":${6:-0},\"output_present\":true,\"skills_installed\":\"$(case "$2" in env+skill*) echo brain-extraction;; esac)\"${7:-}}" > "$d/run.json"
   : > "$d/transcript.txt"; }
 P="100 indistinguishable"; F="0 invalid"
 sv m1 env-only 1 $P; sv m1 env-only 2 $P; for r in 3 4 5; do sv m1 env-only $r $F; done
@@ -777,6 +777,9 @@ for r in 1 2 3; do sv m3 env-only $r $F; sv m3 env+skill $r $P; done
 # Web use on two m2 skill runs: one fetched, one recorded none; the other three record nothing.
 sv m2 env+skill 1 $P 0 ',"web_fetches":2,"web_searches":0,"web_hosts":["osf.io"]'
 sv m2 env+skill 2 $P 0 ',"web_fetches":0,"web_searches":0,"web_hosts":[]'
+# A second skill arm on m1 and m2 (skill-against-skill): m1 3/5, m2 2/5.
+for r in 1 2 3; do sv m1 env+skill-b $r $P 0 ',"off_spec":[]'; done; for r in 4 5; do sv m1 env+skill-b $r $F 0 ',"off_spec":[]'; done
+for r in 1 2; do sv m2 env+skill-b $r $P; done; for r in 3 4 5; do sv m2 env+skill-b $r $F; done
 "$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/out" >/dev/null 2>&1
 "$PY" - "$HERE" "$T/out" "$TK" > "$T/sens.out" 2>&1 <<'EOF'
 import csv, json, sys
@@ -802,13 +805,27 @@ check("web use: the fetching run is flagged, runs without web fields are uncheck
       summ["cells"]["m2|env+skill"]["web_use"] == {"flagged": 1, "unchecked": 3})
 check("web use: a cell that recorded none is all unchecked, not clean",
       summ["cells"]["m1|env-only"]["web_use"] == {"flagged": 0, "unchecked": 5})
+def got_b(sc, control):
+    return {m: (x0, n0, x1, n1) for m, x0, n0, x1, n1 in strata_from_runs(rows, "env+skill-b", sc, control=control)}
+check("second skill arm against env-only: the default control", got_b("primary", "env-only")["m1"] == (2, 5, 3, 5))
+check("skill against skill: the control is the other skill arm's runs",
+      got_b("primary", "env+skill") == {"m1": (5, 6, 3, 5), "m2": (5, 5, 2, 5)})
+check("skill against skill: flagged removed drops the first skill's answer-key run",
+      got_b("flagged removed", "env+skill")["m1"] == (4, 5, 3, 5))
 EOF
 while IFS= read -r line; do
   case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
 done < "$T/sens.out"
-[ "$(grep -c '^OK:\|^FAIL:' "$T/sens.out")" = 9 ] || bad "sensitivity checks did not all run: $(tail -3 "$T/sens.out")"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/sens.out")" = 12 ] || bad "sensitivity checks did not all run: $(tail -3 "$T/sens.out")"
 "$PY" "$HERE/stratified_effect.py" --runs "$T/out/runs_$TK.csv" >/dev/null 2>&1
 expect 0 $? "the --runs table prints"
+"$PY" "$HERE/stratified_effect.py" --runs "$T/out/runs_$TK.csv" --arm env+skill-b --control env+skill > "$T/ab.out" 2>&1
+expect 0 $? "skill against skill: --control prints the table"
+grep -q "env+skill-b against env+skill" "$T/ab.out" && ok "  and names both arms" || bad "  the arms are not named: $(head -2 "$T/ab.out")"
+"$PY" "$HERE/stratified_effect.py" --control env+skill "$T/out/summary_$TK.json" >/dev/null 2>&1
+expect 2 $? "--control without --runs is refused (summaries compare against env-only only)"
+"$PY" "$HERE/stratified_effect.py" --runs "$T/out/runs_$TK.csv" --arm env+skill --control env+skill >/dev/null 2>&1
+expect 2 $? "--control equal to --arm is refused"
 rm -rf "$T"
 
 echo
