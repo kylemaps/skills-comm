@@ -493,6 +493,22 @@ o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" 
 hasnt "a here-document's body is data, not a command (sudo inside it)" "$o" "sudo"
 hasnt "  nor the docker pull inside the second one" "$o" "external-image"
 has   "  but the command after the here-document counts" "$o" "package-install"
+
+echo
+echo "=== finalize_run agent_outcome: one word for what became of the agent"
+E=$(printf '\033')
+outc() { d="$T/ao-$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"
+  printf '%s\n' "$3" > "$d/transcript.txt"
+  [ -n "$4" ] && { mkdir -p "$d/submissions/t"; echo x > "$d/submissions/t/output.nii.gz"; }
+  "$PY" "$HERE/finalize_run.py" "$d" "$2"
+  o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['agent_outcome'])" "$d/run.json" | tr -d '\r')
+  [ "$o" = "$5" ] && ok "$1 -> $5" || bad "$1: got $o, want $5"; }
+outc "exit 0 with an output" 0 '$ ls' yes completed
+outc "exit 0 without an output, no error" 0 '$ ls' "" completed
+outc "the wall (exit 124)" 124 '$ ls' yes timeout
+outc "a rate-limit error and no output" 1 "${E}[91m${E}[1mError: Rate limit exceeded for api_key" "" gateway_cut
+outc "the model gone from the gateway, no output" 1 "${E}[91m${E}[1mError: Not Found: Model '' was not found" "" gateway_cut
+outc "the same error but an output was still written" 0 "${E}[91m${E}[1mError: Rate limit exceeded for api_key" yes completed
 mkdir -p "$T/k5"; printf 'cat <<EOF\nsudo make install\nEOF\npip install x\n' > "$T/k5/setup.sh"
 echo '{"task_id":"t"}' > "$T/k5/run.json"; printf '$ bash setup.sh\n' > "$T/k5/transcript.txt"
 "$PY" "$HERE/finalize_run.py" "$T/k5" 0
@@ -1168,6 +1184,20 @@ rm -rf "$T/runs"; mw 1; mw 2
 gw "--wave 1"; expect 0 $? "a wave-1 cell in the pinned environment passes"
 gw ""; expect 1 $? "a sweep with waves refuses without --wave"
 gw "--wave 1" only-in-0; expect 1 $? "a task declared only in another wave is refused"
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model other --arm env-only   --sweep "$SW" --wave 1 >"$T/o" 2>&1; expect 1 $? "a model the wave does not declare for the task is refused"
+grep -q "model other is not declared" "$T/o" && ok "  and says which" || bad "  wrong reason: $(cat "$T/o")"
+"$PY" - "$SW" <<'P'
+import json, sys
+s = json.load(open(sys.argv[1])); s["waves"]["1"]["incomplete"] = {"_comment": ["x"], "m": "fingerprint changed"}
+json.dump(s, open(sys.argv[1], "w"))
+P
+gw "--wave 1"; expect 1 $? "a model the wave lists as incomplete is refused"
+grep -q "lists m as incomplete" "$T/o" && ok "  and says why" || bad "  wrong reason: $(cat "$T/o")"
+"$PY" - "$SW" <<'P'
+import json, sys
+s = json.load(open(sys.argv[1])); del s["waves"]["1"]["incomplete"]; json.dump(s, open(sys.argv[1], "w"))
+P
+gw "--wave 1"; expect 0 $? "  and passes again once the model is not listed"
 rm -rf "$T/runs"; mw 1; mw 2 ci-env1-x
 gw "--wave 1"; expect 1 $? "a run from another environment is refused"
 grep -q "FAIL  the wave's environment" "$T/o" && ok "  via the wave's environment gate" || bad "  refused by the wrong gate"

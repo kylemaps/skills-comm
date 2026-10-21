@@ -630,6 +630,25 @@ if rc is not None:
         rec["exit_code"] = int(rc)
     except ValueError:
         pass
+# What became of the agent, as one word a dispatcher can read without the log. The
+# job's own conclusion cannot carry it: an agent the gateway cut off exits non-zero
+# and the job still ends "success". summarize.py applies the wave's rules to the
+# same facts; this field only names the case.
+#   completed      the agent stopped on its own (its output may still fail grading)
+#   timeout        stopped at the wall (exit 124)
+#   gateway_cut    an opencode error the harness classes as infrastructure, no output
+#   no_model_call  no output and not one token spent (the database reported the tokens)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from summarize import INFRA_ERROR_RES, RUN_TIMEOUT_EXIT  # noqa: E402
+_infra = "\n".join("Error: " + m for m in rec.get("opencode_errors") or [])
+if rec.get("exit_code") == RUN_TIMEOUT_EXIT:
+    rec["agent_outcome"] = "timeout"
+elif not rec["output_present"] and any(rx.search(_infra) for rx, _ in INFRA_ERROR_RES):
+    rec["agent_outcome"] = "gateway_cut"
+elif not rec["output_present"] and "tokens_input" in rec and not rec.get("tokens_total"):
+    rec["agent_outcome"] = "no_model_call"      # only when the database reported the tokens
+else:
+    rec["agent_outcome"] = "completed"
 # The transcript is opencode's stdout redirect, so its last write is the moment the
 # agent stopped. Use that rather than "now": this script is re-run during collection
 # to backfill fields, and stamping now() there measured time-from-start-to-GRADING,
