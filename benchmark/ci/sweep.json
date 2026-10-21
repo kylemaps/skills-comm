@@ -192,6 +192,11 @@
         "tmp_on_work_volume": true
       },
       "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
+      "incomplete": {
+        "_comment": ["Declared models whose cells are not published: the gateway changed how it served",
+                     "the model during the wave (model_fingerprints). Their completed runs are exploratory."],
+        "EGI.glm-5.3": "fingerprint changed during the wave"
+      },
       "model_fingerprints": {
         "_comment": [
           "From the gateway probe of 2026-10-07 (preflight 37551331961), the same as wave 2.",
@@ -369,6 +374,10 @@
         "sudo": false
       },
       "models": ["EGI.kimi-k3", "NRP.minimax-m2", "NRP.qwen3", "EGI.glm-5.3"],
+      "incomplete": {
+        "_comment": ["As in wave 3."],
+        "EGI.glm-5.3": "fingerprint changed during the wave (8479d72b9276 from 2026-10-19 19:41 UTC)"
+      },
       "model_fingerprints": {
         "_comment": [
           "From the gateway probe of 2026-10-19 01:08Z (preflight 39183891209). EGI.kimi-k3's differs from wave 5's (c25fc2b29533):",
