@@ -358,6 +358,15 @@ def main():
         raise SystemExit("REFUSED: arm %s is not declared for %s" % (a.arm, a.task))
 
     model = a.model.replace("neurodesk/", "")
+    declared = w["tasks"][a.task].get("models") or w.get("models")
+    if declared is not None and model not in declared:
+        raise SystemExit("REFUSED: model %s is not declared for %s%s" % (
+            model, a.task, " in wave %s" % a.wave if a.wave else ""))
+    # A model the wave lists as incomplete (its served fingerprint changed mid-wave) has
+    # no publishable cell, whatever fingerprint its runs carry.
+    incomplete = {k: v for k, v in (w.get("incomplete") or {}).items() if not k.startswith("_")}
+    if model in incomplete:
+        raise SystemExit("REFUSED: wave %s lists %s as incomplete: %s" % (a.wave, model, incomplete[model]))
     dirs = [d for d in sorted(glob.glob(os.path.join(a.runs, "%s__*" % a.task)))
             if os.path.isdir(d)]
     runs = [load_run(d, a.task, rules=rules) for d in dirs]
