@@ -47,6 +47,9 @@ agent chose. This reads them back out of the transcript once the run is over:
                  comes over the network too. All three None when neither the
                  transcript nor the database could be read.
   exit_code / output_present / end
+  tokens_output_per_s  output tokens per second of generation, from the database's
+                       per-message timings; generation_s the seconds summed
+  agent_outcome        completed / timeout / gateway_cut / no_model_call
 
 Safe to re-run: it only adds keys. Also usable to backfill older runs.
 """
@@ -584,6 +587,28 @@ def _session_row(run_dir):
         return None
 
 
+def _generation_speed(run_dir):
+    """(output tokens per second of generation, generation seconds) over the run's
+    assistant messages, from the database's per-message timings; None without it."""
+    opened = _open_db(run_dir)
+    if opened is None:
+        return None
+    con, _ = opened
+    tokens = secs = 0.0
+    try:
+        for (data,) in con.execute("select data from message"):
+            m = json.loads(data)
+            t = m.get("time") or {}
+            if m.get("role") == "assistant" and t.get("created") and t.get("completed"):
+                secs += (t["completed"] - t["created"]) / 1000
+                tokens += (m.get("tokens") or {}).get("output") or 0
+    except Exception:
+        return None
+    finally:
+        con.close()
+    return (round(tokens / secs, 2), int(secs)) if secs > 0 else None
+
+
 srow = _session_row(run_dir)
 if srow is not None:
     keys = srow.keys()
@@ -607,6 +632,8 @@ if srow is not None:
             pass
     rec["tokens_total"] = sum(
         rec.get(k, 0) or 0 for k in ("tokens_input", "tokens_output"))
+_speed = _generation_speed(run_dir)
+rec["tokens_output_per_s"], rec["generation_s"] = _speed if _speed else (None, None)
 
 task = rec.get("task_id", "")
 out = os.path.join(run_dir, "submissions", task, "output.nii.gz")
