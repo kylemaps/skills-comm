@@ -9,7 +9,7 @@ The VM runs with DISPLAY unset and no X11 sockets, so a GL tool cannot work ther
 The QC path the skills document is matplotlib with the Agg backend, which needs no
 display. Neither fact stops an agent inventing its own visual check -- it has a shell.
 
-cluster-explorer found one in a 20-run sample:
+One, found in a 20-run sample:
 
     module load fsl/6.0.7.18 && fsleyes render <mask> &>/dev/null \\
       || fslview <mask> 2>&1 | head -5 \\

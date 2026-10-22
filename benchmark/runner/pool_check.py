@@ -5,8 +5,8 @@
 
 WHY A SEPARATE CHECK
 `summarize.py` sets `poolable` per task: were the runs in THIS task made under the
-same conditions. Moni asked a different question -- can we make a pooled statement
-across tasks -- and the per-task flag cannot answer it, because it is computed inside
+same conditions. A different question -- can we make a pooled statement across
+tasks -- is one the per-task flag cannot answer it, because it is computed inside
 one task and never sees the others.
 
 The two questions also need different rules, which is the real reason this is not a

@@ -6,7 +6,7 @@
 
 WHY THIS EXISTS
 `summarize.py` excludes every exit-124 run, including the ones that wrote a mask,
-on the grounds that a killed run's output is an unknown intermediate. Moni's
+on the grounds that a killed run's output is an unknown intermediate. The
 objection is that this discards real successes: 27 of the 53 visible timeouts wrote
 a gradeable mask and 15 of those score 0.94-0.986.
 

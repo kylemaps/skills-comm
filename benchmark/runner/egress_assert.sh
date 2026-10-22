@@ -70,7 +70,6 @@ github.com files.pythonhosted.org}"
 # when we measured. The list is a floor in a stronger sense than "we might have missed
 # one" -- NEW INFRASTRUCTURE CREATES NEW HOSTS, and no measurement taken before it
 # exists can contain them. Re-derive whenever how-we-fetch-anything changes.
-# Raised by cluster-explorer, 2026-09-21.
 
 # Defined once, not inside the loop where it was first written.
 _resolve_py() { python3 -c "import socket,sys;socket.gethostbyname(sys.argv[1])" "$1"; }

@@ -36,8 +36,8 @@ bound can be compared against the one that would actually separate good from bad
 
 WHAT IS AND IS NOT A DISAGREEMENT
 ---------------------------------
-Her battery was written against her notion of a good mask; the grader encodes
-Moni's consensus reference. Where they disagree that is a real disagreement
+The QC battery was written against its author's notion of a good mask; the grader
+encodes the consensus reference. Where they disagree that is a real disagreement
 between two defensible definitions, not automatically miscalibration. This
 script measures the disagreement and does not adjudicate it.
 """

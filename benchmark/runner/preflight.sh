@@ -131,9 +131,8 @@ fi
 # cluster team something that is no longer true, and the place to find that out is
 # here rather than from a tool's pass rate on a pool that runs userns.
 #
-# Wired in deliberately. I wrote this check, described it as "meant for preflight",
-# and left preflight not calling it -- which is cluster-prod's null-route lesson
-# verbatim: proving the pipe works is not proving anything is in the pipe.
+# Wired in deliberately: a check that exists but is never called proves that the
+# pipe works, not that anything is in it.
 if [ -x "$(dirname "$0")/container_opts_check.sh" ]; then
   if ! sh "$(dirname "$0")/container_opts_check.sh" >/tmp/.copts.$$ 2>&1; then
     echo

@@ -522,8 +522,8 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         branch, or moving one, changes what counts as valid without touching
         anything named "valid" and without failing a test.
 
-        cluster-prod hit the same structure in an Alertmanager route tree: their
-        critical alert is delivered by falling through every null branch rather than
+        The same structure appears in an Alertmanager route tree whose critical
+        alert is delivered by falling through every null branch rather than
         by matching a positive rule, so a future route inserted above it with
         continue:false would capture it silently and nothing about the alert would
         change. Same fragility, different system.

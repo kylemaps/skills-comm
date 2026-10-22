@@ -24,8 +24,7 @@
 # fault on the day it lands, rather than inferred from a tool's pass rate months
 # later.
 #
-# Raised by cluster-prod, 2026-09-18, against my own claim -- I had read one wrapper
-# and reported it as a property of the workload.
+# One wrapper read in isolation says nothing about the workload's options.
 set -u
 
 ROOT="${CVMFS_ROOT:-/cvmfs/neurodesk.ardc.edu.au}/containers"
@@ -65,9 +64,9 @@ fi
 # Second, and this is the reason the file grep further down cannot stand alone: the
 # option can arrive at runtime from the environment without appearing in any wrapper
 # on CVMFS. A grep over every wrapper returning zero hits would read as proof and be
-# nothing of the kind. cluster-prod calls this the pattern where the evidence is
-# absent from the first field you would check, and counts this as its cleanest
-# instance -- the misleading evidence does not merely fail to appear, it actively
+# nothing of the kind: the evidence is absent from the first field one would check,
+# and the absence reads as proof. The misleading evidence does not merely fail to
+# appear, it actively
 # reads as confirmation.
 echo "  where it could be assigned:"
 grep -rsn "neurodesk_singularity_opts" \

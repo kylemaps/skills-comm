@@ -98,7 +98,7 @@ cp "$HERE/summarize.py" "$HERE/collect_results.sh" "$HERE/finalize_run.py" "$OUT
 #
 # On a cluster with an egress policy in front of it that reads as the policy
 # blocking huggingface.co. It is a missing pip package. Someone would spend a day
-# on the firewall. Found by cluster-explorer, 2026-09-17.
+# on the firewall.
 #
 # Deliberately NOT fixed by patching the vendored grader. A pack that ships a
 # modified scorer is no longer validating the grader that produced our results,
