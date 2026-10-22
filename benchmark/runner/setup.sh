@@ -35,8 +35,14 @@ echo "=== 4. opencode provider config ==="
 # Safe to re-run: it merges, so ollama and jetstream survive, and it refuses to
 # write an empty or placeholder model list rather than replacing a working config
 # with a broken one.
+# BENCH_SWEEP: sweep.json's path, so every provider it declares (not only
+# neurodesk) gets a config entry -- no provider's key env name is hard-coded here
+# beyond NEURODESK_API_KEY, the default's own.
+SWEEP_FILE="${BENCH_SWEEP:-$(dirname "$0")/../ci/sweep.json}"
+PROVIDERS_ARGS=()
+[ -f "$SWEEP_FILE" ] && PROVIDERS_ARGS=(--providers "$SWEEP_FILE")
 if [ -n "${NEURODESK_API_KEY:-}" ]; then
-  python3 "$(dirname "$0")/write_opencode_config.py" || echo "  (config unchanged)"
+  python3 "$(dirname "$0")/write_opencode_config.py" "${PROVIDERS_ARGS[@]}" || echo "  (config unchanged)"
 else
   echo "  skipped: NEURODESK_API_KEY is unset, see below"
 fi

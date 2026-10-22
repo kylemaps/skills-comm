@@ -8,6 +8,25 @@
     "is not checked."
   ],
 
+  "providers": {
+    "_comment": [
+      "Every model id a wave declares is a bare id (no provider prefix) today, which",
+      "names the one provider every run has ever used. A model id WITH a prefix",
+      "('openai/gpt-5') names its provider explicitly, and wave_check.py refuses one",
+      "whose provider is not declared here.",
+      "",
+      "base_url: the OpenAI-compatible API root. key_env: the environment variable",
+      "holding its key -- never the key itself. models_endpoint: true when the",
+      "roster is discoverable at <base_url>/models (write_opencode_config.py); false",
+      "means the provider's models must be given explicitly (--models)."
+    ],
+    "neurodesk": {
+      "base_url": "https://llm.neurodesk.org/openai",
+      "key_env": "NEURODESK_API_KEY",
+      "models_endpoint": true
+    }
+  },
+
   "reps": 10,
 
   "arms": {

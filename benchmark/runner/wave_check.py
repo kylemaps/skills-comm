@@ -6,6 +6,8 @@
 
 Fails (exit 1) when:
   - the wave is not declared in sweep.json;
+  - a model the wave declares names a provider (the prefix before '/', e.g.
+    `openai/gpt-5`) that sweep.json's top-level `providers` does not declare;
   - a pinned field (`waves.<n>.pins`) is not given, or differs from the value given;
   - a measured field (`waves.<n>.measured`: what the pod has, read from the kernel)
     is not given or does not match: equal, or at least the value for a key ending in
@@ -65,13 +67,42 @@ def measured_problems(declared, given):
     return out
 
 
+def declared_models(w):
+    """Every model id a wave references: its own `models`, each task's `models`, and
+    the fingerprint keys -- anywhere a model id can appear."""
+    ids = set(w.get("models") or [])
+    for t in (w.get("tasks") or {}).values():
+        ids |= set(t.get("models") or [])
+    ids |= {k for k in (w.get("model_fingerprints") or {}) if not k.startswith("_")}
+    return ids
+
+
+def provider_problems(sweep, wave):
+    """Problems where a wave names a model with a provider prefix ('openai/gpt-5')
+    that sweep.json's top-level `providers` does not declare. A model id with no '/'
+    names no provider and is not checked -- it resolves to the harness's default."""
+    w = (sweep.get("waves") or {}).get(str(wave))
+    if not isinstance(w, dict):
+        return []
+    providers = sweep.get("providers") or {}
+    out = []
+    for m in sorted(declared_models(w)):
+        if "/" not in m:
+            continue
+        provider = m.split("/", 1)[0]
+        if provider not in providers:
+            out.append("model %s names provider %s, which sweep.json's providers "
+                       "does not declare" % (m, provider))
+    return out
+
+
 def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
           skills_hash=None):
     """A list of problems; empty when the run belongs to the wave."""
     w = (sweep.get("waves") or {}).get(str(wave))
     if not isinstance(w, dict):
         return ["wave %s is not declared in the sweep" % wave]
-    out = []
+    out = list(provider_problems(sweep, wave))
     for k, want in sorted((w.get("pins") or {}).items()):
         if k not in given:
             out.append("the wave pins %s=%s and no value was given to check" % (k, want))

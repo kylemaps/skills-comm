@@ -367,24 +367,45 @@ VIEW_RC=$?
 # Deleted before the agent starts: the config holds the resolved gateway key, and the
 # skill list names the arm's skills.
 rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
-[ "$VIEW_RC" = 0 ] || {
-  echo "ABORT: what opencode offers the agent does not match the arm. No tokens spent." >&2
-  exit 3; }
+# A stop before the agent starts, named in the record so a dispatcher reads one
+# field (agent_outcome = not_started, stopped_before_agent = why) instead of the log.
+stop_before_agent() {
+  python - "$RECORD" "$1" <<'PY'
+import json, sys
+p, why = sys.argv[1], sys.argv[2]
+try:
+    rec = json.load(open(p))
+except Exception:
+    rec = {}
+rec["agent_outcome"], rec["stopped_before_agent"] = "not_started", why
+json.dump(rec, open(p, "w"), indent=1)
+PY
+  echo "ABORT: $2" >&2
+  exit 3
+}
+[ "$VIEW_RC" = 0 ] || stop_before_agent "agent-view-mismatch" \
+  "what opencode offers the agent does not match the arm. No tokens spent."
+
+# BENCH_SWEEP: sweep.json's path, so model_probe.py can resolve a model id's
+# provider (base URL, key env) from sweep.json's own `providers` instead of only
+# the one gateway -- no provider's key env name is hard-coded here beyond that
+# default. Defaults to the path every workflow uses today.
+SWEEP_FILE="${BENCH_SWEEP:-$HERE/../ci/sweep.json}"
+PROVIDERS_ARGS=()
+[ -f "$SWEEP_FILE" ] && PROVIDERS_ARGS=(--providers "$SWEEP_FILE")
 
 # The gateway's roster and what it reports serving for this model, recorded before
-# the agent starts (gateway_roster, model_served, model_fingerprint) and again after
-# it ends (the same with _end, and model_changed). Record only.
-python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" || true
+# the agent starts (gateway_roster, model_served, model_fingerprint, provider) and
+# again after it ends (the same with _end, and model_changed). Record only.
+python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" "${PROVIDERS_ARGS[@]}" || true
 
 # The model must be the one the wave declares (waves.<n>.model_fingerprints in
 # sweep.json). A different or missing fingerprint means the gateway serves another
 # model or serving engine under this name; the run stops before the agent starts.
-SWEEP_FILE="$HERE/../ci/sweep.json"
 if [ -n "${RUN_WAVE:-}" ] && [ -f "$SWEEP_FILE" ]; then
   python "$HERE/wave_check.py" --sweep "$SWEEP_FILE" --wave "$RUN_WAVE" --model "$MODEL" \
-    --record "$RECORD" --fingerprint-only >&2 || {
-    echo "ABORT: the model served is not the one wave $RUN_WAVE declares. Only the probe was spent." >&2
-    exit 3; }
+    --record "$RECORD" --fingerprint-only >&2 || stop_before_agent "fingerprint-changed" \
+    "the model served is not the one wave $RUN_WAVE declares. Only the probe was spent."
 fi
 
 # -k: SIGKILL if the agent ignores the SIGTERM at the wall. Without it a hung
@@ -401,7 +422,7 @@ stop_agent
 DB="$WORK/.xdg-data/opencode/opencode.db"
 [ -f "$DB" ] && python -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('PRAGMA wal_checkpoint(TRUNCATE)')" \
   "$DB" 2>/dev/null
-python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" --phase end || true
+python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" --phase end "${PROVIDERS_ARGS[@]}" || true
 land
 # run.json is written before the agent starts, so it cannot know which tools the
 # agent picked. Read them back out of the transcript now.

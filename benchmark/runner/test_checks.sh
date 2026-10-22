@@ -1830,5 +1830,91 @@ ek; expect 1 $? "fails on AGENTS.md where the agent's working directory is creat
 rm -rf "$T"
 
 echo
+echo "=== providers: sweep.json declares each model's provider; wave_check refuses an undeclared one"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"providers":{"neurodesk":{"base_url":"https://llm.neurodesk.org/openai","key_env":"NEURODESK_API_KEY","models_endpoint":true}},
+ "waves":{"1":{"tasks":{"t":{"models":["openrouter/some-model"],"arms":["env-only"]}}}}}
+J
+"$PY" "$HERE/wave_check.py" --sweep "$SW" --wave 1 >"$T/o" 2>&1
+expect 1 $? "a model naming an undeclared provider is refused"
+grep -q "names provider openrouter" "$T/o" && ok "  and says which provider" || bad "  wrong reason: $(cat "$T/o")"
+sed 's#openrouter/some-model#neurodesk/some-model#' "$SW" > "$T/sw_ok.json"
+"$PY" "$HERE/wave_check.py" --sweep "$T/sw_ok.json" --wave 1 >/dev/null 2>&1
+expect 0 $? "a model naming a declared provider passes"
+"$PY" "$HERE/wave_check.py" --sweep "$HERE/../ci/sweep.json" --wave 1 \
+  image_version=ci-env3-apptainer1.4.3-fsl6.0.7.22-opencode1.18.32 tasks_sha=e98e3b6 >/dev/null 2>&1
+expect 0 $? "the real sweep's bare model ids (no provider prefix) are not checked"
+rm -rf "$T"
+
+echo
+echo "=== write_opencode_config --providers: every provider sweep.json declares becomes an opencode provider"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"providers":{
+  "neurodesk":{"base_url":"https://llm.neurodesk.org/openai","key_env":"NEURODESK_API_KEY","models_endpoint":false},
+  "openai":{"base_url":"https://api.openai.com/v1","key_env":"OPENAI_API_KEY","models_endpoint":false}}}
+J
+"$PY" "$HERE/write_opencode_config.py" --providers "$SW" --models neurodesk/EGI.kimi-k3,openai/gpt-5 \
+  --out "$T/opencode.json" >"$T/o" 2>&1
+expect 0 $? "writes a config with no network call (models_endpoint false, --models given)"
+"$PY" -c "import json,sys; c=json.load(open(sys.argv[1])); p=c['provider']
+assert set(p)=={'neurodesk','openai'}, p
+assert p['neurodesk']['options']['baseURL']=='https://llm.neurodesk.org/openai', p['neurodesk']
+assert p['openai']['options']['apiKey']=='{env:OPENAI_API_KEY}', p['openai']
+assert 'gpt-5' in p['openai']['models']" "$T/opencode.json" 2>/dev/null \
+  && ok "  two opencode providers, each with its own baseURL and apiKey env" || bad "  config built wrong"
+"$PY" "$HERE/write_opencode_config.py" --providers "$SW" --out "$T/o2.json" >/dev/null 2>&1
+expect 1 $? "a provider with no models_endpoint and no --models is refused"
+envs=$("$PY" "$HERE/write_opencode_config.py" --providers "$SW" --list-key-envs)
+[ "$envs" = "NEURODESK_API_KEY OPENAI_API_KEY" ] && ok "--list-key-envs prints both names" || bad "--list-key-envs printed: $envs"
+rm -rf "$T"
+
+echo
+echo "=== model_probe: fingerprint strength, basis and provider"
+T=$(mktemp -d)
+echo '{"data":[]}' > "$T/roster.json"
+echo '{"model":"Qwen/Qwen3-235B","system_fingerprint":"fp_1"}' > "$T/strong.json"
+echo '{"model":"Qwen/Qwen3-235B"}' > "$T/weak.json"
+echo '{}' > "$T/noheaders.json"
+field() { "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r[sys.argv[2]])" "$T/r.json" "$1" | tr -d '\r'; }
+echo '{"task_id":"t"}' > "$T/r.json"
+"$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" \
+  --offline "$T/roster.json" "$T/strong.json" "$T/noheaders.json" >/dev/null 2>&1
+[ "$(field model_fingerprint_strength)" = strong ] && ok "system_fingerprint present: strength strong" || bad "strength wrong"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['model_probe']['basis']==['model','system_fingerprint'], r['model_probe']['basis']" "$T/r.json" 2>/dev/null \
+  && ok "  basis names both identity fields present" || bad "  basis wrong"
+[ "$(field provider)" = neurodesk ] && ok "provider recorded from the model id's prefix" || bad "provider not recorded"
+echo '{"task_id":"t"}' > "$T/r.json"
+"$PY" "$HERE/model_probe.py" --model neurodesk/qwen3 --record "$T/r.json" \
+  --offline "$T/roster.json" "$T/weak.json" "$T/noheaders.json" >/dev/null 2>&1
+[ "$(field model_fingerprint_strength)" = weak ] && ok "no system_fingerprint, no identity headers: strength weak" || bad "weak strength not produced"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['model_probe']['basis']==['model'], r['model_probe']['basis']" "$T/r.json" 2>/dev/null \
+  && ok "  basis names only the model id" || bad "  basis wrong"
+echo '{"task_id":"t"}' > "$T/r.json"
+"$PY" "$HERE/model_probe.py" --model qwen3 --record "$T/r.json" \
+  --offline "$T/roster.json" "$T/strong.json" "$T/noheaders.json" >/dev/null 2>&1
+[ "$(field provider)" = None ] && ok "  null for a model id with no provider prefix" || bad "  provider wrong for a bare id"
+rm -rf "$T"
+
+echo
+echo "=== model_probe --providers: resolves a non-default provider's base URL and key env"
+T=$(mktemp -d)
+cat > "$T/sweep.json" <<'J'
+{"providers":{"openai":{"base_url":"https://api.openai.com/v1","key_env":"OPENAI_API_KEY","models_endpoint":true}}}
+J
+"$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); from model_probe import resolve
+assert resolve('openai/gpt-5', sys.argv[2], 'https://llm.neurodesk.org/openai') == ('https://api.openai.com/v1', 'OPENAI_API_KEY', 'openai')
+assert resolve('neurodesk/EGI.kimi-k3', sys.argv[2], 'https://llm.neurodesk.org/openai') == ('https://llm.neurodesk.org/openai', 'NEURODESK_API_KEY', 'neurodesk')
+assert resolve('bare-id', sys.argv[2], 'https://llm.neurodesk.org/openai') == ('https://llm.neurodesk.org/openai', 'NEURODESK_API_KEY', None)
+assert resolve('unknownprovider/x', sys.argv[2], 'https://llm.neurodesk.org/openai') == ('https://llm.neurodesk.org/openai', 'NEURODESK_API_KEY', 'unknownprovider')" \
+  "$HERE" "$T/sweep.json" \
+  && ok "resolve() uses a declared provider's base_url/key_env, keeps neurodesk on its own env override, and falls back for the rest" \
+  || bad "resolve() wrong"
+rm -rf "$T"
+
+echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ] || exit 1
