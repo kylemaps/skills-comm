@@ -30,7 +30,13 @@ the primary analysis and each sensitivity analysis:
   on-spec only         valid runs whose off_spec is "none" or "unchecked"
   lost removed         valid runs without the declared lost runs (sweep.json `lost`)
   lost as pass         valid runs, each declared lost run counted as a pass
+  timeouts removed     valid runs without those where timed_out == True
 A model with fewer than 5 runs in either arm is left out (MIN_N_FOR_STATS).
+
+Both tables (--runs and --summaries) also print a heterogeneity test across strata:
+Cochran's Q on the per-stratum risk differences with inverse-variance (Wald) weights,
+its chi-square p (df = strata - 1), and I^2 = max(0, (Q-df)/Q). A cell at 0 or n gets
+a 0.5 continuity correction before its variance is computed. Reported as "het p (I^2)".
 
 --power prints the probability that a single 10-vs-10 cell reaches p < 0.05 with
 Fisher's exact test, for a range of true pass rates.
@@ -62,7 +68,7 @@ def strata_of(summary, arm):
 
 
 SCENARIOS = ["primary", "exclusions as fail", "exclusions as pass", "flagged removed",
-             "on-spec only", "lost removed", "lost as pass"]
+             "on-spec only", "lost removed", "lost as pass", "timeouts removed"]
 
 
 def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS, control=CONTROL):
@@ -92,6 +98,8 @@ def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS, control=CONTROL
             continue
         elif scenario == "lost as pass" and r.get("lost"):
             passed = True
+        elif scenario == "timeouts removed" and r.get("timed_out") == "True":
+            continue
         c = cells.setdefault(r["model"], {control: [0, 0], arm: [0, 0]})
         c[r["arm"]][0] += passed
         c[r["arm"]][1] += 1
@@ -106,13 +114,15 @@ def sensitivity(rows, arm, control=CONTROL):
     for sc in SCENARIOS:
         st = strata_from_runs(rows, arm, sc, control=control)
         rd, ci = mh_rd(st) if st else (float("nan"), (float("nan"), float("nan")))
+        q, het_p, i2 = heterogeneity(st)
         out.append({"scenario": sc, "arm": arm, "control_arm": control, "models": len(st),
                     "control": [sum(s[1] for s in st), sum(s[2] for s in st)],
                     "skill": [sum(s[3] for s in st), sum(s[4] for s in st)],
                     "mh_rd": rd, "mh_ci95": list(ci),
                     "exact_p": exact_stratified_p(st) if st else float("nan"),
                     "positive": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 > x0 / n0),
-                    "negative": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 < x0 / n0)})
+                    "negative": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 < x0 / n0),
+                    "het_q": q, "het_p": het_p, "i2": i2})
     return out
 
 
@@ -130,6 +140,93 @@ def mh_rd(strata):
     var = (rd * p + q) / (sw * sw)
     se = math.sqrt(max(var, 0.0))
     return rd, (rd - 1.96 * se, rd + 1.96 * se)
+
+
+def _gammp_series(a, x):
+    """Regularized lower incomplete gamma P(a,x), power series. Valid for x < a+1."""
+    if x <= 0:
+        return 0.0
+    ap, summ, delta = a, 1.0 / a, 1.0 / a
+    for _ in range(500):
+        ap += 1
+        delta *= x / ap
+        summ += delta
+        if abs(delta) < abs(summ) * 1e-14:
+            break
+    return summ * math.exp(-x + a * math.log(x) - math.lgamma(a))
+
+
+def _gammq_cf(a, x):
+    """Regularized upper incomplete gamma Q(a,x), continued fraction. Valid for x >= a+1."""
+    tiny = 1e-300
+    b = x + 1 - a
+    c = 1 / tiny
+    d = 1 / b
+    h = d
+    for i in range(1, 500):
+        an = -i * (i - a)
+        b += 2
+        d = an * d + b
+        if abs(d) < tiny:
+            d = tiny
+        c = b + an / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1) < 1e-14:
+            break
+    return math.exp(-x + a * math.log(x) - math.lgamma(a)) * h
+
+
+def chi2_sf(x, df):
+    """Upper-tail chi-square survival function P(X > x), df degrees of freedom.
+
+    Via the regularized incomplete gamma function: series for the lower tail where
+    it converges fast (x < a+1), continued fraction for the upper tail otherwise
+    (Numerical Recipes' gammp/gammq split).
+    """
+    if x <= 0:
+        return 1.0
+    a, xx = df / 2.0, x / 2.0
+    if xx < a + 1:
+        return 1.0 - _gammp_series(a, xx)
+    return _gammq_cf(a, xx)
+
+
+def heterogeneity(strata):
+    """Cochran's Q for heterogeneity of the risk difference across strata.
+
+    Each stratum's RD and Wald variance come from its own 2x2 table, with a 0.5
+    continuity correction applied to all four cells when one of them is 0 or n (a
+    proportion of 0 or 1 would otherwise give a zero variance). Q is the
+    inverse-variance-weighted sum of squared deviations from the pooled RD; its
+    p-value is a chi-square upper tail on df = strata - 1; I^2 = max(0, (Q-df)/Q).
+    Returns (nan, nan, nan) with fewer than two strata -- heterogeneity needs at
+    least two to compare.
+    """
+    if len(strata) < 2:
+        return float("nan"), float("nan"), float("nan")
+    rds, ws = [], []
+    for _, x0, n0, x1, n1 in strata:
+        a, b, c, d = x0, n0 - x0, x1, n1 - x1
+        if 0 in (a, b, c, d):
+            a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
+        na, nc = a + b, c + d
+        p0, p1 = a / na, c / nc
+        var = p0 * (1 - p0) / na + p1 * (1 - p1) / nc
+        rds.append(p1 - p0)
+        ws.append(1 / var if var > 0 else 0.0)
+    sw = sum(ws)
+    if not sw:
+        return float("nan"), float("nan"), float("nan")
+    pooled = sum(w * rd for w, rd in zip(ws, rds)) / sw
+    q = sum(w * (rd - pooled) ** 2 for w, rd in zip(ws, rds))
+    df = len(strata) - 1
+    p = chi2_sf(q, df) if df > 0 else float("nan")
+    i2 = max(0.0, (q - df) / q) if q > 0 else 0.0
+    return q, p, i2
 
 
 def hypergeom(m, n1, n0):
@@ -180,6 +277,7 @@ def analyse(summaries, arm):
         if not st:
             continue
         rd, ci = mh_rd(st)
+        q, het_p, i2 = heterogeneity(st)
         rows.append({
             "task": s.get("task"),
             "arm": arm,
@@ -192,6 +290,7 @@ def analyse(summaries, arm):
             "positive": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 > x0 / n0),
             "zero": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 == x0 / n0),
             "negative": sum(1 for _, x0, n0, x1, n1 in st if x1 / n1 < x0 / n0),
+            "het_q": q, "het_p": het_p, "i2": i2,
         })
     ps = [r["exact_p"] for r in rows]
     for r, h, b in zip(rows, holm(ps), bh(ps)):
@@ -218,6 +317,11 @@ def power_table(n=10, alpha=0.05):
 
 def fmt_pp(x):
     return "%+.0f" % (100 * x)
+
+
+def fmt_het(p, i2):
+    """"het p (I^2)" cell: n/a with fewer than two strata to compare."""
+    return "n/a" if p != p else "%.4f (%.0f%%)" % (p, 100 * i2)
 
 
 def main():
@@ -248,13 +352,14 @@ def main():
             return 1
         if a.control != CONTROL:
             print("%s against %s (control = %s)" % (a.arm, a.control, a.control))
-        print("| analysis | models | control | skill | MH RD, pp (95% CI) | exact p | + / - |")
-        print("|---|---|---|---|---|---|---|")
+        print("| analysis | models | control | skill | MH RD, pp (95% CI) | exact p | + / - | het p (I2) |")
+        print("|---|---|---|---|---|---|---|---|")
         for r in out:
-            print("| %s | %d | %d/%d | %d/%d | %s (%s, %s) | %.4f | %d / %d |" % (
+            print("| %s | %d | %d/%d | %d/%d | %s (%s, %s) | %.4f | %d / %d | %s |" % (
                 r["scenario"], r["models"], r["control"][0], r["control"][1],
                 r["skill"][0], r["skill"][1], fmt_pp(r["mh_rd"]), fmt_pp(r["mh_ci95"][0]),
-                fmt_pp(r["mh_ci95"][1]), r["exact_p"], r["positive"], r["negative"]))
+                fmt_pp(r["mh_ci95"][1]), r["exact_p"], r["positive"], r["negative"],
+                fmt_het(r["het_p"], r["i2"])))
         if a.json:
             with open(a.json, "w", encoding="utf-8") as fh:
                 json.dump(out, fh, indent=2)
@@ -273,13 +378,13 @@ def main():
     if not rows:
         print("no task has a %s arm" % a.arm)
         return 1
-    print("| task | models | MH RD, pp (95% CI) | exact p | Holm | BH | + / 0 / - |")
-    print("|---|---|---|---|---|---|---|")
+    print("| task | models | MH RD, pp (95% CI) | exact p | Holm | BH | + / 0 / - | het p (I2) |")
+    print("|---|---|---|---|---|---|---|---|")
     for r in rows:
-        print("| %s | %d | %s (%s, %s) | %.4f | %.4f | %.4f | %d / %d / %d |" % (
+        print("| %s | %d | %s (%s, %s) | %.4f | %.4f | %.4f | %d / %d / %d | %s |" % (
             r["task"], len(r["models"]), fmt_pp(r["mh_rd"]), fmt_pp(r["mh_ci95"][0]),
             fmt_pp(r["mh_ci95"][1]), r["exact_p"], r["holm_p"], r["bh_p"],
-            r["positive"], r["zero"], r["negative"]))
+            r["positive"], r["zero"], r["negative"], fmt_het(r["het_p"], r["i2"])))
     print()
     for r in rows:
         print("%s" % r["task"])

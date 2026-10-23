@@ -694,6 +694,67 @@ class TestPoolingDecision(unittest.TestCase):
         self.assertIn('"provenance_varies"', self.src)
 
 
+class TestHeterogeneity(unittest.TestCase):
+    """Cochran's Q across strata, and the chi-square survival function it needs."""
+
+    def setUp(self):
+        self.se = load("stratified_effect")
+
+    def test_chi2_sf_known_values(self):
+        # The classic df=1/df=2 critical values at p=0.05.
+        self.assertAlmostEqual(self.se.chi2_sf(3.84, 1), 0.050, places=3)
+        self.assertAlmostEqual(self.se.chi2_sf(5.99, 2), 0.050, places=3)
+
+    def test_homogeneous_strata_is_not_significant(self):
+        # Three strata, the same risk difference (+10pp) in each: nothing to
+        # explain beyond chance.
+        strata = [("m1", 5, 10, 6, 10), ("m2", 5, 10, 6, 10), ("m3", 5, 10, 6, 10)]
+        q, p, i2 = self.se.heterogeneity(strata)
+        self.assertGreater(p, 0.5)
+        self.assertAlmostEqual(i2, 0.0)
+
+    def test_heterogeneous_strata_is_significant(self):
+        # One stratum at +0pp (n=20, so it carries real weight), two at +60pp:
+        # the strata disagree about the effect, not just about noise.
+        strata = [("m1", 5, 20, 5, 20), ("m2", 2, 10, 8, 10), ("m3", 2, 10, 8, 10)]
+        q, p, i2 = self.se.heterogeneity(strata)
+        self.assertLess(p, 0.05)
+        self.assertGreater(i2, 0.5)
+
+    def test_fewer_than_two_strata_is_undefined(self):
+        q, p, i2 = self.se.heterogeneity([("m1", 5, 10, 6, 10)])
+        self.assertNotEqual(p, p)  # nan
+
+    def test_timeouts_removed_scenario(self):
+        # 8/8 control; skill arm is 7 passes, one plain fail, one timed-out fail
+        # (9 runs). Removing the timeout changes the skill fraction and must
+        # not also drop the stratum below MIN_N (8 still qualifies).
+        d = tempfile.mkdtemp()
+        try:
+            p = os.path.join(d, "runs_t.csv")
+            cols = ["task", "model", "arm", "rep", "valid", "passed", "timed_out"]
+            with open(p, "w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                for i in range(8):
+                    w.writerow({"task": "t", "model": "m", "arm": "env-only",
+                               "rep": str(i), "valid": "True", "passed": "True",
+                               "timed_out": "False"})
+                for i in range(7):
+                    w.writerow({"task": "t", "model": "m", "arm": "env+skill",
+                               "rep": str(i), "valid": "True", "passed": "True",
+                               "timed_out": "False"})
+                w.writerow({"task": "t", "model": "m", "arm": "env+skill", "rep": "7",
+                           "valid": "True", "passed": "False", "timed_out": "True"})
+                w.writerow({"task": "t", "model": "m", "arm": "env+skill", "rep": "8",
+                           "valid": "True", "passed": "False", "timed_out": "False"})
+            out = run("stratified_effect.py", "--runs", p)
+            self.assertIn("| primary | 1 | 8/8 | 7/9 |", out)
+            self.assertIn("| timeouts removed | 1 | 8/8 | 7/8 |", out)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class TestReportDeterminism(unittest.TestCase):
     """A report that changes when nothing changed defeats diff-as-audit."""
 
