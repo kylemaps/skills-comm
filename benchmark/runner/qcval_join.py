@@ -48,6 +48,8 @@ import os
 import statistics
 from collections import Counter, defaultdict
 
+from model_ids import from_segment
+
 # Same rule summarize.py publishes, so these numbers reconcile with the report.
 FAIL_VERDICTS = {"invalid", "unacceptable", "marginal", "fail", "failed", "error",
                  "no-output"}
@@ -177,7 +179,7 @@ def main():
         parts = name.split("__")
         runs.append({
             "run": name,
-            "model": parts[1].replace("neurodesk-", "") if len(parts) > 1 else "?",
+            "model": from_segment(parts[1]) if len(parts) > 1 else "?",
             "arm": parts[2] if len(parts) > 2 else "?",
             "qc": str(q.get("numeric_verdict") or "?").upper(),
             "criteria": q.get("criteria") or [],

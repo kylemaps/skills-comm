@@ -288,6 +288,28 @@ class DispatchTest(unittest.TestCase):
 
     # A dry-run smoke test against the real wave 6 files, if present; skipped
     # otherwise (not every checkout carries _local).
+    # A direct provider's model keeps its prefix in the order file, the dispatched
+    # cells, the job name and the run directory; a gateway model keeps neurodesk/.
+    def test_direct_provider_model_ids(self):
+        order = d.read_order(self.order_path([
+            "1 taskA nrp/glm-5 env-only",
+            "2 taskA EGI.kimi-k3 env-only",
+        ]))
+        fields = d.build_run_fields("taskA", [1, 2], order, [1], "s", "c", 7)
+        self.assertEqual(fields["cells"], "nrp/glm-5:env-only neurodesk/EGI.kimi-k3:env-only")
+        blocks = d.read_plan(self.plan_path([]), order)
+        run1 = {"id": 801, "status": "completed", "conclusion": "success", "created_at": "2026-10-27T00:00:00Z"}
+        j1 = job("rep 1 taskA nrp/glm-5 env-only", 8001)
+        gh = FakeGh(runs=[run1], jobs_by_run={801: [j1]}, logs_by_job={8001: outcome_log("completed")})
+        rc, state = d.poll(gh, "o/r", 7, order, blocks, self.wave(reps=1), lanes=4, dry_run=True)
+        self.assertEqual(state["pairs"]["1:1"], "valid")
+        results = os.path.join(self.tmp, "results")
+        rundir = os.path.join(results, "wave7", "runs", "taskA", "taskA__nrp-glm-5__env-only__r1")
+        os.makedirs(rundir)
+        write(os.path.join(rundir, "run.json"), "{}")
+        self.assertEqual(d.published_reps(results, 7, "taskA", "nrp/glm-5", "env-only"), {1})
+        self.assertEqual(d.published_reps(results, 7, "taskA", "glm-5", "env-only"), set())
+
     def test_dry_run_against_real_wave6_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
         local = os.path.normpath(os.path.join(here, "..", "..", "_local"))

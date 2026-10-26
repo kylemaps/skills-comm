@@ -10,8 +10,13 @@
     # A provider with models_endpoint false must have its models given explicitly:
     python3 write_opencode_config.py --providers ../ci/sweep.json --models openai/gpt-5
 
+    # Only the provider one model id names (model_ids.py), so a run's config does
+    # not depend on any other provider's roster answering:
+    python3 write_opencode_config.py --providers ../ci/sweep.json --for-model nrp/glm-5
+
     # Every key_env --providers would read, for a workflow step to pass to redact.py
-    # (so the masked-secret list grows with sweep.json's `providers`, never by hand):
+    # (so the masked-secret list grows with sweep.json's `providers`, never by hand);
+    # with --for-model, only that model's:
     python3 write_opencode_config.py --providers ../ci/sweep.json --list-key-envs
 
 WHY THIS EXISTS
@@ -48,7 +53,9 @@ import sys
 import urllib.error
 import urllib.request
 
-GATEWAY = os.environ.get("NEURODESK_GATEWAY", "https://llm.neurodesk.org/openai")
+from model_ids import opencode_id
+
+GATEWAY =os.environ.get("NEURODESK_GATEWAY", "https://llm.neurodesk.org/openai")
 PROVIDER = "neurodesk"
 
 # Defaults, not discoveries. Every model on this gateway carried these in the
@@ -130,13 +137,21 @@ def build(ids, limits):
                           {"x-litellm-session-id": "{env:BENCH_SESSION_ID}"})
 
 
-def load_providers(path):
-    """sweep.json's top-level `providers`, "_comment" keys left out."""
+def load_providers(path, for_model=None):
+    """sweep.json's top-level `providers`, "_comment" keys left out; with for_model,
+    only the provider that model id names."""
     sweep = json.load(open(path, encoding="utf-8"))
     providers = sweep.get("providers") or {}
     if not providers:
         raise SystemExit("FAIL: %s declares no providers" % path)
-    return {k: v for k, v in providers.items() if not k.startswith("_")}
+    providers = {k: v for k, v in providers.items() if not k.startswith("_")}
+    if for_model:
+        name = opencode_id(for_model).split("/", 1)[0]
+        if name not in providers:
+            raise SystemExit("FAIL: %s names provider %s, which %s does not declare"
+                             % (for_model, name, path))
+        providers = {name: providers[name]}
+    return providers
 
 
 def parse_explicit_models(specs):
@@ -188,12 +203,17 @@ def main():
     ap.add_argument("--list-key-envs", action="store_true",
                     help="print --providers' key_env names, space-separated, and exit "
                          "-- for a workflow step to pass them all to redact.py")
+    ap.add_argument("--for-model", metavar="MODEL_ID",
+                    help="with --providers: only the provider this model id names")
     a = ap.parse_args()
+    if a.for_model and not a.providers:
+        raise SystemExit("FAIL: --for-model needs --providers FILE")
 
     if a.list_key_envs:
         if not a.providers:
             raise SystemExit("FAIL: --list-key-envs needs --providers FILE")
-        envs = sorted({p["key_env"] for p in load_providers(a.providers).values()})
+        envs = sorted({p["key_env"] for p in
+                       load_providers(a.providers, a.for_model).values()})
         print(" ".join(envs))
         return
 
@@ -221,7 +241,7 @@ def main():
     if a.providers:
         # Every provider sweep.json declares, so a new one drops in as data: nothing
         # here names "neurodesk" or any other provider specifically.
-        providers = load_providers(a.providers)
+        providers = load_providers(a.providers, a.for_model)
         explicit = parse_explicit_models(a.models)
         cfg.setdefault("provider", {})
         for name, pdef in sorted(providers.items()):

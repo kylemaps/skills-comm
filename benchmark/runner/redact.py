@@ -4,9 +4,11 @@
     redact.py DIR VAR [VAR...]
 
 Each VAR names an environment variable holding a secret. Every occurrence of its
-value is overwritten with '*' of the same length, so binary formats such as SQLite
-keep their structure. Longer secrets are masked first, so a secret that contains
-another is masked whole.
+value, and of its sha256 hex digest, is overwritten with '*' of the same length, so
+binary formats such as SQLite keep their structure. The digest is how a LiteLLM
+proxy names a key in its errors ("Rate limit exceeded for api_key: <digest>"), which
+reach the agent's transcript. Longer secrets are masked first, so a secret that
+contains another is masked whole.
 
 Only regular files are read. Directories the upload excludes (data, tmp,
 site-packages, node_modules, .git) and files over MAX_BYTES are skipped. A file that
@@ -17,6 +19,7 @@ Exit 0 when done. Exit 2, before touching anything, if a secret is shorter than 
 characters: masking it would overwrite unrelated bytes. Finding a secret is reported
 as a GitHub warning.
 """
+import hashlib
 import os
 import stat
 import sys
@@ -68,6 +71,7 @@ def main():
             print("ERROR: %s is shorter than 8 characters; refusing to mask it" % n)
             return 2
         secrets.append((n, v.encode()))
+        secrets.append((n + " (sha256)", hashlib.sha256(v.encode()).hexdigest().encode()))
     secrets.sort(key=lambda s: len(s[1]), reverse=True)
 
     hits = 0

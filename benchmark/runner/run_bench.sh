@@ -318,6 +318,14 @@ if [ "${OPENCODE_ISOLATE:-1}" = 1 ]; then
   mkdir -p "$XDG_DATA_HOME"
 fi
 
+# BENCH_SWEEP: sweep.json's path, so model_probe.py can resolve a model id's
+# provider (base URL, key env) from sweep.json's own `providers` instead of only
+# the one gateway -- no provider's key env name is hard-coded here beyond that
+# default. Defaults to the path every workflow uses today.
+SWEEP_FILE="${BENCH_SWEEP:-$HERE/../ci/sweep.json}"
+PROVIDERS_ARGS=()
+[ -f "$SWEEP_FILE" ] && PROVIDERS_ARGS=(--providers "$SWEEP_FILE")
+
 echo "[run] $TASK | $MODEL | $COND | r$REP"
 # < /dev/null is REQUIRED: backgrounded runs inherit a terminal stdin that goes
 # bad once disowned, and opencode dies with "EBADF: bad file descriptor".
@@ -328,12 +336,23 @@ echo "[run] $TASK | $MODEL | $COND | r$REP"
 #   infrastructure without an isolated runner pool.
 # Harness and CI variables are removed from the agent's environment: they name the
 # skill source, the arm, the run, the task and grader repositories, and the dispatch
-# (GITHUB_EVENT_PATH). NEURODESK_API_KEY and BENCH_SESSION_ID stay; opencode reads them.
+# (GITHUB_EVENT_PATH). The key of the run's own provider and BENCH_SESSION_ID stay;
+# opencode reads them. Every other key sweep.json's providers name is removed: the
+# agent holds only the key its model needs.
 # RUNNER_TRACKING_ID stays: the runner uses it to stop leftover processes at job end.
 AGENT_ENV=(env)
+OTHER_KEYS=""
+if [ -f "$SWEEP_FILE" ]; then
+  ALL_KEYS=$(python "$HERE/write_opencode_config.py" --providers "$SWEEP_FILE" --list-key-envs) \
+    && RUN_KEY=$(python "$HERE/write_opencode_config.py" --providers "$SWEEP_FILE" \
+                   --list-key-envs --for-model "$MODEL") || {
+    echo "ABORT: cannot tell which provider key $MODEL uses from $SWEEP_FILE." >&2
+    exit 2; }
+  for k in $ALL_KEYS; do [ "$k" = "$RUN_KEY" ] || OTHER_KEYS="$OTHER_KEYS $k"; done
+fi
 for v in SKILLS_SRC SKILLS_DST RUN_LABEL RUN_WAVE ARM TASK MODEL REP TASKS_JSON \
          BENCH_HOME TASKS_SHA NEURODESKTOP_VERSION AGENT_VIEW_CHECK AGENT_BASH_ENV \
-         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT AGENT_HOME AGENT_THREADS \
+         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT AGENT_HOME AGENT_THREADS $OTHER_KEYS \
          $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_)' \
                       | grep -vx RUNNER_TRACKING_ID); do
   AGENT_ENV+=(-u "$v")
@@ -385,14 +404,6 @@ PY
 }
 [ "$VIEW_RC" = 0 ] || stop_before_agent "agent-view-mismatch" \
   "what opencode offers the agent does not match the arm. No tokens spent."
-
-# BENCH_SWEEP: sweep.json's path, so model_probe.py can resolve a model id's
-# provider (base URL, key env) from sweep.json's own `providers` instead of only
-# the one gateway -- no provider's key env name is hard-coded here beyond that
-# default. Defaults to the path every workflow uses today.
-SWEEP_FILE="${BENCH_SWEEP:-$HERE/../ci/sweep.json}"
-PROVIDERS_ARGS=()
-[ -f "$SWEEP_FILE" ] && PROVIDERS_ARGS=(--providers "$SWEEP_FILE")
 
 # The gateway's roster and what it reports serving for this model, recorded before
 # the agent starts (gateway_roster, model_served, model_fingerprint, provider) and

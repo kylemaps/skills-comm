@@ -175,6 +175,48 @@ class TestWaveReportSynthetic(unittest.TestCase):
             call(["--results", self.d, "--wave", "99", "--sweep", self.sweep_path])
 
 
+class TestRunDirectories(unittest.TestCase):
+    """The run directory a CSV row names, and the model a run directory names, for
+    a gateway model and a direct provider's (model_ids.py)."""
+
+    SEGMENTS = ("neurodesk-EGI.kimi-k3", "nrp-glm-5")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_rows_find_their_run_json(self):
+        write_csv(os.path.join(self.d, "runs_t.csv"), [
+            {"task": "t", "model": m, "arm": "env-only", "rep": "1", "passed": "True"}
+            for m in ("EGI.kimi-k3", "nrp/glm-5")])
+        for seg in self.SEGMENTS:
+            rd = os.path.join(self.d, "runs", "t", "t__%s__env-only__r1" % seg)
+            os.makedirs(rd)
+            with open(os.path.join(rd, "run.json"), "w", encoding="utf-8") as fh:
+                json.dump({"seg": seg}, fh)
+        rows = wr.load(self.d, ["t"])["t"]
+        self.assertEqual(sorted(r["_run"].get("seg") for r in rows), list(self.SEGMENTS))
+
+    def test_speed_reads_the_model_off_the_run_directory(self):
+        import sqlite3
+        for seg in self.SEGMENTS:
+            db_dir = os.path.join(self.d, "art", "runs", "t__%s__env-only__r1" % seg,
+                                  ".xdg-data", "opencode")
+            os.makedirs(db_dir)
+            con = sqlite3.connect(os.path.join(db_dir, "opencode.db"))
+            con.execute("create table message (data text)")
+            con.execute("insert into message values (?)", (json.dumps(
+                {"role": "assistant", "time": {"created": 1000, "completed": 3000},
+                 "tokens": {"output": 20}}),))
+            con.commit()
+            con.close()
+        self.assertEqual(dict(wr.speed(self.d)), {"EGI.kimi-k3": [10.0], "nrp/glm-5": [10.0]})
+        self.assertEqual(dict(wr.speed(self.d, rep="10")), {})
+
+
 REAL_RESULTS = os.path.join(REPO, "_local", "skills-benchmark", "results", "wave6")
 REAL_SWEEP = os.path.join(REPO, "benchmark", "ci", "sweep.json")
 

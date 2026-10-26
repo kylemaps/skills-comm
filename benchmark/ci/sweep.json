@@ -10,10 +10,10 @@
 
   "providers": {
     "_comment": [
-      "Every model id a wave declares is a bare id (no provider prefix) today, which",
-      "names the one provider every run has ever used. A model id WITH a prefix",
-      "('openai/gpt-5') names its provider explicitly, and wave_check.py refuses one",
-      "whose provider is not declared here.",
+      "A model id with no prefix ('EGI.kimi-k3') names the neurodesk gateway, which",
+      "waves 1-6 used. A model id WITH a prefix ('nrp/glm-5') names its provider, and",
+      "wave_check.py refuses one whose provider is not declared here. model_ids.py",
+      "holds the rule between the id forms.",
       "",
       "base_url: the OpenAI-compatible API root. key_env: the environment variable",
       "holding its key -- never the key itself. models_endpoint: true when the",
@@ -23,6 +23,16 @@
     "neurodesk": {
       "base_url": "https://llm.neurodesk.org/openai",
       "key_env": "NEURODESK_API_KEY",
+      "models_endpoint": true
+    },
+    "nrp": {
+      "base_url": "https://ellm.nrp-nautilus.io/v1",
+      "key_env": "NRP_API_KEY",
+      "models_endpoint": true
+    },
+    "egi": {
+      "base_url": "https://llm.ai.egi.eu/v1",
+      "key_env": "EGI_API_KEY",
       "models_endpoint": true
     }
   },

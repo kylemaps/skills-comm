@@ -138,6 +138,12 @@ INFRA_ERROR_RES = [
                 re.I), "gateway 5xx"),
     (re.compile(r"(ECONNREFUSED|ENOTFOUND|EBADF: bad file descriptor)"),
      "connection/descriptor failure"),
+    # A provider that does not (or no longer) serve the model: NRP's routing gateway,
+    # EGI's LiteLLM proxy. And the routing gateway's own word for a backend it cannot
+    # reach.
+    (re.compile(r"No matching route found"), "provider has no route for the model"),
+    (re.compile(r"Invalid model name passed in model="), "provider does not serve the model"),
+    (re.compile(r"upstream connect error|no healthy upstream"), "provider backend unreachable"),
     # opencode keeps shared state -- one SQLite database and one local server -- and
     # every concurrent run touches the same `project` row. At MAXPAR=8 they collide:
     # runs die in 6-9 seconds having loaded no skill and spent no tokens. Scored as
@@ -669,8 +675,8 @@ def declared_lost(sweep, wave, task=None):
     (task, model, arm, rep, entry) tuples, optionally for one task.
 
     A lost run started and left no record because the cluster stopped it. Each entry
-    is keyed <task>__<model>__<arm>__r<n> (bare model id) and must give a reason, the
-    evidence and the CI run ids.
+    is keyed <task>__<model>__<arm>__r<n> (the model's wave id, model_ids.py: EGI.kimi-k3
+    or nrp/glm-5) and must give a reason, the evidence and the CI run ids.
     """
     if sweep is None or wave is None:
         return []
@@ -696,13 +702,15 @@ def lost_run(task, model, arm, rep, entry, rules=None):
     rule lost=fail, excluded under lost=exclude.
 
     Built by load_run on a directory that does not exist, so every field a recorded
-    run has is present and says "not recorded".
+    run has is present and says "not recorded". Task, model, arm and rep are set from
+    the declaration, not read back from a path: a wave id can hold a '/' (nrp/glm-5).
     """
     rules = dict(DEFAULT_RULES, **(rules or {}))
     name = "%s__%s__%s__r%s" % (task, model, arm, rep)
     with tempfile.TemporaryDirectory() as t:
-        r = load_run(os.path.join(t, name), task)
-    r.update(dir=name, passed=False, score=0.0, verdict="LOST", lost=entry["reason"])
+        r = load_run(os.path.join(t, "lost"), task)
+    r.update(dir=name, task=task, model=model, arm=arm, rep=str(rep),
+             passed=False, score=0.0, verdict="LOST", lost=entry["reason"])
     if rules["lost"] == "exclude":
         r.update(exclude_reason="lost: %s" % entry["reason"], valid=False)
     else:

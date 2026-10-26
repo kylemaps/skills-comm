@@ -44,7 +44,6 @@ import argparse
 import csv
 import json
 import os
-import re
 import sqlite3
 import statistics
 import sys
@@ -54,6 +53,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import stratified_effect as se  # noqa: E402
 from summarize import fisher_exact, newcombe  # noqa: E402
+from model_ids import from_segment, segment  # noqa: E402
 
 MIN_N = 5  # summarize.MIN_N_FOR_STATS; a per-model row below this is not compared
 
@@ -113,8 +113,8 @@ def load(results, tasks):
         with open(path, encoding="utf-8", newline="") as fh:
             rows[t] = list(csv.DictReader(fh))
         for r in rows[t]:
-            d = os.path.join(results, "runs", t, "%s__neurodesk-%s__%s__r%s"
-                             % (t, r["model"], r["arm"], r["rep"]))
+            d = os.path.join(results, "runs", t, "%s__%s__%s__r%s"
+                             % (t, segment(r["model"]), r["arm"], r["rep"]))
             r["_run"] = r["_env"] = {}
             for name, key in (("run.json", "_run"), ("envelope.json", "_env")):
                 p = os.path.join(d, name)
@@ -185,15 +185,15 @@ def speed(dbs_dir, rep="1"):
 
     Generation time is the sum of (completed - created) over assistant messages
     that recorded both; output tokens are summed over the same messages. The
-    model id ("Provider.model-id") is read off the artifact directory name, not
-    assumed to be one of a fixed provider list.
+    model is read off the run directory, <task>__<segment>__<arm>__r<rep>, as its
+    wave id (model_ids.from_segment), not assumed to be one of a fixed list.
     """
     out = defaultdict(list)
     dbs = [os.path.join(d, "opencode.db") for d, _, fs in os.walk(dbs_dir) if "opencode.db" in fs]
-    pat = re.compile(r"neurodesk-([A-Za-z][A-Za-z0-9]*\.[a-z0-9.-]+?)__[^/]+__r%s/" % re.escape(rep))
     for db in dbs:                      # os.walk, not glob "**": databases sit under .xdg-data
-        m = pat.search(db.replace("\\", "/"))
-        if not m:
+        run = [p for p in db.replace("\\", "/").split("/")
+               if len(p.split("__")) == 4 and p.split("__")[3] == "r%s" % rep]
+        if not run:
             continue
         o = secs = 0.0
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
@@ -207,7 +207,7 @@ def speed(dbs_dir, rep="1"):
         finally:
             con.close()
         if secs > 0:
-            out[m.group(1)].append(o / secs)
+            out[from_segment(run[-1].split("__")[1])].append(o / secs)
     return out
 
 

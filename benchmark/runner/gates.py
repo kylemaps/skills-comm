@@ -27,6 +27,8 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 
+from model_ids import from_segment
+
 
 def med(xs):
     return statistics.median(xs) if xs else None
@@ -60,7 +62,7 @@ def main():
         parts = os.path.basename(d).split("__")
         if len(parts) < 3:
             continue
-        model, arm = parts[1].replace("neurodesk-", ""), parts[2]
+        model, arm = from_segment(parts[1]), parts[2]
         if a.arm and arm != a.arm:
             continue
         seen += 1

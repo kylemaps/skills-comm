@@ -9,7 +9,8 @@ Design: one poll recomputes everything from GitHub and the published record; no 
 
 Plan file: one block per committed line, "<task> reps=<r,r,...> cells=<n,n,...>
 [rerunN]" (cell numbers of the order file); "#" lines and blanks are ignored.
-Order file: "<cell> <task> <model> <arm>", one line per declared cell.
+Order file: "<cell> <task> <model> <arm>", one line per declared cell; <model> is
+the wave id (model_ids.py): EGI.kimi-k3 through the gateway, nrp/glm-5 direct.
 
 A (cell, rep) pair's validity is recomputed every poll from the job whose name
 carries it ("rep <n> <task> <model> <arm>"): a job's own "Agent outcome" step
@@ -34,8 +35,9 @@ import subprocess
 import sys
 from collections import namedtuple
 
+from model_ids import opencode_id, segment, wave_id
+
 DEFAULT_REPO = "neurodesk/skills-benchmark"
-PROVIDER = "neurodesk"  # the one gateway every model id in the order file resolves through
 
 JOB_RE = re.compile(r"^rep (\d+) (\S+) (\S+) (\S+)$")
 AGENT_OUTCOME_RE = re.compile(r"agent_outcome=(\S+) run=(\S+)")
@@ -270,17 +272,16 @@ _REP_SUFFIX_RE = re.compile(r"__r(\d+)$")
 
 def published_reps(results_dir, wave, task, model, arm):
     """Rep numbers this cell already has a run.json for under
-    results/wave<n>/runs/<task>/<task>__<provider>-<model>__<arm>__r<rep>/ --
-    read straight off disk. A pair found here is valid with no job and no log
-    read at all; run.yml names the directory with the model's '/' turned into
-    '-' (run_bench.sh's NAME=), so the provider prefix lands in the directory
-    name, not after it."""
+    results/wave<n>/runs/<task>/<task>__<segment>__<arm>__r<rep>/ -- read
+    straight off disk. A pair found here is valid with no job and no log read at
+    all. The segment is the model's opencode id with '/' turned into '-'
+    (run_bench.sh's NAME=, model_ids.segment): neurodesk-EGI.kimi-k3, nrp-glm-5."""
     if not results_dir:
         return set()
     d = os.path.join(results_dir, "wave%s" % wave, "runs", task)
     if not os.path.isdir(d):
         return set()
-    prefix = "%s__%s-%s__%s__r" % (task, PROVIDER, model, arm)
+    prefix = "%s__%s__%s__r" % (task, segment(model), arm)
     out = set()
     for name in os.listdir(d):
         if not name.startswith(prefix):
@@ -327,7 +328,7 @@ def pick_retry_block(owed_pairs, order):
 
 
 def build_run_fields(task, cells, order, reps, snapshot, capability, wave):
-    cells_arg = " ".join("%s/%s:%s" % (PROVIDER, order[c][1], order[c][2]) for c in cells)
+    cells_arg = " ".join("%s:%s" % (opencode_id(order[c][1]), order[c][2]) for c in cells)
     # A single rep sent bare ("5") is read by run.yml as a COUNT (reps 1-5), not
     # the one rep it names; doubling it ("5 5") forces the list parse instead.
     # Matches w6_sequence.py's dispatch().
@@ -435,8 +436,7 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
             if not m:
                 continue
             rep, task, model, arm = int(m.group(1)), m.group(2), m.group(3), m.group(4)
-            bare = model.split("/", 1)[-1] if "/" in model else model
-            cell = rev.get((task, bare, arm))
+            cell = rev.get((task, wave_id(model), arm))
             if cell is None:
                 continue  # a job for a cell outside this wave's declared grid
             task_run_ids.setdefault(task, set()).add(run["id"])

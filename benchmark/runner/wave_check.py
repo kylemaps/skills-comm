@@ -29,6 +29,8 @@ import argparse
 import json
 import sys
 
+from model_ids import wave_id
+
 
 def _num(v):
     try:
@@ -114,9 +116,9 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
         if t is None:
             out.append("task %s is not declared in wave %s" % (task, wave))
         else:
-            bare = (model or "").split("/", 1)[-1]
-            if bare not in t.get("models", []):
-                out.append("model %s is not declared for %s in wave %s" % (bare, task, wave))
+            mid = wave_id(model)
+            if mid not in t.get("models", []):
+                out.append("model %s is not declared for %s in wave %s" % (mid, task, wave))
             if arm not in t.get("arms", []):
                 out.append("arm %s is not declared for %s in wave %s" % (arm, task, wave))
         want = ((sweep.get("arms") or {}).get(arm) or {}).get("skills_hash")
@@ -127,10 +129,10 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
 
 
 def declared_fingerprint(sweep, wave, model):
-    """The fingerprint the wave declares for a model (provider prefix stripped), or None."""
+    """The fingerprint the wave declares for a model (by its wave id), or None."""
     w = (sweep.get("waves") or {}).get(str(wave)) or {}
     fps = w.get("model_fingerprints") or {}
-    return fps.get((model or "").split("/", 1)[-1])
+    return fps.get(wave_id(model))
 
 
 def check_fingerprint(sweep, wave, model, record):

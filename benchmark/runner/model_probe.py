@@ -22,10 +22,15 @@ gives what the gateway reports serving. Written into the record:
                      naming a host, URL or API base are stored as hashes. `basis`
                      lists which identity fields were present (not part of the
                      fingerprint); `routing` holds the gateway's fallback and retry
-                     headers for the probe call (not part of the fingerprint either)
+                     headers for the probe call, and `proxy` the proxy headers
+                     below (neither part of the fingerprint)
 
 Identity headers are response headers whose name contains "model", "version" or
-"fingerprint", excluding per-request values (ids, durations, costs, keys, limits).
+"fingerprint", excluding per-request values (ids, durations, costs, keys, limits)
+and proxy headers: a LiteLLM proxy's own software version and the alias the request
+named (`*-litellm-version`, `*-model-group`). Neither says which model or engine
+answered, so a proxy upgrade is not read as a model change. The deployment's id,
+model name and API base, at every proxy layer, stay in.
 On any failure the fields are null and the exit code is 0: the run's own provider
 check decides whether the model is usable.
 
@@ -55,17 +60,22 @@ PER_REQUEST = ("call-id", "request-id", "duration", "cost", "spend", "key",
                "ratelimit", "limit", "remaining", "latency", "timing", "trace")
 HASHED = ("api-base", "api_base", "url", "host")
 ROUTING = ("fallback", "retries")
+PROXY = ("litellm-version", "model-group")
 
 
 def h(s, n=12):
     return hashlib.sha256(s.encode()).hexdigest()[:n]
 
 
-def identity_headers(headers):
+def identity_headers(headers, proxy=False):
+    """Identity headers (see the module docstring); with proxy=True, only the proxy
+    headers that the fingerprint leaves out."""
     out = {}
     for k, v in headers.items():
         name = k.lower()
         if not any(x in name for x in IDENTITY) or any(x in name for x in PER_REQUEST):
+            continue
+        if any(x in name for x in PROXY) != proxy:
             continue
         out[name] = ("sha256:" + h(str(v))) if any(x in name for x in HASHED) else str(v)
     return dict(sorted(out.items()))
@@ -96,6 +106,7 @@ def summarize(roster_json, response_json, headers):
         probe["routing"] = dict(sorted(
             (k.lower(), str(v)) for k, v in (headers or {}).items()
             if any(x in k.lower() for x in ROUTING)))
+        probe["proxy"] = identity_headers(headers or {}, proxy=True)
         probe["basis"] = basis
     return {"gateway_roster": roster, "model_served": served,
             "model_fingerprint": fingerprint, "model_fingerprint_strength": strength,

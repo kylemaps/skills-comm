@@ -328,7 +328,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", required=True, help="a runs/ directory from the artifact")
     ap.add_argument("--task", required=True)
-    ap.add_argument("--model", required=True, help="bare id, no neurodesk/ prefix")
+    ap.add_argument("--model", required=True,
+                    help="wave id (model_ids.py): EGI.kimi-k3 through the gateway, nrp/glm-5 direct")
     ap.add_argument("--arm", required=True)
     ap.add_argument("--sweep", default=os.path.join(HERE, "..", "ci", "sweep.json"))
     ap.add_argument("--wave", help="wave id in sweep.json")

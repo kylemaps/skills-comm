@@ -27,6 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from estimate_cost import load  # noqa: E402
+from model_ids import from_segment  # noqa: E402
 
 
 def main():
@@ -55,7 +56,7 @@ def main():
         if len(parts) < 3:
             total += overall
             continue
-        model, arm = parts[1].replace("neurodesk-", ""), parts[2]
+        model, arm = from_segment(parts[1]), parts[2]
         med = hist.get((model, arm))
         if med is None:
             med = (statistics.median(by_model[model])

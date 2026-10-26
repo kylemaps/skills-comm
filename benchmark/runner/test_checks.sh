@@ -508,6 +508,9 @@ outc "exit 0 without an output, no error" 0 '$ ls' "" completed
 outc "the wall (exit 124)" 124 '$ ls' yes timeout
 outc "a rate-limit error and no output" 1 "${E}[91m${E}[1mError: Rate limit exceeded for api_key" "" gateway_cut
 outc "the model gone from the gateway, no output" 1 "${E}[91m${E}[1mError: Not Found: Model '' was not found" "" gateway_cut
+outc "the model gone from the NRP gateway, no output" 1 "${E}[91m${E}[1mError: No matching route found. It is likely that the model specified your request is not configured in the Gateway." "" gateway_cut
+outc "the model gone from EGI, no output" 1 "${E}[91m${E}[1mError: /chat/completions: Invalid model name passed in model=kimi-k3." "" gateway_cut
+outc "the EGI parallel-request cap, no output" 1 "${E}[91m${E}[1mError: Rate limit exceeded for api_key: 0123abcd. Limit type: max_parallel_requests. Current limit: 4" "" gateway_cut
 outc "the same error but an output was still written" 0 "${E}[91m${E}[1mError: Rate limit exceeded for api_key" yes completed
 mkdir -p "$T/k5"; printf 'cat <<EOF\nsudo make install\nEOF\npip install x\n' > "$T/k5/setup.sh"
 echo '{"task_id":"t"}' > "$T/k5/run.json"; printf '$ bash setup.sh\n' > "$T/k5/transcript.txt"
@@ -952,6 +955,12 @@ SECRET=short "$PY" "$HERE/redact.py" "$T/r" SECRET >/dev/null 2>&1
 expect 2 $? "refuses a value too short to mask safely"
 "$PY" "$HERE/redact.py" "$T/r" NOT_SET_ANYWHERE >/dev/null 2>&1
 expect 0 $? "skips an unset variable"
+# A LiteLLM proxy names a key by its sha256 digest in its rate-limit errors.
+D=$("$PY" -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$K" | tr -d '\r')
+printf 'Error: Rate limit exceeded for api_key: %s. Limit type: max_parallel_requests\n' "$D" > "$T/r/proxy.txt"
+SECRET="$K" "$PY" "$HERE/redact.py" "$T/r" SECRET >/dev/null 2>&1
+grep -qF "$D" "$T/r/proxy.txt" && bad "the key's sha256 digest survived" || ok "the key's sha256 digest is masked too"
+grep -q "max_parallel_requests" "$T/r/proxy.txt" && ok "  and the rest of the line is kept" || bad "  the line around it was damaged"
 # One secret containing another: the longer one must be masked whole.
 rm -rf "$T/r"; mkdir -p "$T/r"
 printf 'x=sk-abc12345-extension-private\n' > "$T/r/t.txt"
@@ -1112,6 +1121,9 @@ msgs = {"gateway returned empty model name": "Model '' was not found",
         "gateway rate limit": "429 Too Many Requests",
         "gateway 5xx": "502 Bad Gateway",
         "connection/descriptor failure": "connect ECONNREFUSED 10.0.0.1:443",
+        "provider has no route for the model": "No matching route found. It is likely that the model specified your request is not configured in the Gateway.",
+        "provider does not serve the model": "/chat/completions: Invalid model name passed in model=glm-5. Call `/v1/models` to view available models for your key.",
+        "provider backend unreachable": "upstream connect error or disconnect/reset before headers. reset reason: connection failure",
         "opencode database contention": 'Failed query: insert into "project"',
         "opencode session lost": "Session not found",
         "opencode server error": "Unexpected server error. Check server logs"}
@@ -1129,7 +1141,7 @@ EOF
 while IFS= read -r line; do
   case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
 done < "$T/infra.out"
-[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 8 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 11 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
 sed -i 's/"timeout":"fail"/"timeout":"maybe"/' "$T/sweep.json"
 "$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 1 >/dev/null 2>&1
 expect 1 $? "an unknown rule value is refused"
@@ -1376,6 +1388,38 @@ sm "$T/runs" "$T/sum_excl" "$T/sw_excl.json"; expect 0 $? "  summarize runs"
 [ "$(cell "$T/sum_excl")" = "2 2 0 2" ] && ok "  and excludes the lost run (cell n 2, passes 2)" || bad "  counted as: $(cell "$T/sum_excl")"
 "$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['n_excluded']==2 and any(k.startswith('lost: ') for k in s['exclusions']), s['exclusions']" \
   "$T/sum_excl/summary_diffusion-brain-mask.json" 2>/dev/null && ok "  both declared lost runs listed under exclusions" || bad "  not listed as an exclusion"
+rm -rf "$T"
+
+echo
+echo "=== declared lost runs for a direct provider's model (a wave id with a '/')"
+T=$(mktemp -d); SW="$T/sweep.json"
+cat > "$SW" <<'J'
+{"reps":3,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"1":{"pins":{"image_version":"i"},"model_fingerprints":{"nrp/glm-5":"0618bb19e2de"},
+  "lost":{"diffusion-brain-mask__nrp/glm-5__env-only__r2":{"reason":"evicted","ci_runs":["1"],"evidence":"e"},
+          "diffusion-brain-mask__nrp/glm-5__env-only__r3":{"reason":"evicted","ci_runs":["1"],"evidence":"e"}},
+  "tasks":{"diffusion-brain-mask":{"models":["nrp/glm-5"],"arms":["env-only"]}}}}}
+J
+d="$T/runs/diffusion-brain-mask__nrp-glm-5__env-only__r1"; mkdir -p "$d/submissions/diffusion-brain-mask"
+echo x > "$d/submissions/diffusion-brain-mask/output.nii.gz"; echo '{"score":100,"verdict":"PASS"}' > "$d/envelope.json"
+cat > "$d/run.json" <<'J'
+{"task_id":"diffusion-brain-mask","model":"nrp/glm-5","condition":"env-only","repeat":"1",
+ "exit_code":0,"output_present":true,"skills_seen":[],"skills_installed":"","image_version":"i",
+ "opencode_version":"o","skills_sha":"a","skills_hash":"noskill","prompt_hash":"p","tasks_sha":"t",
+ "label":"benchmark","model_fingerprint":"0618bb19e2de","model_changed":false}
+J
+"$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task diffusion-brain-mask --model nrp/glm-5 \
+  --arm env-only --sweep "$SW" --wave 1 >"$T/o" 2>&1
+expect 0 $? "1 recorded run and 2 declared lost make a complete cell"
+grep -q "rep 2 declared lost" "$T/o" && grep -q "rep 3 declared lost" "$T/o" && ok "  and the gate names both lost reps" || bad "  gate output: $(grep -i 'lost\|FAIL' "$T/o" | head -3)"
+"$PY" "$HERE/summarize.py" "$T/runs" diffusion-brain-mask --out-dir "$T/sum" --sweep "$SW" --wave 1 >"$T/o" 2>&1
+expect 0 $? "summarize adds both declared lost runs"
+"$PY" -c "import csv,json,sys; s=json.load(open(sys.argv[1])); c=s['cells']['nrp/glm-5|env-only']
+assert (c['n'], c['passes'], c['lost']) == (3, 1, 2), c
+rows = list(csv.DictReader(open(sys.argv[2])))
+assert sorted((r['model'], r['arm'], r['rep']) for r in rows) == [('nrp/glm-5', 'env-only', x) for x in '123'], rows" \
+  "$T/sum/summary_diffusion-brain-mask.json" "$T/sum/runs_diffusion-brain-mask.csv" 2>"$T/e" \
+  && ok "  in the model's own cell, reps 2 and 3, under its wave id" || bad "  $(tail -1 "$T/e")"
 rm -rf "$T"
 
 echo
@@ -1913,6 +1957,120 @@ assert resolve('unknownprovider/x', sys.argv[2], 'https://llm.neurodesk.org/open
   "$HERE" "$T/sweep.json" \
   && ok "resolve() uses a declared provider's base_url/key_env, keeps neurodesk on its own env override, and falls back for the rest" \
   || bad "resolve() wrong"
+rm -rf "$T"
+
+echo
+echo "=== model_ids: one rule between the opencode id, the wave id and the run directory"
+"$PY" -c "import sys; sys.path.insert(0, sys.argv[1]); from model_ids import wave_id, opencode_id, segment, from_segment
+P = {'neurodesk', 'nrp', 'egi'}
+assert wave_id('neurodesk/EGI.kimi-k3') == 'EGI.kimi-k3' and wave_id('nrp/glm-5') == 'nrp/glm-5'
+assert opencode_id('EGI.kimi-k3') == 'neurodesk/EGI.kimi-k3' and opencode_id('nrp/glm-5') == 'nrp/glm-5'
+assert segment('EGI.kimi-k3') == 'neurodesk-EGI.kimi-k3' and segment('nrp/glm-5') == 'nrp-glm-5'
+for m in ('EGI.kimi-k3', 'nrp/glm-5', 'egi/kimi-k3', 'nrp/qwen3-small'):
+    assert from_segment(segment(m), P) == m, m
+assert from_segment('other-x', P) == 'other-x' and from_segment('glm-5.2', P) == 'glm-5.2'" "$HERE" \
+  && ok "wave id -> run directory -> wave id round-trips; an undeclared prefix is left alone" \
+  || bad "model_ids rule broken"
+
+echo
+echo "=== model_probe: a proxy's version and the alias asked for are not the model"
+T=$(mktemp -d)
+echo '{"data":[]}' > "$T/roster.json"
+echo '{"model":"kimi-k3","system_fingerprint":"vllm-0.31.0-tp8-3838e76e"}' > "$T/resp.json"
+echo '{"x-litellm-version":"1.105.1","x-litellm-model-group":"kimi-k3","x-litellm-model-id":"dep-1","llm_provider-x-litellm-version":"1.80.0"}' > "$T/h1.json"
+echo '{"x-litellm-version":"1.106.0","x-litellm-model-group":"kimi","x-litellm-model-id":"dep-1","llm_provider-x-litellm-version":"1.81.2"}' > "$T/h2.json"
+echo '{"x-litellm-version":"1.105.1","x-litellm-model-group":"kimi-k3","x-litellm-model-id":"dep-2","llm_provider-x-litellm-version":"1.80.0"}' > "$T/h3.json"
+pf() { echo '{"task_id":"t"}' > "$T/r.json"
+  "$PY" "$HERE/model_probe.py" --model egi/kimi-k3 --record "$T/r.json" --offline "$T/roster.json" "$T/resp.json" "$1" >/dev/null 2>&1
+  "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['model_fingerprint'])" "$T/r.json" | tr -d '\r'; }
+f1=$(pf "$T/h1.json"); f2=$(pf "$T/h2.json"); f3=$(pf "$T/h3.json")
+[ -n "$f1" ] && [ "$f1" = "$f2" ] && ok "a proxy upgrade and another alias leave the fingerprint unchanged" || bad "proxy headers moved the fingerprint: $f1 $f2"
+[ "$f1" != "$f3" ] && ok "another deployment id changes it" || bad "fingerprint blind to the deployment id"
+pf "$T/h2.json" >/dev/null
+"$PY" -c "import json,sys; p=json.load(open(sys.argv[1]))['model_probe']
+assert p['proxy'] == {'llm_provider-x-litellm-version': '1.81.2', 'x-litellm-model-group': 'kimi', 'x-litellm-version': '1.106.0'}, p['proxy']
+assert 'x-litellm-model-id' in p['headers'] and not any('version' in k or 'group' in k for k in p['headers']), p['headers']" "$T/r.json" 2>/dev/null \
+  && ok "  the proxy headers are kept in the record, outside the fingerprint" || bad "  proxy headers not recorded apart"
+rm -rf "$T"
+
+echo
+echo "=== wave_check: a direct provider's model is declared and checked by its wave id"
+T=$(mktemp -d)
+cat > "$T/sweep.json" <<'J'
+{"providers":{"nrp":{"base_url":"u","key_env":"NRP_API_KEY","models_endpoint":true}},
+ "waves":{"7":{"tasks":{"t":{"models":["nrp/glm-5","EGI.kimi-k3"],"arms":["env-only"]}},
+  "model_fingerprints":{"nrp/glm-5":"aaaaaaaaaaaa","EGI.kimi-k3":"bbbbbbbbbbbb"}}}}
+J
+wc7() { "$PY" "$HERE/wave_check.py" --sweep "$T/sweep.json" --wave 7 --label benchmark --task t \
+    --model "$1" --arm env-only >/dev/null 2>&1; }
+wc7 nrp/glm-5; expect 0 $? "a declared direct-provider model passes"
+wc7 nrp/qwen3; expect 1 $? "an undeclared model on the same provider is refused"
+wc7 glm-5; expect 1 $? "its bare id, which names the gateway, is refused"
+wc7 neurodesk/EGI.kimi-k3; expect 0 $? "a gateway model still passes by its gateway name"
+fp7() { echo "{\"model_fingerprint\":\"$2\"}" > "$T/r.json"
+  "$PY" "$HERE/wave_check.py" --sweep "$T/sweep.json" --wave 7 --model "$1" --record "$T/r.json" \
+    --fingerprint-only >/dev/null 2>&1; }
+fp7 nrp/glm-5 aaaaaaaaaaaa; expect 0 $? "its declared fingerprint passes"
+fp7 nrp/glm-5 bbbbbbbbbbbb; expect 1 $? "another fingerprint is stopped"
+fp7 neurodesk/EGI.kimi-k3 aaaaaaaaaaaa; expect 1 $? "  and a gateway model is checked against its own"
+rm -rf "$T"
+
+echo
+echo "=== write_opencode_config --for-model: only the provider the model names"
+T=$(mktemp -d)
+cat > "$T/sweep.json" <<'J'
+{"providers":{"neurodesk":{"base_url":"http://127.0.0.1:9","key_env":"NEURODESK_API_KEY","models_endpoint":true},
+ "nrp":{"base_url":"https://nrp.example/v1","key_env":"NRP_API_KEY","models_endpoint":false},
+ "egi":{"base_url":"http://127.0.0.1:9","key_env":"EGI_API_KEY","models_endpoint":true}}}
+J
+woc() { "$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" "$@" 2>/dev/null | tr -d '\r'; }
+[ "$(woc --list-key-envs)" = "EGI_API_KEY NEURODESK_API_KEY NRP_API_KEY" ] && ok "every key env without --for-model" || bad "key envs: $(woc --list-key-envs)"
+[ "$(woc --list-key-envs --for-model nrp/glm-5)" = "NRP_API_KEY" ] && ok "  one provider's with --for-model" || bad "  --for-model nrp: $(woc --list-key-envs --for-model nrp/glm-5)"
+[ "$(woc --list-key-envs --for-model neurodesk/EGI.kimi-k3)" = "NEURODESK_API_KEY" ] && ok "  the gateway's for a neurodesk/ id" || bad "  gateway key env wrong"
+[ "$(woc --list-key-envs --for-model EGI.kimi-k3)" = "NEURODESK_API_KEY" ] && ok "  and for a bare id" || bad "  bare id key env wrong"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --list-key-envs --for-model other/x >/dev/null 2>&1
+expect 1 $? "a model whose provider is not declared is refused"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --for-model nrp/glm-5 \
+  --models nrp/glm-5 --out "$T/oc.json" >/dev/null 2>&1
+expect 0 $? "writes the one provider while the others are unreachable"
+"$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))
+assert sorted(c['provider']) == ['nrp'], sorted(c['provider'])
+assert c['provider']['nrp']['options']['apiKey'] == '{env:NRP_API_KEY}'" "$T/oc.json" 2>/dev/null \
+  && ok "  only nrp, its key by reference" || bad "  wrong providers written"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --models nrp/glm-5 \
+  --out "$T/oc2.json" >/dev/null 2>&1
+expect 1 $? "without --for-model an unreachable provider stops the whole config"
+rm -rf "$T"
+
+echo
+echo "=== run_bench: the agent holds only its own provider's key"
+T=$(mktemp -d)
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then echo '[{"name":"customize-opencode","location":"<built-in>"}]'; exit 0; fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+env | grep -E '^(NEURODESK|NRP|EGI)_API_KEY=' | cut -d= -f1 | sort | tr '\n' ' ' > "$KEYS_SEEN"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+cat > "$T/sweep.json" <<'J'
+{"providers":{"neurodesk":{"base_url":"http://127.0.0.1:9","key_env":"NEURODESK_API_KEY","models_endpoint":true},
+ "nrp":{"base_url":"http://127.0.0.1:9","key_env":"NRP_API_KEY","models_endpoint":true},
+ "egi":{"base_url":"http://127.0.0.1:9","key_env":"EGI_API_KEY","models_endpoint":true}},"waves":{}}
+J
+rbk() { rm -rf "$T/bench" "$T/seen"
+  env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+    SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=1 \
+    NEURODESK_GATEWAY=http://127.0.0.1:9 BENCH_SWEEP="$T/sweep.json" KEYS_SEEN="$T/seen" \
+    NEURODESK_API_KEY=k1 NRP_API_KEY=k2 EGI_API_KEY=k3 \
+    bash "$HERE/run_bench.sh" t-x "$1" env-only 1 >/dev/null 2>&1; }
+rbk nrp/glm-5; expect 0 $? "a run on a direct provider goes ahead"
+[ "$(cat "$T/seen" 2>/dev/null)" = "NRP_API_KEY " ] && ok "  its agent holds NRP_API_KEY and no other key" || bad "  agent keys: $(cat "$T/seen" 2>/dev/null)"
+rbk neurodesk/EGI.kimi-k3
+[ "$(cat "$T/seen" 2>/dev/null)" = "NEURODESK_API_KEY " ] && ok "a gateway run's agent holds only NEURODESK_API_KEY" || bad "gateway agent keys: $(cat "$T/seen" 2>/dev/null)"
+rbk other/x; expect 2 $? "a model whose provider sweep.json does not declare stops before the agent"
+[ -f "$T/seen" ] && bad "  the agent ran anyway" || ok "  and the agent never started"
 rm -rf "$T"
 
 echo

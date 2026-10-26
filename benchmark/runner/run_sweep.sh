@@ -281,7 +281,9 @@ for TASK in "${TASKS[@]}"; do
       fi
       for d in "${FAILED[@]}"; do
         b=$(basename "$d")
-        M="neurodesk/$(echo "$b" | awk -F'__' '{print $2}' | sed 's/^neurodesk-//')"
+        # The directory's model segment back to the opencode id (model_ids.py).
+        M=$(python -c "import sys; sys.path.insert(0, sys.argv[1]); from model_ids import from_segment, opencode_id
+print(opencode_id(from_segment(sys.argv[2])))" "$HERE" "$(echo "$b" | awk -F'__' '{print $2}')")
         r=$(echo "$b" | awk -F'__' '{print $4}' | tr -d 'r')
         echo "    retry $b"
         "$HERE/run_bench.sh" "$TASK" "$M" "$COND" "$r"
