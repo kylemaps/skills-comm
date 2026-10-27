@@ -50,6 +50,11 @@ agent chose. This reads them back out of the transcript once the run is over:
   tokens_output_per_s  output tokens per second of generation, from the database's
                        per-message timings; generation_s the seconds summed
   agent_outcome        completed / timeout / gateway_cut / no_model_call
+  output_voxels  voxels the output's NIfTI header declares; 0 when the file is not a
+                 NIfTI image; None without an output
+  final_ask      the passage of the agent's last words that asks the user for
+                 something ("If you can provide a direct link..."); "" when they ask
+                 nothing; None when the database holds no last words for this run
 
 Safe to re-run: it only adds keys. Also usable to backfill older runs.
 """
@@ -536,8 +541,9 @@ rec["answer_key_reads"] = _key_hits() if txt else None
 # The prompt never names the arm, and the agent's working directory does not either.
 # A transcript line containing an arm label (env-only, env+skill...) means the agent
 # came across it: in the process list, the environment, the runner's event file, or
-# the harness's own files. Recorded as those lines; [] is clean.
-_ARM_RE = re.compile(r"(?<![\w.])env[-+](?:only|skill)")
+# the harness's own files. Recorded as those lines; [] is clean. `env-skills`, the
+# directory holding the environment's skills in every arm, names no arm.
+_ARM_RE = re.compile(r"(?<![\w.])env[-+](?:only|skill(?!s\b))")
 rec["arm_seen"] = ([l[:160] for l in plain.splitlines() if _ARM_RE.search(l)][:10]
                    if txt else None)
 
@@ -609,6 +615,80 @@ def _generation_speed(run_dir):
     return (round(tokens / secs, 2), int(secs)) if secs > 0 else None
 
 
+def _final_text(run_dir):
+    """The agent's last words: the last text part of an assistant message in the run's
+    top-level session. "" when it wrote none; None without a readable database."""
+    import sqlite3
+    opened = _open_db(run_dir)
+    if opened is None:
+        return None
+    con, _ = opened
+    try:
+        dirs = _session_dirs(run_dir)
+        q = ("select id from session where directory in (%s)%s order by time_created "
+             "desc limit 1")
+        # A subagent's session shares the directory; its words are not the run's. A
+        # database without the parent_id column has no subagent sessions to skip.
+        try:
+            sid = con.execute(q % (",".join("?" * len(dirs)), " and parent_id is null"),
+                              dirs).fetchone()
+        except sqlite3.OperationalError:
+            sid = con.execute(q % (",".join("?" * len(dirs)), ""), dirs).fetchone()
+        if sid is None:
+            return None
+        roles = {row["id"]: json.loads(row["data"]).get("role") for row in con.execute(
+            "select id, data from message where session_id = ?", (sid[0],))}
+        last = ""
+        for row in con.execute("select message_id, data from part where session_id = ? "
+                               "order by time_created", (sid[0],)):
+            d = json.loads(row["data"])
+            if d.get("type") == "text" and roles.get(row["message_id"]) == "assistant":
+                last = d.get("text") or last
+        return last
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+def _nifti_voxels(path):
+    """Voxels a NIfTI-1 or NIfTI-2 header declares, gzipped or not; 0 when the file
+    is not a NIfTI image."""
+    import gzip
+    import struct
+    try:
+        with open(path, "rb") as fh:
+            gz = fh.read(2) == b"\x1f\x8b"
+        with (gzip.open if gz else open)(path, "rb") as fh:
+            head = fh.read(540)
+    except Exception:
+        return 0
+    for e in "<>":
+        if len(head) >= 348 and struct.unpack(e + "i", head[:4])[0] == 348:
+            dims = struct.unpack(e + "8h", head[40:56])
+            break
+        if len(head) >= 540 and struct.unpack(e + "i", head[:4])[0] == 540:
+            dims = struct.unpack(e + "8q", head[16:80])
+            break
+    else:
+        return 0
+    n = 1
+    for d in dims[1:1 + max(0, min(dims[0], 7))]:
+        n *= max(0, d)   # an empty or invalid axis empties the image
+    return n
+
+
+# The agent's last words asking the user for something it needs to go on. In an
+# unattended run nobody answers, so with no output this is the run giving up.
+ASK_RE = re.compile(
+    r"\b(?:if you (?:can|could) (?:provide|share|upload|point|give)"
+    r"|please (?:provide|share|upload|confirm|let me know|advise)"
+    r"|could you (?:please )?(?:provide|share|upload|confirm|point|give)"
+    r"|can you (?:please )?(?:provide|share|upload|confirm|point|give)"
+    r"|let me know (?:if|whether|how|which|what)"
+    r"|would you like me to|do you want me to|shall i|should i proceed)\b", re.I)
+
+
 srow = _session_row(run_dir)
 if srow is not None:
     keys = srow.keys()
@@ -652,6 +732,14 @@ if rec["output_present"] and rec.get("start"):
         rec["seconds_to_output"] = max(0, int(os.path.getmtime(out) - t0))
     except Exception:
         pass
+# A brain mask holds hundreds of thousands of voxels at the least; an output written
+# only to fill the path can hold one.
+rec["output_voxels"] = _nifti_voxels(out) if rec["output_present"] else None
+_last = _final_text(run_dir)
+_ask = ASK_RE.search(_last or "")
+rec["final_ask"] = None if _last is None else (
+    re.sub(r"\s+", " ", _last[max(0, _ask.start() - 80):_ask.end() + 80]).strip()
+    if _ask else "")
 if rc is not None:
     try:
         rec["exit_code"] = int(rc)

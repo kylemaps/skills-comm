@@ -1043,6 +1043,12 @@ o=$(fa as3 arm_seen '$ ls
 data  scripts  submissions
 $ python3 -m venv venv-only && ls .venv-skill')
 [ "$o" = "[]" ] && ok "a transcript without an arm label is clean, words like venv-only too" || bad "clean transcript flagged: $o"
+o=$(fa as4 arm_seen '$ ls /home/runner/_work/_temp/env-skills
+astra')
+[ "$o" = "[]" ] && ok "  the env-skills directory, present in every arm, names no arm" || bad "env-skills flagged: $o"
+o=$(fa as5 arm_seen '$ cat event.json
+{"inputs": {"arm": "env+skill-michele"}}')
+has   "  a second skill arm's label still is recorded" "$o" "env+skill-michele"
 
 echo
 echo "=== finalize_run: tokens found after the working directory was renamed"
@@ -2071,6 +2077,93 @@ rbk neurodesk/EGI.kimi-k3
 [ "$(cat "$T/seen" 2>/dev/null)" = "NEURODESK_API_KEY " ] && ok "a gateway run's agent holds only NEURODESK_API_KEY" || bad "gateway agent keys: $(cat "$T/seen" 2>/dev/null)"
 rbk other/x; expect 2 $? "a model whose provider sweep.json does not declare stops before the agent"
 [ -f "$T/seen" ] && bad "  the agent ran anyway" || ok "  and the agent never started"
+rm -rf "$T"
+
+echo
+echo "=== behaviours: a placeholder output, stopping to ask, a timeout after the output"
+T=$(mktemp -d)
+# NIfTI headers only: output_voxels reads no further.
+mknii() { mkdir -p "$(dirname "$1")"; "$PY" -c "import gzip,struct,sys
+d = [int(x) for x in sys.argv[2].split('x')]
+if sys.argv[3] == '1':
+    h = bytearray(352); struct.pack_into('<i', h, 0, 348)
+    struct.pack_into('<8h', h, 40, len(d), *(d + [1] * (7 - len(d))))
+else:
+    h = bytearray(544); struct.pack_into('<i', h, 0, 540)
+    struct.pack_into('<8q', h, 16, len(d), *(d + [1] * (7 - len(d))))
+(open if sys.argv[4] == 'raw' else gzip.open)(sys.argv[1], 'wb').write(bytes(h))" "$1" "$2" "${3:-1}" "${4:-gz}"; }
+ov() { d="$T/$1"; mkdir -p "$d"; echo '{"task_id":"t"}' > "$d/run.json"; printf '$ ls\n' > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['output_voxels'])" "$d/run.json" | tr -d '\r'; }
+mknii "$T/v1/submissions/t/output.nii.gz" 1x1x1
+[ "$(ov v1)" = 1 ] && ok "a 1x1x1 output: output_voxels 1" || bad "1-voxel output: $(ov v1)"
+mknii "$T/v2/submissions/t/output.nii.gz" 256x352x224
+[ "$(ov v2)" = 20185088 ] && ok "a 256x352x224 output: every voxel counted" || bad "full output: $(ov v2)"
+mknii "$T/v3/submissions/t/output.nii.gz" 64x64x40 2
+[ "$(ov v3)" = 163840 ] && ok "a NIfTI-2 header is read too" || bad "NIfTI-2: $(ov v3)"
+mkdir -p "$T/v4/submissions/t"; printf 'not an image' > "$T/v4/submissions/t/output.nii.gz"
+[ "$(ov v4)" = 0 ] && ok "a file that is not a NIfTI image: 0" || bad "junk output: $(ov v4)"
+[ "$(ov v5)" = None ] && ok "no output: None" || bad "no output: $(ov v5)"
+mknii "$T/v6/submissions/t/output.nii.gz" 256x256x0
+[ "$(ov v6)" = 0 ] && ok "an image with an empty axis holds 0 voxels" || bad "empty axis: $(ov v6)"
+mknii "$T/v7/submissions/t/output.nii.gz" 32x32x32 1 raw
+[ "$(ov v7)" = 32768 ] && ok "an uncompressed NIfTI file is read too" || bad "uncompressed: $(ov v7)"
+# The agent's last words, from the database: assistant text only, the top-level session only.
+mkfinal() { mkdir -p "$1/.xdg-data/opencode"; "$PY" -c "import json,sqlite3,sys
+c = sqlite3.connect(sys.argv[1])
+c.execute('create table session (id text, directory text, parent_id text, time_created int, time_updated int)')
+c.execute('create table message (id text, session_id text, time_created int, time_updated int, data text)')
+c.execute('create table part (id text, message_id text, session_id text, time_created int, time_updated int, data text)')
+def say(sid, mid, role, t, text):
+    c.execute('insert into message values (?,?,?,?,?)', (mid, sid, t, t, json.dumps({'role': role})))
+    c.execute('insert into part values (?,?,?,?,?,?)', (mid + 'p', mid, sid, t, t, json.dumps({'type': 'text', 'text': text})))
+c.execute('insert into session values (?,?,?,?,?)', ('s1', sys.argv[2], None, 1000, 2000))
+say('s1', 'u1', 'user', 1000, 'Please provide the mask. Could you provide it at the path?')
+say('s1', 'a1', 'assistant', 1100, sys.argv[3])
+say('s1', 'u2', 'user', 1200, 'Could you provide the stripped image too?')
+if len(sys.argv) > 4:
+    c.execute('insert into session values (?,?,?,?,?)', ('s2', sys.argv[2], 's1', 3000, 4000))
+    say('s2', 'a2', 'assistant', 3100, sys.argv[4])
+c.commit()" "$1/.xdg-data/opencode/opencode.db" "$2" "$3" ${4:+"$4"}; }
+fa2() { d="$T/$1"; mkdir -p "$d"; echo "{\"task_id\":\"t\",\"workdir\":\"sess-$1\"}" > "$d/run.json"
+  printf '$ ls\n' > "$d/transcript.txt"; "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; print(repr(json.load(open(sys.argv[1]))['final_ask']))" "$d/run.json" | tr -d '\r'; }
+mkfinal "$T/f1" sess-f1 "The download failed. If you can provide a direct link to the file, I can proceed."
+has   "last words asking the user are recorded" "$(fa2 f1)" "If you can provide a direct link"
+mkfinal "$T/f2" sess-f2 "Wrote the mask and ran QC; all checks pass."
+[ "$(fa2 f2)" = "''" ] && ok "  last words that ask nothing: \"\" (user messages, even later ones, are not read)" || bad "  f2: $(fa2 f2)"
+# An older database with no parent_id column: no subagents to skip, the words still read.
+mkdir -p "$T/f5/.xdg-data/opencode"; "$PY" -c "import json,sqlite3,sys
+c = sqlite3.connect(sys.argv[1])
+c.execute('create table session (id text, directory text, time_created int, time_updated int)')
+c.execute('create table message (id text, session_id text, time_created int, time_updated int, data text)')
+c.execute('create table part (id text, message_id text, session_id text, time_created int, time_updated int, data text)')
+c.execute('insert into session values (?,?,?,?)', ('s1', 'sess-f5', 1000, 2000))
+c.execute('insert into message values (?,?,?,?,?)', ('a1', 's1', 1100, 1100, json.dumps({'role': 'assistant'})))
+c.execute('insert into part values (?,?,?,?,?,?)', ('a1p', 'a1', 's1', 1100, 1100,
+  json.dumps({'type': 'text', 'text': 'I could not read the image. Please provide a NIfTI copy.'})))
+c.commit()" "$T/f5/.xdg-data/opencode/opencode.db"
+has   "  a database without parent_id is still read" "$(fa2 f5)" "Please provide a NIfTI copy"
+mkfinal "$T/f3" sess-f3 "Done: mask written." "Could you provide the dataset?"
+[ "$(fa2 f3)" = "''" ] && ok "  a subagent's last words are not the run's" || bad "  f3: $(fa2 f3)"
+[ "$(fa2 f4)" = "None" ] && ok "  no database: None, not a clean \"\"" || bad "  f4: $(fa2 f4)"
+# summarize: one tag each, in their own column; never a flag.
+br() { d="$T/runs/t__neurodesk-m__env-only__r$1"; mkdir -p "$d"
+  echo "{\"task_id\":\"t\",\"model\":\"neurodesk/m\",\"condition\":\"env-only\",\"repeat\":$1,$2}" > "$d/run.json"; }
+br 1 '"exit_code":0,"output_present":true,"output_voxels":1,"final_ask":""'
+br 2 '"exit_code":0,"output_present":false,"output_voxels":null,"final_ask":"If you can provide a direct link, I can proceed."'
+br 3 '"exit_code":124,"output_present":true,"output_voxels":20185088,"final_ask":""'
+br 4 '"exit_code":0,"output_present":true,"output_voxels":20185088,"final_ask":"Let me know if you would like more QC."'
+br 5 '"exit_code":124,"output_present":false,"output_voxels":null,"final_ask":"Could you provide the data?"'
+"$PY" "$HERE/summarize.py" "$T/runs" t --out-dir "$T/sum" >/dev/null 2>&1
+expect 0 $? "summarize reads them"
+"$PY" -c "import csv,sys
+rows = {r['rep']: (r['behaviours'], r['flags']) for r in csv.DictReader(open(sys.argv[1]))}
+want = {'1': 'placeholder-output', '2': 'stopped-to-ask', '3': 'timeout-after-output', '4': '', '5': ''}
+assert {k: v[0] for k, v in rows.items()} == want, rows
+assert all(v[1] == '' for v in rows.values()), rows" "$T/sum/runs_t.csv" 2>"$T/e" \
+  && ok "  each tag on its own run; a closing offer after an output and a timeout with none get none; flags stay empty" \
+  || bad "  $(tail -1 "$T/e")"
 rm -rf "$T"
 
 echo

@@ -114,6 +114,10 @@ NOT_FOUND_RE = re.compile(
 # caught it and 51 runs across earlier sweeps were scored as model failures.
 RUN_TIMEOUT_EXIT = 124
 
+# An output holding fewer voxels than this is a placeholder, not a mask: a brain mask
+# holds hundreds of thousands at the least.
+PLACEHOLDER_VOXELS = 1000
+
 # Which exclusions mean "we broke this run, run it again".
 #
 # Every reason below is our fault: the wrong skill in place, the right skill
@@ -568,6 +572,20 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # Why a run is flagged but kept: "answer-key", "arm-seen", "control-read-skill".
     r["flags"] = (["answer-key"] * bool(r["answer_key_reads"])
                   + ["arm-seen"] * bool(r["arm_seen"]))
+    # Behaviours seen across runs, one tag each. Descriptive: never an exclusion, and
+    # never a flag (flags drive the "flagged removed" sensitivity row).
+    #   placeholder-output    an output that is not a NIfTI image or holds fewer than
+    #                         PLACEHOLDER_VOXELS voxels (finalize_run's output_voxels)
+    #   stopped-to-ask        stopped on its own with no output, its last words asking
+    #                         the user for something (finalize_run's final_ask)
+    #   timeout-after-output  hit the wall after writing its output
+    ov = rec.get("output_voxels")
+    r["behaviours"] = (
+        ["placeholder-output"] * bool(r["output_present"] and ov is not None
+                                      and ov < PLACEHOLDER_VOXELS)
+        + ["stopped-to-ask"] * bool(not r["output_present"] and not r["timed_out"]
+                                    and not r["infra_error"] and rec.get("final_ask"))
+        + ["timeout-after-output"] * bool(r["timed_out"] and r["output_present"]))
 
     a = parse_astra(run_dir)
     r["decided_tools"] = a.get("decided_tools") or []
@@ -1247,6 +1265,7 @@ def report(runs, task, rules=None):
                     "unchecked": sum(1 for r in rs if r["arm_seen"] is None),
                 },
                 "flags": dict(Counter(f for r in rs for f in r["flags"])),
+                "behaviours": dict(Counter(b for r in rs for b in r.get("behaviours") or [])),
                 "timed_out": sum(1 for r in rs if r["timed_out"]),
                 "lost": sum(1 for r in rs if r["lost"]),
                 "not_found_claims": sum(r["not_found_claims"] for r in rs),
@@ -1273,7 +1292,7 @@ def report(runs, task, rules=None):
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
             "tools_loaded", "skill_load_failures", "off_spec", "answer_key_reads",
-            "arm_seen", "flags", "timed_out", "lost", "dataset_pin", "not_found_claims",
+            "arm_seen", "flags", "behaviours", "timed_out", "lost", "dataset_pin", "not_found_claims",
             "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
             "tokens_input", "tokens_output", "tokens_reasoning",
@@ -1341,7 +1360,7 @@ def main():
         for r in runs:
             row = dict(r)
             for k in ("methods", "tools_loaded", "dataset_pin",
-                      "decided_tools", "considered_tools", "flags"):
+                      "decided_tools", "considered_tools", "flags", "behaviours"):
                 row[k] = ";".join(row.get(k) or [])
             # Three states, so an empty cell cannot be read as clean.
             for k in ("off_spec", "answer_key_reads", "arm_seen", "web_hosts"):
