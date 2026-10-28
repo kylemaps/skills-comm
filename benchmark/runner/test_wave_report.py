@@ -175,6 +175,45 @@ class TestWaveReportSynthetic(unittest.TestCase):
             call(["--results", self.d, "--wave", "99", "--sweep", self.sweep_path])
 
 
+class TestBehaviourColumn(unittest.TestCase):
+    """The behaviour table counts the runs CSV's tags, and every run that stopped on its
+    own with no output (stopped-to-ask is one kind of it)."""
+
+    def test_tags_and_stopped_no_output_are_counted_per_arm(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "sweep.json"), "w", encoding="utf-8") as fh:
+            json.dump({"reps": 3, "waves": {"1": {"tasks": {"t": {
+                "models": ["P.m1"], "arms": ["env-only", "env+skill"]}}}}}, fh)
+        cols = CSV_COLS + ["behaviours", "output_present"]
+        rows = [
+            {"arm": "env-only", "rep": "1", "passed": "False", "output_present": "False",
+             "behaviours": "stopped-to-ask"},
+            {"arm": "env-only", "rep": "2", "passed": "False", "output_present": "True",
+             "behaviours": "placeholder-output"},
+            {"arm": "env-only", "rep": "3", "passed": "False", "output_present": "False",
+             "timed_out": "True"},
+            {"arm": "env+skill", "rep": "1", "passed": "True", "output_present": "True"},
+            {"arm": "env+skill", "rep": "2", "passed": "False", "output_present": "True",
+             "timed_out": "True", "behaviours": "timeout-after-output"},
+            {"arm": "env+skill", "rep": "3", "passed": "False", "output_present": "False"},
+        ]
+        with open(os.path.join(d, "runs_t.csv"), "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            for r in rows:
+                row = {c: "" for c in cols}
+                row.update(task="t", model="P.m1", off_spec="none", timed_out="False", valid="True")
+                row.update(r)
+                w.writerow(row)
+        out, rc = call(["--results", d, "--wave", "1", "--sweep", os.path.join(d, "sweep.json")])
+        self.assertEqual(rc, 0)
+        section = out.split("## Behaviour (valid runs)", 1)[1].split("\n## ", 1)[0]
+        cell = {l.split("|")[2].strip(): l.split("|")[9].strip() for l in section.splitlines()
+                if l.startswith("| t | env")}
+        self.assertEqual(cell["env-only"], "placeholder-output 1, stopped-no-output 1, stopped-to-ask 1")
+        self.assertEqual(cell["env+skill"], "stopped-no-output 1, timeout-after-output 1")
+
+
 class TestRunDirectories(unittest.TestCase):
     """The run directory a CSV row names, and the model a run directory names, for
     a gateway model and a direct provider's (model_ids.py)."""

@@ -33,7 +33,9 @@
     "egi": {
       "base_url": "https://llm.ai.egi.eu/v1",
       "key_env": "EGI_API_KEY",
-      "models_endpoint": true
+      "models_endpoint": true,
+      "_comment": "max_in_flight: jobs the dispatcher keeps in flight on this provider at once. The key allows 4 calls in flight across all its models; one is left for the probes and the config step.",
+      "max_in_flight": 3
     }
   },
 

@@ -300,9 +300,12 @@ def main():
         L += ["Pilot runs in the published record: %d." % pil, ""]
 
     # -- behaviour ----------------------------------------------------------
+    # behaviours: the runs CSV's tags (summarize.py), and stopped-no-output, any run that
+    # stopped on its own with no output (stopped-to-ask is one kind of it). Records from
+    # before the tags existed show only what their fields allow.
     L += ["## Behaviour (valid runs)", "",
-          "| task | arm | failures | minutes to output (median, n) | ASTRA names the decided tool | off-spec | timeouts | gate failures |",
-          "|---|---|---|---|---|---|---|---|"]
+          "| task | arm | failures | minutes to output (median, n) | ASTRA names the decided tool | off-spec | timeouts | gate failures | behaviours |",
+          "|---|---|---|---|---|---|---|---|---|"]
     for t in task_order:
         cfg = tasks[t]
         fails = {}
@@ -315,15 +318,19 @@ def main():
             sto = [r["_run"].get("seconds_to_output") for r in v if r["passed"] in ("True", "False")]
             sto = [s / 60 for s in sto if isinstance(s, (int, float)) and s > 0]
             gates = Counter(g.split(":")[0] for r in v for g in (r["_env"].get("gate_failures") or []))
-            L.append("| %s | %s | %d/%d | %s | %d | %d | %d | %s |" % (
+            beh = Counter(b for r in v for b in (r.get("behaviours") or "").split(";") if b)
+            beh["stopped-no-output"] = sum(1 for r in v if r.get("output_present") == "False"
+                                           and r["timed_out"] != "True")
+            L.append("| %s | %s | %d/%d | %s | %d | %d | %d | %s | %s |" % (
                 t, arm, fails[arm], len(v),
                 "%.1f (%d)" % (statistics.median(sto), len(sto)) if sto else "",
                 sum(1 for r in v if r["decided_tools"]),
                 sum(1 for r in v if (r["off_spec"] or "none") not in ("none", "unchecked")),
                 sum(1 for r in v if r["timed_out"] == "True"),
-                ", ".join("%s %d" % kv for kv in gates.most_common(4))))
+                ", ".join("%s %d" % kv for kv in gates.most_common(4)),
+                ", ".join("%s %d" % kv for kv in sorted(beh.items()) if kv[1])))
         if len(fails) == 2 and fails[cfg["control"]]:
-            L.append("| %s | failures fixed | %+.0f%% of no-skill failures | | | | | |" % (
+            L.append("| %s | failures fixed | %+.0f%% of no-skill failures | | | | | | |" % (
                 t, 100 * (fails[cfg["control"]] - fails[cfg["skill"]]) / fails[cfg["control"]]))
     L.append("")
 

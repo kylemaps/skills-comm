@@ -148,6 +148,8 @@ INFRA_ERROR_RES = [
     (re.compile(r"No matching route found"), "provider has no route for the model"),
     (re.compile(r"Invalid model name passed in model="), "provider does not serve the model"),
     (re.compile(r"upstream connect error|no healthy upstream"), "provider backend unreachable"),
+    # opencode's own word for a provider that stopped streaming its answer.
+    (re.compile(r"SSE read timed out"), "provider stream timed out"),
     # opencode keeps shared state -- one SQLite database and one local server -- and
     # every concurrent run touches the same `project` row. At MAXPAR=8 they collide:
     # runs die in 6-9 seconds having loaded no skill and spent no tokens. Scored as

@@ -310,6 +310,43 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(d.published_reps(results, 7, "taskA", "nrp/glm-5", "env-only"), {1})
         self.assertEqual(d.published_reps(results, 7, "taskA", "glm-5", "env-only"), set())
 
+    # A provider's cap bounds its jobs in flight across blocks: a block that would
+    # push it over waits, blocks on an uncapped provider go, and the plan's
+    # parallel token sets the block's max_parallel.
+    def test_provider_cap_holds_a_block_and_parallel_token_is_passed(self):
+        order = d.read_order(self.order_path([
+            "1 taskA egi/kimi-k3 env-only",
+            "2 taskB egi/kimi-k3 env-only",
+            "3 taskC nrp/glm-5 env-only",
+            "4 taskC nrp/qwen3-small env-only",
+        ]))
+        blocks = d.read_plan(self.plan_path([
+            "taskA reps=1,2,3,4,5 cells=1 parallel=3",
+            "taskB reps=1,2,3,4,5 cells=2 parallel=3",
+            "taskC reps=1,2,3 cells=3,4 parallel=6",
+        ]), order)
+        self.assertEqual([b.parallel for b in blocks], [3, 3, 6])
+        self.assertEqual(d.block_demand(blocks[0], order), {"egi": 3})
+        self.assertEqual(d.block_demand(blocks[2], order), {"nrp": 6})
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={})
+        rc, state = d.poll(gh, "o/r", 7, order, blocks, self.wave(reps=5), lanes=4,
+                           dry_run=True, provider_caps={"egi": 3})
+        self.assertEqual(rc, 0)
+        cmds = state["dispatched"]
+        self.assertEqual(len(cmds), 2)                       # one EGI block + the NRP block
+        self.assertEqual(sum("egi/kimi-k3" in c for c in cmds), 1)
+        self.assertTrue(any("nrp/glm-5" in c and "max_parallel=6" in c for c in cmds))
+        self.assertTrue(any("HOLD" in l and "egi" in l for l in state["log"]))
+        # With 2 EGI jobs already in flight, even the first EGI block must wait.
+        run1 = {"id": 901, "status": "in_progress", "conclusion": None, "created_at": "2026-10-28T00:00:00Z"}
+        jobs = [job("rep %d taskA egi/kimi-k3 env-only" % r, 9000 + r, status="in_progress", conclusion=None)
+                for r in (1, 2)]
+        gh2 = FakeGh(runs=[run1], jobs_by_run={901: jobs}, logs_by_job={})
+        rc2, state2 = d.poll(gh2, "o/r", 7, order, blocks, self.wave(reps=5), lanes=4,
+                             dry_run=True, provider_caps={"egi": 3})
+        self.assertEqual(sum("egi/kimi-k3" in c for c in state2["dispatched"]), 0)
+        self.assertEqual(sum("nrp/" in c for c in state2["dispatched"]), 1)
+
     def test_dry_run_against_real_wave6_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
         local = os.path.normpath(os.path.join(here, "..", "..", "_local"))

@@ -8,7 +8,8 @@ Design: one poll recomputes everything from GitHub and the published record; no 
         [--dry-run] [--state-json out.json] [--results results/]
 
 Plan file: one block per committed line, "<task> reps=<r,r,...> cells=<n,n,...>
-[rerunN]" (cell numbers of the order file); "#" lines and blanks are ignored.
+[parallel=N] [rerunN]" (cell numbers of the order file; parallel = how many of the
+block's jobs run at once, default 1); "#" lines and blanks are ignored.
 Order file: "<cell> <task> <model> <arm>", one line per declared cell; <model> is
 the wave id (model_ids.py): EGI.kimi-k3 through the gateway, nrp/glm-5 direct.
 
@@ -33,7 +34,7 @@ import re
 import shlex
 import subprocess
 import sys
-from collections import namedtuple
+from collections import Counter, namedtuple
 
 from model_ids import opencode_id, segment, wave_id
 
@@ -55,7 +56,8 @@ OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
 # any single attempt reached wins (see _merge).
 _BAD_RANK = {"rerun": 1, "lost-candidate": 2, "fingerprint-changed": 3, "unknown": 4}
 
-Block = namedtuple("Block", "task cells reps line")
+# parallel: run.yml's max_parallel for the block (plan token "parallel=N", default 1).
+Block = namedtuple("Block", "task cells reps line parallel", defaults=(1,))
 
 
 # --- plan, order and sweep -----------------------------------------------------
@@ -90,10 +92,17 @@ def read_plan(path, order):
         if not line or line.startswith("#"):
             continue
         w = line.split()
-        if len(w) not in (3, 4) or (len(w) == 4 and not re.fullmatch(r"rerun\d*", w[3])):
+        parallel, rerun = 1, False
+        for tok in w[3:]:
+            if re.fullmatch(r"rerun\d*", tok):
+                rerun = True
+            elif re.fullmatch(r"parallel=[1-9]\d*", tok):
+                parallel = int(tok[9:])
+            else:
+                raise SystemExit("bad block: " + line)
+        if len(w) < 3:
             raise SystemExit("bad block: " + line)
         task, r, c = w[:3]
-        rerun = len(w) == 4
         if not (r.startswith("reps=") and c.startswith("cells=")):
             raise SystemExit("bad block: " + line)
         reps = sorted({int(x) for x in r[5:].split(",")})
@@ -107,7 +116,7 @@ def read_plan(path, order):
                 if (cell, rep) in pairs and not rerun:
                     raise SystemExit("cell %d rep %d planned twice: %s" % (cell, rep, line))
                 pairs.add((cell, rep))
-        blocks.append(Block(task=task, cells=cells, reps=reps, line=line))
+        blocks.append(Block(task=task, cells=cells, reps=reps, line=line, parallel=parallel))
     return blocks
 
 
@@ -303,7 +312,7 @@ def next_undispatched_block(task, blocks, pair_status, order, incomplete):
             continue
         pairs = [(c, r) for c in cells for r in b.reps]
         if all(p not in pair_status for p in pairs):
-            return Block(task=task, cells=cells, reps=b.reps, line=b.line)
+            return Block(task=task, cells=cells, reps=b.reps, line=b.line, parallel=b.parallel)
     return None
 
 
@@ -327,7 +336,19 @@ def pick_retry_block(owed_pairs, order):
     return Block(task=order[kept[0]][0], cells=kept, reps=[rep], line=None)
 
 
-def build_run_fields(task, cells, order, reps, snapshot, capability, wave):
+def provider_of(model):
+    """The provider a wave id resolves to: neurodesk for a bare id (model_ids.py)."""
+    return opencode_id(model).split("/", 1)[0]
+
+
+def block_demand(block, order):
+    """Jobs a block can hold in flight at once, per provider: no more than its
+    parallel setting, and no more than its (cell, rep) pairs on that provider."""
+    pairs = Counter(provider_of(order[c][1]) for c in block.cells for _ in block.reps)
+    return {p: min(block.parallel, n) for p, n in pairs.items()}
+
+
+def build_run_fields(task, cells, order, reps, snapshot, capability, wave, parallel=1):
     cells_arg = " ".join("%s:%s" % (opencode_id(order[c][1]), order[c][2]) for c in cells)
     # A single rep sent bare ("5") is read by run.yml as a COUNT (reps 1-5), not
     # the one rep it names; doubling it ("5 5") forces the list parse instead.
@@ -336,7 +357,7 @@ def build_run_fields(task, cells, order, reps, snapshot, capability, wave):
                 else "%d %d" % (reps[0], reps[0]))
     return {
         "task": task, "cells": cells_arg, "snapshot": snapshot, "capability": capability,
-        "reps": reps_arg, "max_parallel": "1", "label": "benchmark", "wave": str(wave),
+        "reps": reps_arg, "max_parallel": str(parallel), "label": "benchmark", "wave": str(wave),
     }
 
 
@@ -397,8 +418,11 @@ def load_job_cache(path):
 
 def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
          results_dir=None, dry_run=True, snapshot="", capability="brain-extraction",
-         job_cache=None):
-    """One stateless poll. Returns (exit_code, state)."""
+         job_cache=None, provider_caps=None):
+    """One stateless poll. Returns (exit_code, state). provider_caps: provider ->
+    most jobs in flight at once (sweep.json providers.<p>.max_in_flight); a block
+    that could push a provider over its cap waits for a later poll."""
+    provider_caps = provider_caps or {}
     log = []
     job_cache = dict(job_cache or {})
     incomplete = wave_sweep["incomplete"]
@@ -498,15 +522,28 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
         owed_by_task.setdefault(order[cell][0], []).append((cell, rep))
     free = max(0, lanes - len(active_tasks))
     ranked = sorted(owed_by_task, key=lambda t: (-len(owed_by_task[t]), t))
+    # Jobs in flight per provider, read off every in-flight pair; what this poll
+    # dispatches is added as it goes, so two blocks cannot share one cap's room.
+    flight = Counter(provider_of(order[c][1]) for c, _ in in_flight)
 
     dispatched = []
-    for task in [t for t in ranked if t not in active_tasks][:free]:
+    for task in [t for t in ranked if t not in active_tasks]:
+        if len(dispatched) >= free:
+            break
         block = next_undispatched_block(task, blocks, pair_status, order, incomplete)
         if block is None:
             block = pick_retry_block(owed_by_task[task], order)
         if block is None or not block.cells:
             continue
-        fields = build_run_fields(task, block.cells, order, block.reps, snapshot, capability, wave)
+        demand = block_demand(block, order)
+        over = [p for p, n in demand.items() if p in provider_caps and flight[p] + n > provider_caps[p]]
+        if over:
+            log.append("HOLD %s: %s at its cap (%s in flight)" % (
+                block.line or task, ", ".join(over), ", ".join("%s %d" % kv for kv in sorted(flight.items()))))
+            continue
+        flight.update(demand)
+        fields = build_run_fields(task, block.cells, order, block.reps, snapshot, capability, wave,
+                                  block.parallel)
         cmd = _gh_command("run.yml", repo, fields)
         dispatched.append(cmd)
         log.append(("DRY " if dry_run else "") + cmd)
@@ -569,9 +606,13 @@ def main(argv=None):
     gh = Gh(a.repo)
     job_cache = load_job_cache(a.state_in)
 
+    provider_caps = {name: int(p["max_in_flight"]) for name, p in (sweep.get("providers") or {}).items()
+                     if not name.startswith("_") and "max_in_flight" in p}
+
     rc, state = poll(gh, a.repo, a.wave, order, blocks, wave_sweep, lanes,
                      since=a.since, results_dir=a.results, dry_run=a.dry_run,
-                     snapshot=a.snapshot, capability=a.capability, job_cache=job_cache)
+                     snapshot=a.snapshot, capability=a.capability, job_cache=job_cache,
+                     provider_caps=provider_caps)
 
     declared = sum(1 for _, m, _ in order.values() if m not in wave_sweep["incomplete"])
     for line in state["log"]:
