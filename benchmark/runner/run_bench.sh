@@ -2,7 +2,8 @@
 # run_bench.sh TASK MODEL CONDITION REPEAT
 #
 # Runs one benchmark cell headlessly and leaves a submission the grader can score.
-#   TASK      e.g. structural-brain-extraction-7t
+#   TASK      e.g. structural-brain-extraction-7t; <task>@<subject> for a task
+#             graded per subject (run_ids.py)
 #   MODEL     e.g. neurodesk/minimax-m2
 #   CONDITION env-only | env+skill
 #   REPEAT    integer
@@ -18,6 +19,18 @@ set -u
 [ -f "${BENCH_HOME:-$HOME/bench}/.env" ] && . "${BENCH_HOME:-$HOME/bench}/.env"
 
 TASK="$1"; MODEL="$2"; COND="$3"; REP="$4"
+# One run is one task and, for a task graded per subject, one subject: the run id
+# <task>@<subject> (run_ids.py) names the run everywhere; the task pack and the
+# grader take its parts. Split as run_ids.py splits, at the first '@'.
+case "$TASK" in
+  *@*) TASK_BASE="${TASK%%@*}"; SUBJECT="${TASK#*@}"
+       if [ -z "$TASK_BASE" ] || [ -z "$SUBJECT" ] || [ "${SUBJECT#*@}" != "$SUBJECT" ]; then
+         echo "ABORT: run id '$TASK' is not <task> or <task>@<subject>" >&2; exit 2
+       fi ;;
+  *)   TASK_BASE="$TASK"; SUBJECT="" ;;
+esac
+# The run's contracted output: one level deeper for a subject run.
+OUT_REL="submissions/$TASK_BASE${SUBJECT:+/$SUBJECT}/output.nii.gz"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
@@ -101,8 +114,8 @@ OPENCODE_BIN="${OPENCODE_BIN:-/usr/bin/opencode}"
 # spent rather than discovered when the results will not line up. Checked only when
 # the pack is readable: an unreadable pack is a different failure, reported later
 # by the code that needs it.
-if [ -f "$TASKS" ] && ! grep -q "\"$TASK\"" "$TASKS"; then
-  echo "ABORT: task id '$TASK' is not in $TASKS." >&2
+if [ -f "$TASKS" ] && ! grep -q "\"$TASK_BASE\"" "$TASKS"; then
+  echo "ABORT: task id '$TASK_BASE' is not in $TASKS." >&2
   echo "       A near-miss id yields runs that no grader can score." >&2
   exit 2
 fi
@@ -269,10 +282,11 @@ PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 # records it, and finalize_run.py looks the session up by it.
 # wave: the wave the run was dispatched for (RUN_WAVE), empty outside one.
 # The fields that name the run are held in IDENT and added to the record by land().
+# task_id is the run id; subject is its subject, "" for a task with one reference.
 # env_skills, env_skills_hash, instructions_hash: the environment's skills (every
 # arm) and standing instruction file, "" when there are none.
-IDENT=$(printf '{"task_id":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s","env_skills":"%s","env_skills_hash":"%s","instructions_hash":"%s"}' \
-  "$TASK" "$MODEL" "$COND" "$REP" \
+IDENT=$(printf '{"task_id":"%s","subject":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s","env_skills":"%s","env_skills_hash":"%s","instructions_hash":"%s"}' \
+  "$TASK" "$SUBJECT" "$MODEL" "$COND" "$REP" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
   "$SKILLSRC" "$SKILLS_HASH" "$(ls -1 "$SKILLDST" 2>/dev/null | tr '\n' ' ')" \
   "${RUN_LABEL:-benchmark}" "${RUN_WAVE:-}" \
@@ -438,4 +452,4 @@ land
 # run.json is written before the agent starts, so it cannot know which tools the
 # agent picked. Read them back out of the transcript now.
 python "$HERE/finalize_run.py" "$RUN" "$RC" 2>/dev/null
-echo "  exit=$RC out=$(ls "$RUN/submissions/$TASK/output.nii.gz" 2>/dev/null || echo MISSING)"
+echo "  exit=$RC out=$(ls "$RUN/$OUT_REL" 2>/dev/null || echo MISSING)"

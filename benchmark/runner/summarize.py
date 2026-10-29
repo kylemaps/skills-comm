@@ -460,8 +460,10 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
         # or stale field silently converts a finished mask into a failure. That
         # is the same family as the bug that reported 7t-nodura as 0/70 with 50
         # masks on disk, and the disk is the ground truth here.
+        # One level deeper for a subject run (run_ids.py).
         "output_present": bool(rec.get("output_present")) or bool(
-            glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))),
+            glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+            or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz"))),
         "skill_loads": rec.get("skill_loads", 0),
         "skills_seen": rec.get("skills_seen") or [],
         "skill_load_failures": rec.get("skill_load_failures", 0),

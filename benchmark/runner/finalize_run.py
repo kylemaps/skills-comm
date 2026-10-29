@@ -715,9 +715,15 @@ if srow is not None:
 _speed = _generation_speed(run_dir)
 rec["tokens_output_per_s"], rec["generation_s"] = _speed if _speed else (None, None)
 
-task = rec.get("task_id", "")
-out = os.path.join(run_dir, "submissions", task, "output.nii.gz")
-rec["output_present"] = os.path.exists(out)
+# The run id's own output (run_ids.py): submissions/<task>/output.nii.gz, one level
+# deeper for a subject run. An output anywhere else is not this run's.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from run_ids import output_rel  # noqa: E402
+try:
+    out = os.path.join(run_dir, *output_rel(rec.get("task_id", "")).split("/"))
+except ValueError:          # half a run id names no path
+    out = None
+rec["output_present"] = bool(out) and os.path.exists(out)
 
 # Time to a usable result, which is not the same as run duration. A run that
 # produced its mask in 5 minutes and then spent 40 more trying to repair a batch
@@ -753,7 +759,6 @@ if rc is not None:
 #   timeout        stopped at the wall (exit 124)
 #   gateway_cut    an opencode error the harness classes as infrastructure, no output
 #   no_model_call  no output and not one token spent (the database reported the tokens)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from summarize import INFRA_ERROR_RES, RUN_TIMEOUT_EXIT  # noqa: E402
 _infra = "\n".join("Error: " + m for m in rec.get("opencode_errors") or [])
 if rec.get("exit_code") == RUN_TIMEOUT_EXIT:

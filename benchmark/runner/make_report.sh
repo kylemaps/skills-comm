@@ -83,7 +83,7 @@ echo "=== report -> $OUT"
   echo "robust_panel       $ROBUST"
   echo "run_dirs           $(ls -1 "$RUNS" 2>/dev/null | wc -l)"
   echo "graded_runs        $(ls -1 "$RUNS"/*/envelope.json 2>/dev/null | wc -l)"
-  echo "masks_on_disk      $(ls -1 "$RUNS"/*/submissions/*/output.nii.gz 2>/dev/null | wc -l)"
+  echo "masks_on_disk      $(ls -1 "$RUNS"/*/submissions/*/output.nii.gz "$RUNS"/*/submissions/*/*/output.nii.gz 2>/dev/null | wc -l)"
   for t in "${TASKS[@]}"; do
     echo "task $t  $(ls -1d "$RUNS/$t"__* 2>/dev/null | wc -l) run dirs"
   done

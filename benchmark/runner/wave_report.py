@@ -85,6 +85,7 @@ def wave_config(sweep, wave):
     incomplete = {k for k in (w.get("incomplete") or {}) if not k.startswith("_")}
     reps = w.get("reps", sweep.get("reps"))
     pair = (w.get("arms_compared") or {}).get("primary")
+    secondary = [tuple(c) for c in (w.get("arms_compared") or {}).get("secondary") or []]
     tasks = {}
     for t, td in (w.get("tasks") or {}).items():
         models = [m for m in (td.get("models") or []) if m not in incomplete]
@@ -94,7 +95,14 @@ def wave_config(sweep, wave):
         else:
             control = "env-only"
             skill = next((a for a in arms if a != control), None)
-        tasks[t] = {"models": models, "arms": arms, "skill": skill, "control": control}
+        # A family pools subject tasks (one task per subject) as strata of one
+        # comparison; `comparisons` is the primary pair, then any secondary ones the
+        # task's arms allow.
+        comparisons = [(skill, control)] + [c for c in secondary
+                                            if c[0] in arms and c[1] in arms]
+        tasks[t] = {"models": models, "arms": arms, "skill": skill, "control": control,
+                    "family": td.get("family"), "subject": td.get("subject") or t,
+                    "comparisons": comparisons}
     pilot_runs = w.get("pilot_runs")
     return tasks, reps, pilot_runs, (w.get("speed_baseline") or {})
 
@@ -128,17 +136,18 @@ def load(results, tasks):
 # -------------------------------------------------------------------- stats
 
 def custom_strata(rows, models, control, arm, keep=lambda r: True,
-                  passed=lambda r: r["passed"] == "True"):
-    """(model, control passes, control n, skill passes, skill n), for a scenario
+                  passed=lambda r: r["passed"] == "True", key=lambda r: r["model"]):
+    """(stratum, control passes, control n, skill passes, skill n), for a scenario
     stratified_effect.py has no concept of (e.g. "this run's CI id is a pilot
-    run"). Mirrors strata_from_runs's own shape and MIN_N cutoff."""
+    run"). Mirrors strata_from_runs's own shape and MIN_N cutoff. A stratum is a
+    model unless `key` says otherwise (a family's: model x subject)."""
     cells = defaultdict(lambda: {control: [0, 0], arm: [0, 0]})
     for r in rows:
         if r["valid"] != "True" or r["arm"] not in (control, arm) or not keep(r):
             continue
         if r["model"] not in models:
             continue
-        c = cells[r["model"]]
+        c = cells[key(r)]
         c[r["arm"]][0] += passed(r)
         c[r["arm"]][1] += 1
     return [(m, c[control][0], c[control][1], c[arm][0], c[arm][1])
@@ -176,6 +185,8 @@ def fmt_row(r):
 ROW_HEADER = ("| analysis | models | no skill | with skill | difference (95% CI) "
              "| exact p | + / - | het p (I2) |")
 ROW_RULE = "|---|---|---|---|---|---|---|---|"
+FAMILY_HEADER = ("| family: arm vs control | strata (model x subject) | control | arm "
+                 "| difference (95% CI) | exact p | + / - | het p (I2) |")
 
 
 # -------------------------------------------------------------------- speed
@@ -234,19 +245,34 @@ def main():
     L = []
 
     # -- completeness ---------------------------------------------------
-    L += ["## Completeness", "", "| task | model | no skill | with skill |", "|---|---|---|---|"]
-    complete = True
+    # Every arm a task declares is counted; with only the compared pair the columns
+    # keep their no skill / with skill names.
+    cols = []
+    for t in task_order:
+        for arm in [tasks[t]["control"], tasks[t]["skill"]] + list(tasks[t]["arms"]):
+            if arm not in cols:
+                cols.append(arm)
+    if len(cols) == 2:
+        L += ["## Completeness", "", "| task | model | no skill | with skill |", "|---|---|---|---|"]
+    else:
+        L += ["## Completeness", "", "| task | model | %s |" % " | ".join(cols),
+              "|---|---|%s" % "---|" * len(cols)]
+    complete, n_cells = True, 0
     for t in task_order:
         cfg = tasks[t]
+        own = set(cfg["arms"]) | {cfg["control"], cfg["skill"]}
         for m in cfg["models"]:
             cells = []
-            for arm in (cfg["control"], cfg["skill"]):
+            for arm in cols:
+                if arm not in own:
+                    cells.append("")
+                    continue
                 rs = [r for r in rows[t] if r["model"] == m and r["arm"] == arm]
                 n, lost = len(rs), sum(1 for r in rs if r["lost"])
                 complete &= n == reps
+                n_cells += 1
                 cells.append("%d/%d%s" % (n, reps, " (%d lost)" % lost if lost else ""))
-            L.append("| %s | %s | %s | %s |" % (t, m, cells[0], cells[1]))
-    n_cells = sum(len(tasks[t]["models"]) * 2 for t in task_order)
+            L.append("| %s | %s | %s |" % (t, m, " | ".join(cells)))
     L += ["", ("All %d cells complete." % n_cells) if complete
           else "NOT COMPLETE: numbers below are interim.", ""]
 
@@ -263,6 +289,27 @@ def main():
         holm, bh = se.holm([p for _, p in tested]), se.bh([p for _, p in tested])
         L += ["", "Adjusted across %d tasks (Holm / BH): " % len(tested) + "; ".join(
             "%s %s / %s" % (t, fp(h), fp(b)) for (t, _), h, b in zip(tested, holm, bh))]
+    families = {}
+    for t in task_order:
+        if tasks[t]["family"]:
+            families.setdefault(tasks[t]["family"], []).append(t)
+    if families:
+        L += ["", "## Families (subject tasks pooled, strata = model x subject)", "",
+              FAMILY_HEADER, ROW_RULE]
+        fam_ps = []
+        for fam, members in families.items():
+            frows = [dict(r, _subject=tasks[t]["subject"]) for t in members for r in rows[t]]
+            models = sorted({m for t in members for m in tasks[t]["models"]})
+            for i, (arm, control) in enumerate(tasks[members[0]]["comparisons"]):
+                st = custom_strata(frows, models, control, arm,
+                                   key=lambda r: "%s|%s" % (r["model"], r["_subject"]))
+                L.append(fmt_row(row_dict("%s: %s vs %s" % (fam, arm, control), st)))
+                if i == 0 and st:
+                    fam_ps.append((fam, se.exact_stratified_p(st)))
+        if len(fam_ps) > 1:
+            holm, bh = se.holm([p for _, p in fam_ps]), se.bh([p for _, p in fam_ps])
+            L += ["", "Primary, adjusted across %d families (Holm / BH): " % len(fam_ps) + "; ".join(
+                "%s %s / %s" % (f, fp(h), fp(b)) for (f, _), h, b in zip(fam_ps, holm, bh))]
     L += ["", "## Per model per task", ""]
     for t in task_order:
         cfg = tasks[t]

@@ -1,5 +1,6 @@
 #!/bin/bash
 # collect_results.sh TASK
+#   TASK   a task id, or <task>@<subject> for a task graded per subject (run_ids.py)
 #
 # Grade every run for TASK with the task's grader pack, then report.
 #
@@ -17,6 +18,16 @@ TASK="${1:?usage: collect_results.sh TASK}"
 BENCH_HOME="${BENCH_HOME:-$HOME/bench}"
 HARNESS="${HARNESS_DIR:-$HOME/grader-repo/benchmark/harness}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# One run is one task and, for a task graded per subject, one subject. Runs are
+# named by the run id; the grader takes its parts: fetch_reference.py --subject
+# selects that subject's reference and rubric, grade_wrapper.py --subject reads
+# that subject's output path. Split as run_ids.py splits, at the first '@'.
+case "$TASK" in
+  *@*) TASK_BASE="${TASK%%@*}"; SUBJECT="${TASK#*@}" ;;
+  *)   TASK_BASE="$TASK"; SUBJECT="" ;;
+esac
+SUBJ=(); [ -n "$SUBJECT" ] && SUBJ=(--subject "$SUBJECT")
+OUT_REL="submissions/$TASK_BASE${SUBJECT:+/$SUBJECT}/output.nii.gz"
 
 cd "$HARNESS" || { echo "no harness at $HARNESS"; exit 1; }
 # The grading plane's one external dependency, and its output and exit code were
@@ -28,7 +39,7 @@ cd "$HARNESS" || { echo "no harness at $HARNESS"; exit 1; }
 # note rather than an error. A present script that fails is fatal.
 FETCH_LOG="$BENCH_HOME/fetch_reference_$TASK.log"
 if [ -f fetch_reference.py ]; then
-  if python fetch_reference.py --task "$TASK" > "$FETCH_LOG" 2>&1; then
+  if python fetch_reference.py --task "$TASK_BASE" "${SUBJ[@]}" > "$FETCH_LOG" 2>&1; then
     echo "reference ready for $TASK ($(grep -c "\[fetch\]" "$FETCH_LOG") fetched, $(grep -c "\[skip\]" "$FETCH_LOG") already present)"
   else
     echo "ABORT: could not fetch the reference for $TASK."
@@ -39,6 +50,14 @@ if [ -f fetch_reference.py ]; then
   fi
 else
   echo "note: no fetch_reference.py in $HARNESS; references must already be in the pack"
+fi
+# A subject run is graded with --subject. A wrapper without it would read the task's
+# flat path, find nothing, and score every run zero: the missing-reference shape
+# again. Refused before anything is graded.
+if [ -n "$SUBJECT" ] && ! python grade_wrapper.py grade --help 2>/dev/null | grep -q -- '--subject'; then
+  echo "ABORT: $HARNESS/grade_wrapper.py takes no --subject; $TASK cannot be graded per subject."
+  echo "       Nothing has been graded."
+  exit 1
 fi
 
 TOTAL=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
@@ -65,7 +84,7 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   # idempotent, and it means old runs appear in the report with full detail.
   python "$HERE/finalize_run.py" "$d" >/dev/null 2>&1
 
-  if [ ! -f "$d/submissions/$TASK/output.nii.gz" ]; then
+  if [ ! -f "$d/$OUT_REL" ]; then
     # No output is a failed run, not a missing one. summarize.py scores it 0.
     NOOUT=$((NOOUT + 1))
     printf '[%3d/%3d] no output  %s\n' "$I" "$TOTAL" "$(basename "$d")"
@@ -77,7 +96,7 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
     printf '[%3d/%3d] cached     %s\n' "$I" "$TOTAL" "$(basename "$d")"
   else
     printf '[%3d/%3d] grading    %s\n' "$I" "$TOTAL" "$(basename "$d")"
-    python grade_wrapper.py grade --task "$TASK" --submission-dir "$d" \
+    python grade_wrapper.py grade --task "$TASK_BASE" "${SUBJ[@]}" --submission-dir "$d" \
       --model "$MODEL" --condition "$COND" --out "$d/envelope.json" >/dev/null 2>&1
     GRADED=$((GRADED + 1))
   fi

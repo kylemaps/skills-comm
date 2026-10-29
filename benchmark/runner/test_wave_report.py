@@ -214,6 +214,64 @@ class TestBehaviourColumn(unittest.TestCase):
         self.assertEqual(cell["env+skill"], "stopped-no-output 1, timeout-after-output 1")
 
 
+class TestFamilies(unittest.TestCase):
+    """Subject tasks of one family pooled as strata model x subject, for the primary
+    pair and each declared secondary pair; completeness counts every declared arm."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        arms = ["env-only", "env+skill", "env+skill-b"]
+        sweep = {"reps": 5, "waves": {"1": {
+            "arms_compared": {"primary": ["env+skill-b", "env+skill"],
+                              "secondary": [["env+skill", "env-only"], ["env+skill-b", "env-only"]]},
+            "tasks": {"t-s1": {"models": ["P.m1", "P.m2"], "arms": arms, "family": "fam", "subject": "s1"},
+                      "t-s2": {"models": ["P.m1", "P.m2"], "arms": arms, "family": "fam", "subject": "s2"}}}}}
+        self.sweep_path = os.path.join(self.d, "sweep.json")
+        with open(self.sweep_path, "w", encoding="utf-8") as fh:
+            json.dump(sweep, fh)
+        passes = {"env-only": 0, "env+skill": 3, "env+skill-b": 5}
+        for t in ("t-s1", "t-s2"):
+            write_csv(os.path.join(self.d, "runs_%s.csv" % t), [
+                {"task": t, "model": m, "arm": a, "rep": str(i), "passed": str(i <= passes[a])}
+                for m in ("P.m1", "P.m2") for a in arms for i in range(1, 6)])
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def report(self):
+        out, rc = call(["--results", self.d, "--wave", "1", "--sweep", self.sweep_path])
+        self.assertEqual(rc, 0)
+        return out
+
+    def test_family_rows_pool_subjects_for_each_comparison(self):
+        section = self.report().split("## Families", 1)[1].split("\n## ", 1)[0]
+        rows = {l.split("|")[1].strip(): [c.strip() for c in l.split("|")[2:5]]
+                for l in section.splitlines() if l.startswith("| fam: ")}
+        self.assertEqual(rows["fam: env+skill-b vs env+skill"], ["4", "12/20", "20/20"])
+        self.assertEqual(rows["fam: env+skill vs env-only"], ["4", "0/20", "12/20"])
+        self.assertEqual(rows["fam: env+skill-b vs env-only"], ["4", "0/20", "20/20"])
+
+    def test_completeness_counts_every_declared_arm(self):
+        out = self.report()
+        self.assertIn("| task | model | env+skill | env+skill-b | env-only |", out)
+        self.assertIn("All 12 cells complete.", out)
+        with open(os.path.join(self.d, "runs_t-s2.csv"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        with open(os.path.join(self.d, "runs_t-s2.csv"), "w", encoding="utf-8", newline="") as fh:
+            fh.write("\n".join(l for l in lines if not (",env-only,5," in l and "P.m2" in l)) + "\n")
+        self.assertIn("NOT COMPLETE", self.report())   # the third arm's short cell is seen
+
+    def test_a_wave_without_families_has_no_family_section(self):
+        with open(self.sweep_path, encoding="utf-8") as fh:
+            sweep = json.load(fh)
+        for td in sweep["waves"]["1"]["tasks"].values():
+            td.pop("family")
+        with open(self.sweep_path, "w", encoding="utf-8") as fh:
+            json.dump(sweep, fh)
+        self.assertNotIn("## Families", self.report())
+
+
 class TestRunDirectories(unittest.TestCase):
     """The run directory a CSV row names, and the model a run directory names, for
     a gateway model and a direct provider's (model_ids.py)."""

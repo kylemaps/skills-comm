@@ -367,5 +367,14 @@ class DispatchTest(unittest.TestCase):
         self.assertIsInstance(state["dispatched"], list)
 
 
+class TestJobNames(unittest.TestCase):
+    def test_a_subject_run_id_is_one_token_of_the_job_name(self):
+        """run.yml names a job 'rep <n> <task> <model> <arm>'; a subject run id
+        (<task>@<subject>, run_ids.py) has to come back whole."""
+        m = d.JOB_RE.match("rep 3 structural-brain-extraction@sub-0004 nrp/qwen3-small env+skill-michele")
+        self.assertEqual(m.groups(), ("3", "structural-brain-extraction@sub-0004",
+                                      "nrp/qwen3-small", "env+skill-michele"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,9 @@ Fails (exit 1) when:
     is not given or does not match: equal, or at least the value for a key ending in
     `_min`, compared as numbers when both sides are numbers;
   - the label is `benchmark` and the task, model or arm is not declared for the wave,
-    or the arm declares a skills_hash (`arms.<arm>`) and --skills-hash differs.
+    or the arm declares a skills_hash (`arms.<arm>`) and --skills-hash differs;
+  - the task is keyed <task>@<subject> (run_ids.py) and its entry does not declare
+    that `family` and `subject`, or names them for a key without a subject.
 --measured-only checks only the measured fields (preflight, before any run).
 
 --record RUN_JSON also checks the run's model_fingerprint (written by model_probe.py)
@@ -30,6 +32,7 @@ import json
 import sys
 
 from model_ids import wave_id
+from run_ids import split
 
 
 def _num(v):
@@ -98,6 +101,24 @@ def provider_problems(sweep, wave):
     return out
 
 
+def subject_problems(task, entry):
+    """A wave task keyed <task>@<subject> (run_ids.py) must say so in its entry:
+    `family` = the task, `subject` = the subject. The report pools a family's
+    subjects as strata, so a key and an entry that disagree would file a run under
+    the wrong subject. A key with no subject declares neither."""
+    try:
+        base, subject = split(task)
+    except ValueError as e:
+        return [str(e)]
+    entry = entry or {}
+    if subject:
+        return ["task %s: the entry's %s is %s; the key says %s" % (task, k, entry.get(k), v)
+                for k, v in (("family", base), ("subject", subject)) if entry.get(k) != v]
+    if entry.get("family") or entry.get("subject"):
+        return ["task %s names no subject; its entry declares family/subject" % task]
+    return []
+
+
 def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
           skills_hash=None):
     """A list of problems; empty when the run belongs to the wave."""
@@ -116,6 +137,7 @@ def check(sweep, wave, given, label=None, task=None, model=None, arm=None,
         if t is None:
             out.append("task %s is not declared in wave %s" % (task, wave))
         else:
+            out += subject_problems(task, t)
             mid = wave_id(model)
             if mid not in t.get("models", []):
                 out.append("model %s is not declared for %s in wave %s" % (mid, task, wave))

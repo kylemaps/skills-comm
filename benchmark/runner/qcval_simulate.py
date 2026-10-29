@@ -86,7 +86,8 @@ def mask_md5(run_dir):
     values instead of the files understates it, because rounding merges masks
     that differ.
     """
-    m = glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+    m = (glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+         or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz")))
     if not m:
         return None
     h = hashlib.md5()

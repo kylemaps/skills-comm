@@ -39,9 +39,11 @@ $R/collect_results.sh structural-brain-extraction-7t
 ```
 
 The agent works in `~/bench/work/run-<random>/`, a name that does not identify the run.
-When it exits, that directory is renamed to `~/bench/runs/<task>__<model>__<condition>__r<N>/`
+When it exits, that directory is renamed to `~/bench/runs/<run id>__<model>__<condition>__r<N>/`
 and `prompt.txt`, `run.json` (provenance) and `transcript.txt` are moved in beside
-`submissions/<task>/output.nii.gz`.
+`submissions/<task>/output.nii.gz`. The run id is the task id, or `<task>@<subject>` for a
+task graded per subject (`run_ids.py`): the prompt is rendered for that subject, the output is
+`submissions/<task>/<subject>/output.nii.gz`, and the grader is called with `--subject`.
 
 ## Experimental design
 

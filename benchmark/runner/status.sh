@@ -40,7 +40,8 @@ fi
 hr "RUNS ON DISK (dirs / with output)"
 for t in $(ls -d "$BENCH_HOME"/runs/*/ 2>/dev/null | sed 's|.*/runs/||;s|__.*||' | sort -u); do
   n=$(ls -d "$BENCH_HOME"/runs/"$t"__*/ 2>/dev/null | wc -l)
-  o=$(ls "$BENCH_HOME"/runs/"$t"__*/submissions/*/output.nii.gz 2>/dev/null | wc -l)
+  o=$(ls "$BENCH_HOME"/runs/"$t"__*/submissions/*/output.nii.gz \
+         "$BENCH_HOME"/runs/"$t"__*/submissions/*/*/output.nii.gz 2>/dev/null | wc -l)
   printf '  %-42s %4s / %-4s\n' "$t" "$n" "$o"
 done
 

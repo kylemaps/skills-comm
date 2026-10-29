@@ -1163,6 +1163,7 @@ echo "=== sweep.json: every wave is readable and consistent"
 import json, os, sys
 sys.path.insert(0, sys.argv[1])
 from summarize import rules_for
+from wave_check import subject_problems
 sw = json.load(open(os.path.join(sys.argv[1], "..", "ci", "sweep.json"), encoding="utf-8"))
 waves = [k for k in sw["waves"] if not k.startswith("_")]
 print(("OK:" if waves else "FAIL:") + "waves declared: %s" % waves)
@@ -1171,6 +1172,8 @@ for w in waves:
     tasks = sw["waves"][w]["tasks"]
     bad = [(t, a) for t, s in tasks.items() for a in s["arms"] if a not in sw["arms"]]
     print(("FAIL:" if bad else "OK:") + "wave %s: rules valid, every arm declared %s" % (w, bad or ""))
+    subj = [p for t, s in tasks.items() for p in subject_problems(t, s)]
+    print(("FAIL:" if subj else "OK:") + "wave %s: every task key agrees with its entry's family and subject %s" % (w, subj or ""))
 print(("OK:" if sw["waves"]["1"].get("pins", {}).get("image_version") else "FAIL:")
       + "wave 1 pins its image_version")
 EOF
@@ -2166,6 +2169,165 @@ assert {k: v[0] for k, v in rows.items()} == want, rows
 assert all(v[1] == '' for v in rows.values()), rows" "$T/sum/runs_t.csv" 2>"$T/e" \
   && ok "  each tag on its own run; a closing offer after an output and a timeout with none get none; flags stay empty" \
   || bad "  $(tail -1 "$T/e")"
+rm -rf "$T"
+
+echo
+echo "=== subject runs: one run is one task and one subject (<task>@<subject>)"
+T=$(mktemp -d)
+# run_ids: the one rule for the id. (mknii from the block above.)
+"$PY" "$HERE/run_ids.py" structural-brain-extraction@sub-0004 > "$T/o" 2>&1
+expect 0 $? "run_ids splits <task>@<subject>"
+ids_=$(tr -d '\r' < "$T/o")
+has   "  into the task" "$ids_" "task=structural-brain-extraction"
+has   "  and the subject" "$ids_" "subject=sub-0004"
+has   "  with the output one level deeper" "$ids_" "output=submissions/structural-brain-extraction/sub-0004/output.nii.gz"
+ids_=$("$PY" "$HERE/run_ids.py" structural-mni-registration | tr -d '\r')
+[ "$(printf '%s\n' "$ids_" | sed -n 's/^subject=//p')" = "" ] && ok "a bare task id has no subject" || bad "bare id: $ids_"
+has   "  and the flat output path" "$ids_" "output=submissions/structural-mni-registration/output.nii.gz"
+for bad_ in @sub-0004 task@ a@b@c; do
+  "$PY" "$HERE/run_ids.py" "$bad_" >/dev/null 2>&1; expect 2 $? "half an id is refused: $bad_"
+done
+# mkprompt: the subject's prompt, and only the subject's.
+cat > "$T/tasks.json" <<'EOF'
+{"categories":{"c":{"tasks":{
+ "t-s":{"title":"T","grading":"automated","prompt":{"goal":"Skull-strip the T1w of {subject}.",
+   "dataset":{"source":"openneuro","id":"ds1","version_pin":"1.0.0","subjects":["sub-01","sub-02"]},
+   "required_output":"Write submissions/t-s/{subject}/output.nii.gz. Only submissions/t-s/{subject}/output.nii.gz is scored.",
+   "subject_note":"This task runs once per subject in dataset.subjects."},
+   "solution":{"reference":"secret-mask"}},
+ "t-x":{"title":"X","prompt":{"goal":"extract","dataset":{"id":"ds2","subjects":["sub-09"]},
+   "required_output":"write submissions/t-x/output.nii.gz"}}}}}}
+EOF
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-s@sub-01 > "$T/p1" 2>"$T/e"
+expect 0 $? "mkprompt builds a subject run's prompt"
+p1=$(cat "$T/p1")
+has   "  the goal names the subject" "$p1" "Skull-strip the T1w of sub-01."
+has   "  the output path is the subject's" "$p1" "submissions/t-s/sub-01/output.nii.gz"
+has   "  the DATASET line names that subject alone" "$p1" "subject(s) sub-01."
+hasnt "  and not the other" "$p1" "sub-02"
+hasnt "  no placeholder is left" "$p1" "{subject}"
+hasnt "  the pack's subject_note is not in the prompt" "$p1" "runs once per subject"
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-s@sub-02 > "$T/p2" 2>/dev/null
+# tr -d '\r' on both sides: a Windows python writes CRLF and sed reads it away.
+[ "$(sed 's/sub-02/sub-01/g' "$T/p2" | tr -d '\r' | md5sum)" = "$(tr -d '\r' < "$T/p1" | md5sum)" ] \
+  && ok "  two subjects' prompts differ only by the subject" || bad "  the prompts differ beyond the subject"
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-s >/dev/null 2>&1; expect 1 $? "a per-subject task without a subject is refused"
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-s@sub-03 >/dev/null 2>&1; expect 1 $? "a subject the task does not list is refused"
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-x@sub-09 >/dev/null 2>&1; expect 1 $? "a subject for a task with one reference is refused"
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-x > "$T/px" 2>/dev/null; expect 0 $? "a task with one reference builds as before"
+has   "  its DATASET line as before" "$(cat "$T/px")" "subject(s) sub-09."
+"$PY" "$HERE/mkprompt.py" --prompts-only "$T/tasks.json" > "$T/p.json"
+[ "$("$PY" "$HERE/mkprompt.py" "$T/p.json" t-s@sub-01 | md5sum)" = "$(md5sum < "$T/p1")" ] \
+  && ok "  the prompt-only copy builds the same subject prompt" || bad "  the prompt-only copy differs"
+# run_bench: the run id names the directory and the record; the agent gets the subject's prompt.
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+if [ "$1 $2" = "debug skill" ]; then echo '[]'; exit 0; fi
+if [ "$1 $2" = "debug config" ]; then echo '{}'; exit 0; fi
+# The agent: writes the output where the prompt says, and nowhere else.
+p=$(printf '%s' "$7" | grep -o 'submissions/[^ ]*output\.nii\.gz' | head -1)
+mkdir -p "$3/$(dirname "$p")" && printf 'mask' > "$3/$p"
+echo "WROTE: $p"
+EOF
+chmod +x "$T/opencode"
+rb() { env BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+  SKILLS_SRC="" SKILLS_DST="$T/skills" RUN_TIMEOUT=60 NEURODESK_API_KEY=k \
+  OPENCODE_ISOLATE=0 AGENT_VIEW_CHECK=0 NEURODESK_GATEWAY=http://127.0.0.1:9 \
+  bash "$HERE/run_bench.sh" "$1" neurodesk/m env-only 1 > "$T/o" 2>&1; }
+rb t-s@sub-01; expect 0 $? "run_bench runs t-s@sub-01"
+R="$T/bench/runs/t-s@sub-01__neurodesk-m__env-only__r1"
+[ -d "$R" ] && ok "  the run directory is named by the run id" || bad "  no run directory: $(ls "$T/bench/runs" 2>/dev/null | tr '\n' ' ')"
+pr_=$(cat "$R/prompt.txt" 2>/dev/null)
+has   "  the prompt the agent got names the subject" "$pr_" "Skull-strip the T1w of sub-01."
+hasnt "  and not the other" "$pr_" "sub-02"
+[ -f "$R/submissions/t-s/sub-01/output.nii.gz" ] && ok "  the agent wrote the subject's output path" || bad "  no output at the subject path"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['task_id']=='t-s@sub-01' and r['subject']=='sub-01', (r['task_id'], r.get('subject'))
+assert r['output_present'] is True, r.get('output_present')" "$R/run.json" 2>"$T/e" \
+  && ok "  the record names the run id and the subject, and sees the output" || bad "  record: $(tail -1 "$T/e")"
+has   "  the run's last line names the output" "$(cat "$T/o")" "out=$R/submissions/t-s/sub-01/output.nii.gz"
+rb t-s@sub-03; expect 1 $? "a subject the task does not list stops before the agent"
+has   "  naming it" "$(cat "$T/o")" "sub-03 is not a subject of t-s"
+[ ! -d "$T/bench/runs/t-s@sub-03__neurodesk-m__env-only__r1/submissions" ] && ok "  and nothing was written" || bad "  the agent ran"
+rb t-s; expect 1 $? "a per-subject task without a subject stops before the agent"
+rb t-s@; expect 2 $? "half a run id is refused"
+# finalize_run: the output is the run id's own path, nothing else on disk.
+fz() { d="$T/$1"; mkdir -p "$d"; printf '{"task_id":"%s"}' "$2" > "$d/run.json"; printf '$ ls\n' > "$d/transcript.txt"
+  "$PY" "$HERE/finalize_run.py" "$d" 0
+  "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['output_present'], r['output_voxels'])" "$d/run.json" | tr -d '\r'; }
+mknii "$T/z1/submissions/t-s/sub-01/output.nii.gz" 64x64x40
+[ "$(fz z1 t-s@sub-01)" = "True 163840" ] && ok "finalize_run finds a subject run's output at the subject path" || bad "z1: $(fz z1 t-s@sub-01)"
+mknii "$T/z2/submissions/t-s/output.nii.gz" 64x64x40
+[ "$(fz z2 t-s@sub-01)" = "False None" ] && ok "  an output at the task's flat path is not a subject run's" || bad "z2: $(fz z2 t-s@sub-01)"
+mknii "$T/z3/submissions/t-s/sub-02/output.nii.gz" 64x64x40
+[ "$(fz z3 t-s@sub-01)" = "False None" ] && ok "  nor is another subject's" || bad "z3: $(fz z3 t-s@sub-01)"
+mknii "$T/z4/submissions/t-x/output.nii.gz" 64x64x40
+[ "$(fz z4 t-x)" = "True 163840" ] && ok "  a task with one reference reads as before" || bad "z4: $(fz z4 t-x)"
+[ "$(fz z5 'bad@')" = "False None" ] && ok "  half a run id has no output" || bad "z5: $(fz z5 'bad@')"
+# summarize: a run id selects its own runs; the output is found one level deeper.
+sr() { d="$T/runs/$1__neurodesk-m__env-only__r$2"; mkdir -p "$d/$3"; echo x > "$d/$3/output.nii.gz"
+  printf '{"task_id":"%s","model":"neurodesk/m","condition":"env-only","repeat":%s,"exit_code":0}' "$1" "$2" > "$d/run.json"; }
+sr t-s@sub-01 1 submissions/t-s/sub-01
+sr t-s@sub-02 1 submissions/t-s/sub-02
+"$PY" "$HERE/summarize.py" "$T/runs" t-s@sub-01 --out-dir "$T/sum" >/dev/null 2>&1
+expect 0 $? "summarize reads a subject run id's runs"
+"$PY" -c "import csv,sys
+rows = list(csv.DictReader(open(sys.argv[1])))
+assert [r['task'] for r in rows] == ['t-s@sub-01'], [r['task'] for r in rows]
+assert rows[0]['output_present'] == 'True', rows[0]['output_present']" "$T/sum/runs_t-s@sub-01.csv" 2>"$T/e" \
+  && ok "  that subject's runs only, the output found one level deeper" || bad "  $(tail -1 "$T/e")"
+"$PY" "$HERE/summarize.py" "$T/runs" t-s --out-dir "$T/sum" >/dev/null 2>&1
+expect 1 $? "  the bare task id matches no subject run"
+# collect_results: the grader is called for the subject, against the subject's path.
+command -v python >/dev/null 2>&1 || { mkdir -p "$T/bin"; printf '#!/bin/sh\nexec "%s" "$@"\n' "$PY" > "$T/bin/python"; chmod +x "$T/bin/python"; PATH="$T/bin:$PATH"; }
+mkdir -p "$T/harness"
+cat > "$T/harness/fetch_reference.py" <<'EOF'
+import sys
+open(sys.argv[0] + ".log", "a").write(" ".join(sys.argv[1:]) + "\n")
+print("  [fetch] x\nreference ready")
+EOF
+cat > "$T/harness/grade_wrapper.py" <<'EOF'
+import json, sys
+a = sys.argv[1:]
+if "--help" in a:
+    print("usage: grade_wrapper.py grade --task T --subject S --submission-dir D"); sys.exit(0)
+open(sys.argv[0] + ".log", "a").write(" ".join(a) + "\n")
+json.dump({"task_id": a[a.index("--task") + 1], "verdict": "acceptable", "score": 80.0, "valid": True},
+          open(a[a.index("--out") + 1], "w"))
+EOF
+rm -rf "$T/runs"; sr t-s@sub-01 1 submissions/t-s/sub-01; sr t-s@sub-01 2 submissions/t-s
+env BENCH_HOME="$T" HARNESS_DIR="$T/harness" bash "$HERE/collect_results.sh" t-s@sub-01 > "$T/o" 2>&1
+expect 0 $? "collect_results grades a subject run id"
+has   "  the reference fetched for that subject" "$(cat "$T/harness/fetch_reference.py.log")" "--task t-s --subject sub-01"
+has   "  the grader called for that subject" "$(cat "$T/harness/grade_wrapper.py.log")" "--task t-s --subject sub-01"
+[ -f "$T/runs/t-s@sub-01__neurodesk-m__env-only__r1/envelope.json" ] && ok "  and its envelope written" || bad "  no envelope: $(cat "$T/o")"
+has   "  a run with its output at the task's flat path has no output" "$(cat "$T/o")" "no output  t-s@sub-01__neurodesk-m__env-only__r2"
+cat > "$T/harness/grade_wrapper.py" <<'EOF'
+import sys
+print("usage: grade_wrapper.py grade --task T --submission-dir D")
+EOF
+rm -f "$T/runs"/*/envelope.json
+env BENCH_HOME="$T" HARNESS_DIR="$T/harness" bash "$HERE/collect_results.sh" t-s@sub-01 > "$T/o" 2>&1
+expect 1 $? "a grader without --subject stops a subject run id before grading"
+has   "  and says so" "$(cat "$T/o")" "takes no --subject"
+[ ! -f "$T/runs/t-s@sub-01__neurodesk-m__env-only__r1/envelope.json" ] && ok "  nothing graded" || bad "  graded anyway"
+# wave_check: a subject key and its entry must agree.
+cat > "$T/sweep.json" <<'EOF'
+{"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"7":{"pins":{},"tasks":{
+   "t-s@sub-01":{"models":["m"],"arms":["env-only"],"family":"t-s","subject":"sub-01"},
+   "t-s@sub-02":{"models":["m"],"arms":["env-only"],"family":"t-s","subject":"sub-01"},
+   "t-s@sub-03":{"models":["m"],"arms":["env-only"]},
+   "t-x":{"models":["m"],"arms":["env-only"],"subject":"sub-09"}}}}}
+EOF
+wk() { "$PY" "$HERE/wave_check.py" --sweep "$T/sweep.json" --wave 7 --label benchmark --task "$1" --model m --arm env-only >"$T/o" 2>&1; }
+wk t-s@sub-01; expect 0 $? "wave_check passes a subject run whose entry agrees with its key"
+wk t-s@sub-02; expect 1 $? "  refuses an entry whose subject is not the key's"
+has   "  and says which" "$(cat "$T/o")" "the key says sub-02"
+wk t-s@sub-03; expect 1 $? "  refuses a subject key without family and subject"
+wk t-x;        expect 1 $? "  refuses a subject on a key that names none"
+wk t-s;        expect 1 $? "  and a bare task id the wave does not declare"
 rm -rf "$T"
 
 echo

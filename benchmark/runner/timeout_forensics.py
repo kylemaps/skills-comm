@@ -48,6 +48,7 @@ sys.path.insert(0, HERE)
 # particular carries a lookbehind that rejects `hd-bet` and `deepbet`; a second
 # copy of these regexes would drift and would be wrong in a way nobody notices.
 from summarize import METHOD_PATTERNS, RUN_TIMEOUT_EXIT  # noqa: E402
+from run_ids import output_rel  # noqa: E402
 
 METHOD_RES = [(n, re.compile(p, re.I)) for n, p in METHOD_PATTERNS]
 
@@ -73,7 +74,10 @@ def tail_after_output(txt, task):
     `intermediate` on evidence from before the write, i.e. it errs towards the
     exclusion we already apply.
     """
-    marker = "submissions/%s/output.nii.gz" % task
+    try:
+        marker = output_rel(task)       # one level deeper for a subject run
+    except ValueError:
+        marker = "output.nii.gz"
     i = txt.rfind(marker)
     if i < 0:
         i = txt.rfind("output.nii.gz")
@@ -98,7 +102,8 @@ def classify(run_dir, task, margin_s):
 
     # The disk is the ground truth. A stale output_present field is exactly how
     # 7t-nodura once reported 0/70 with 50 masks sitting on it.
-    outs = glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+    outs = (glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
+            or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz")))
     d["output_present"] = bool(rec.get("output_present")) or bool(outs)
     d["output_bytes"] = os.path.getsize(outs[0]) if outs else 0
 
