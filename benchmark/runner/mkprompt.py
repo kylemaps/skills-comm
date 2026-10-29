@@ -44,11 +44,14 @@ def render(prompt, task, subject):
     subject in place. Refuses an id that does not fit the task: a per-subject task
     without a subject, a subject the task does not list, or a subject for a task
     with one reference."""
-    ds = prompt.get("dataset", {})
+    ds = dict(prompt.get("dataset", {}))
     listed = list(ds.get("subjects", []) or [])
     goal = prompt.get("goal", "").strip()
     required = prompt.get("required_output", "").strip()
-    per_subject = PLACEHOLDER in goal or PLACEHOLDER in required
+    # Every printed field, so a placeholder anywhere in them marks the task and is
+    # rendered; none may remain in what the agent reads.
+    printed = [goal, required] + [v for v in ds.values() if isinstance(v, str)]
+    per_subject = any(PLACEHOLDER in v for v in printed)
     if per_subject and not subject:
         sys.exit("task %s is graded per subject: run it as %s@<subject>, one of %s"
                  % (task, task, ", ".join(listed) or "(none listed)"))
@@ -61,6 +64,8 @@ def render(prompt, task, subject):
                      % (subject, task, ", ".join(listed) or "none"))
         goal = goal.replace(PLACEHOLDER, subject)
         required = required.replace(PLACEHOLDER, subject)
+        ds = {k: v.replace(PLACEHOLDER, subject) if isinstance(v, str) else v
+              for k, v in ds.items()}
         listed = [subject]
     return goal, ds, ",".join(listed), required
 
@@ -87,13 +92,13 @@ for _cat, body in data.get("categories", {}).items():
         if key != tid:
             continue
         goal, ds, subs, required = render(spec.get("prompt", {}), tid, subject)
-        print("TASK: " + goal + "\n")
-        print(
-            "DATASET: {} {} (version {}), subject(s) {}. Fetch it yourself.\n".format(
-                ds.get("source", ""), ds.get("id", ""), ds.get("version_pin", ""), subs
-            )
-        )
-        print(required + "\n")
+        text = ("TASK: " + goal + "\n\n"
+                + "DATASET: {} {} (version {}), subject(s) {}. Fetch it yourself.\n\n".format(
+                    ds.get("source", ""), ds.get("id", ""), ds.get("version_pin", ""), subs)
+                + required + "\n\n")
+        if PLACEHOLDER in text:
+            sys.exit("task %s: a %s placeholder is left in the prompt" % (tid, PLACEHOLDER))
+        sys.stdout.write(text)
         sys.exit(0)
 
 sys.exit("task not found: " + tid)

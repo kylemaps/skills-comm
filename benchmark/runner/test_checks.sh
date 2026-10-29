@@ -2184,8 +2184,8 @@ has   "  with the output one level deeper" "$ids_" "output=submissions/structura
 ids_=$("$PY" "$HERE/run_ids.py" structural-mni-registration | tr -d '\r')
 [ "$(printf '%s\n' "$ids_" | sed -n 's/^subject=//p')" = "" ] && ok "a bare task id has no subject" || bad "bare id: $ids_"
 has   "  and the flat output path" "$ids_" "output=submissions/structural-mni-registration/output.nii.gz"
-for bad_ in @sub-0004 task@ a@b@c; do
-  "$PY" "$HERE/run_ids.py" "$bad_" >/dev/null 2>&1; expect 2 $? "half an id is refused: $bad_"
+for bad_ in @sub-0004 task@ a@b@c 't-s@sub-01 ' 't-s@sub 01' t-s@sub/01 t-s@sub__01 't-s '; do
+  "$PY" "$HERE/run_ids.py" "$bad_" >/dev/null 2>&1; expect 2 $? "half an id, whitespace, '/' or '__' is refused: '$bad_'"
 done
 # mkprompt: the subject's prompt, and only the subject's.
 cat > "$T/tasks.json" <<'EOF'
@@ -2196,8 +2196,13 @@ cat > "$T/tasks.json" <<'EOF'
    "subject_note":"This task runs once per subject in dataset.subjects."},
    "solution":{"reference":"secret-mask"}},
  "t-x":{"title":"X","prompt":{"goal":"extract","dataset":{"id":"ds2","subjects":["sub-09"]},
-   "required_output":"write submissions/t-x/output.nii.gz"}}}}}}
+   "required_output":"write submissions/t-x/output.nii.gz"}},
+ "t-d":{"prompt":{"goal":"extract","dataset":{"source":"osf","id":"node-{subject}","subjects":["sub-01","sub-02"]},
+   "required_output":"write submissions/t-d/output.nii.gz"}}}}}}
 EOF
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-d@sub-02 > "$T/pd" 2>/dev/null; expect 0 $? "a placeholder only in a dataset field marks the task per subject"
+has   "  and is rendered" "$(cat "$T/pd")" "DATASET: osf node-sub-02 (version ), subject(s) sub-02."
+"$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-d >/dev/null 2>&1; expect 1 $? "  so it needs a subject"
 "$PY" "$HERE/mkprompt.py" "$T/tasks.json" t-s@sub-01 > "$T/p1" 2>"$T/e"
 expect 0 $? "mkprompt builds a subject run's prompt"
 p1=$(cat "$T/p1")
@@ -2252,6 +2257,8 @@ has   "  naming it" "$(cat "$T/o")" "sub-03 is not a subject of t-s"
 [ ! -d "$T/bench/runs/t-s@sub-03__neurodesk-m__env-only__r1/submissions" ] && ok "  and nothing was written" || bad "  the agent ran"
 rb t-s; expect 1 $? "a per-subject task without a subject stops before the agent"
 rb t-s@; expect 2 $? "half a run id is refused"
+rb 't-s@sub-01 '; expect 2 $? "a run id with a trailing space is refused before the agent"
+[ ! -d "$T/bench/runs/t-s@sub-01 __neurodesk-m__env-only__r1" ] && ok "  and leaves no run directory" || bad "  a run directory with a space in its name"
 # finalize_run: the output is the run id's own path, nothing else on disk.
 fz() { d="$T/$1"; mkdir -p "$d"; printf '{"task_id":"%s"}' "$2" > "$d/run.json"; printf '$ ls\n' > "$d/transcript.txt"
   "$PY" "$HERE/finalize_run.py" "$d" 0
@@ -2269,14 +2276,21 @@ mknii "$T/z4/submissions/t-x/output.nii.gz" 64x64x40
 sr() { d="$T/runs/$1__neurodesk-m__env-only__r$2"; mkdir -p "$d/$3"; echo x > "$d/$3/output.nii.gz"
   printf '{"task_id":"%s","model":"neurodesk/m","condition":"env-only","repeat":%s,"exit_code":0}' "$1" "$2" > "$d/run.json"; }
 sr t-s@sub-01 1 submissions/t-s/sub-01
+sr t-s@sub-01 2 submissions/t-s
+sr t-s@sub-01 3 submissions/t-s/sub-02
 sr t-s@sub-02 1 submissions/t-s/sub-02
 "$PY" "$HERE/summarize.py" "$T/runs" t-s@sub-01 --out-dir "$T/sum" >/dev/null 2>&1
 expect 0 $? "summarize reads a subject run id's runs"
 "$PY" -c "import csv,sys
-rows = list(csv.DictReader(open(sys.argv[1])))
-assert [r['task'] for r in rows] == ['t-s@sub-01'], [r['task'] for r in rows]
-assert rows[0]['output_present'] == 'True', rows[0]['output_present']" "$T/sum/runs_t-s@sub-01.csv" 2>"$T/e" \
-  && ok "  that subject's runs only, the output found one level deeper" || bad "  $(tail -1 "$T/e")"
+rows = {r['rep']: r for r in csv.DictReader(open(sys.argv[1]))}
+assert {r['task'] for r in rows.values()} == {'t-s@sub-01'} and len(rows) == 3, rows.keys()
+assert rows['1']['output_present'] == 'True', rows['1']['output_present']
+# A mask at the task's flat path or another subject's path is not this run's output:
+# scored 0 and counted, never excluded as not-graded-yet.
+assert rows['2']['output_present'] == 'False' and rows['3']['output_present'] == 'False', (rows['2']['output_present'], rows['3']['output_present'])
+assert rows['2']['verdict'] == 'NO-OUTPUT' and rows['2']['valid'] not in ('', 'False'), (rows['2']['verdict'], rows['2']['valid'])" \
+  "$T/sum/runs_t-s@sub-01.csv" 2>"$T/e" \
+  && ok "  that subject's runs only; the output found one level deeper; a mask at the flat or another subject's path counts as no output" || bad "  $(tail -1 "$T/e")"
 "$PY" "$HERE/summarize.py" "$T/runs" t-s --out-dir "$T/sum" >/dev/null 2>&1
 expect 1 $? "  the bare task id matches no subject run"
 # collect_results: the grader is called for the subject, against the subject's path.

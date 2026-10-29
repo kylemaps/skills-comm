@@ -102,8 +102,12 @@ def classify(run_dir, task, margin_s):
 
     # The disk is the ground truth. A stale output_present field is exactly how
     # 7t-nodura once reported 0/70 with 50 masks sitting on it.
-    outs = (glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
-            or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz")))
+    # The run id's own path (run_ids.py), as summarize counts it.
+    try:
+        own = os.path.join(run_dir, *output_rel(rec.get("task_id") or base[0]).split("/"))
+    except ValueError:
+        own = None
+    outs = [own] if own and os.path.exists(own) else []
     d["output_present"] = bool(rec.get("output_present")) or bool(outs)
     d["output_bytes"] = os.path.getsize(outs[0]) if outs else 0
 

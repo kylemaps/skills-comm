@@ -21,9 +21,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # One run is one task and, for a task graded per subject, one subject. Runs are
 # named by the run id; the grader takes its parts: fetch_reference.py --subject
 # selects that subject's reference and rubric, grade_wrapper.py --subject reads
-# that subject's output path. Split as run_ids.py splits, at the first '@'.
+# that subject's output path. Split as run_ids.py splits, at the first '@', and
+# refused as it refuses.
 case "$TASK" in
-  *@*) TASK_BASE="${TASK%%@*}"; SUBJECT="${TASK#*@}" ;;
+  *[[:space:]]*|*/*|*__*) echo "FAIL: run id '$TASK' holds whitespace, '/' or '__'" >&2; exit 1 ;;
+  *@*) TASK_BASE="${TASK%%@*}"; SUBJECT="${TASK#*@}"
+       [ -n "$TASK_BASE" ] && [ -n "$SUBJECT" ] && [ "${SUBJECT#*@}" = "$SUBJECT" ] \
+         || { echo "FAIL: run id '$TASK' is not <task> or <task>@<subject>" >&2; exit 1; } ;;
   *)   TASK_BASE="$TASK"; SUBJECT="" ;;
 esac
 SUBJ=(); [ -n "$SUBJECT" ] && SUBJ=(--subject "$SUBJECT")

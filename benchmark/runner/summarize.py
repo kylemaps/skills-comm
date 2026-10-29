@@ -62,6 +62,9 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from run_ids import output_rel  # noqa: E402
+
 # Verdicts that mean "the agent did not deliver a usable result". Everything else is
 # treated as a pass. Kept as a set rather than a ladder because the vocabulary is
 # owned by the grader pack, not by this script -- unknown verdicts pass through to the
@@ -435,6 +438,14 @@ def parse_astra(run_dir):
     }
 
 
+def _own_output_exists(run_dir, run_id):
+    """Whether the run's contracted output is on disk; half a run id has none."""
+    try:
+        return os.path.exists(os.path.join(run_dir, *output_rel(run_id).split("/")))
+    except ValueError:
+        return False
+
+
 def load_run(run_dir, task, tokens_available=False, rules=None):
     """One run -> a flat record. Never raises; a broken run becomes a failed run."""
     rules = dict(DEFAULT_RULES, **(rules or {}))
@@ -460,10 +471,11 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
         # or stale field silently converts a finished mask into a failure. That
         # is the same family as the bug that reported 7t-nodura as 0/70 with 50
         # masks on disk, and the disk is the ground truth here.
-        # One level deeper for a subject run (run_ids.py).
-        "output_present": bool(rec.get("output_present")) or bool(
-            glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
-            or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz"))),
+        # The run id's own path only (run_ids.py): a mask at another task's or
+        # subject's path is one the grader will not read, so counting it here
+        # would turn a scored-0 failure into an excluded NOT-GRADED run.
+        "output_present": bool(rec.get("output_present")) or _own_output_exists(
+            run_dir, rec.get("task_id") or (base[0] if base else task)),
         "skill_loads": rec.get("skill_loads", 0),
         "skills_seen": rec.get("skills_seen") or [],
         "skill_load_failures": rec.get("skill_load_failures", 0),

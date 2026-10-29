@@ -21,7 +21,12 @@ set -u
 TASK="$1"; MODEL="$2"; COND="$3"; REP="$4"
 # One run is one task and, for a task graded per subject, one subject: the run id
 # <task>@<subject> (run_ids.py) names the run everywhere; the task pack and the
-# grader take its parts. Split as run_ids.py splits, at the first '@'.
+# grader take its parts. Split as run_ids.py splits, at the first '@'; refused as it
+# refuses: whitespace or '/' would reach the agent and name a path nothing reads
+# back, and '__' is the run directory's own separator.
+case "$TASK" in
+  *[[:space:]]*|*/*|*__*) echo "ABORT: run id '$TASK' holds whitespace, '/' or '__'" >&2; exit 2 ;;
+esac
 case "$TASK" in
   *@*) TASK_BASE="${TASK%%@*}"; SUBJECT="${TASK#*@}"
        if [ -z "$TASK_BASE" ] || [ -z "$SUBJECT" ] || [ "${SUBJECT#*@}" != "$SUBJECT" ]; then

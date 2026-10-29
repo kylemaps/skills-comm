@@ -25,8 +25,12 @@ OUTPUT = "output.nii.gz"
 
 def split(run_id):
     """(task, subject); the subject is None when the id names none. Half an id
-    ('@sub-01', 'task@', 'a@b@c') names nothing and is refused."""
-    rid = (run_id or "").strip()
+    ('@sub-01', 'task@', 'a@b@c') names nothing and is refused, and so is an id
+    with whitespace, '/' or '__': the first two would reach the agent and name a
+    path nothing reads back, and '__' is the run directory's own separator."""
+    rid = run_id or ""
+    if any(c.isspace() for c in rid) or "/" in rid or "__" in rid:
+        raise ValueError("run id %r holds whitespace, '/' or '__'" % rid)
     if SEP not in rid:
         return rid, None
     task, subject = rid.split(SEP, 1)

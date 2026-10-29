@@ -57,7 +57,11 @@ import glob
 import hashlib
 import json
 import os
+import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from run_ids import output_rel  # noqa: E402
 
 FAIL_VERDICTS = {"invalid", "unacceptable", "marginal", "fail", "failed", "error",
                  "no-output"}
@@ -86,8 +90,13 @@ def mask_md5(run_dir):
     values instead of the files understates it, because rounding merges masks
     that differ.
     """
-    m = (glob.glob(os.path.join(run_dir, "submissions", "*", "output.nii.gz"))
-         or glob.glob(os.path.join(run_dir, "submissions", "*", "*", "output.nii.gz")))
+    # The run id's own path (run_ids.py), the id read off the directory name.
+    try:
+        own = os.path.join(run_dir, *output_rel(
+            os.path.basename(run_dir.rstrip("/\\")).split("__")[0]).split("/"))
+    except ValueError:
+        return None
+    m = [own] if os.path.exists(own) else []
     if not m:
         return None
     h = hashlib.md5()
