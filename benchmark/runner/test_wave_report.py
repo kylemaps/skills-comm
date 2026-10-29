@@ -314,7 +314,8 @@ class TestRunDirectories(unittest.TestCase):
         self.assertEqual(dict(wr.speed(self.d, rep="10")), {})
 
 
-REAL_RESULTS = os.path.join(REPO, "_local", "skills-benchmark", "results", "wave6")
+# The published wave 6 record (a skills-benchmark checkout's results/wave6), by WAVE6_RESULTS.
+REAL_RESULTS = os.environ.get("WAVE6_RESULTS", "")
 REAL_SWEEP = os.path.join(REPO, "benchmark", "ci", "sweep.json")
 
 

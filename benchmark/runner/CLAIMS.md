@@ -235,7 +235,7 @@ direction to check next, not as an established harm.
 
 ## 4. Integrity checks
 
-Source: recorded in `_local/SUCCESS.md`; re-runnable from the runs directory.
+Source: re-runnable from the runs directory.
 
 | check | result |
 |---|---|

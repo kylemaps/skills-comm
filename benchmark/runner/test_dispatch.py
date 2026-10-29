@@ -286,8 +286,6 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(gh2.log_reads, [])  # reused from the cache, not re-read
         self.assertEqual(state2["pairs"]["1:1"], "valid")
 
-    # A dry-run smoke test against the real wave 6 files, if present; skipped
-    # otherwise (not every checkout carries _local).
     # A direct provider's model keeps its prefix in the order file, the dispatched
     # cells, the job name and the run directory; a gateway model keeps neurodesk/.
     def test_direct_provider_model_ids(self):
@@ -347,14 +345,15 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(sum("egi/kimi-k3" in c for c in state2["dispatched"]), 0)
         self.assertEqual(sum("nrp/" in c for c in state2["dispatched"]), 1)
 
+    # A dry-run smoke test against wave 6's real order and plan files, named by
+    # WAVE6_ORDER and WAVE6_PLAN; skipped when they are not given.
     def test_dry_run_against_real_wave6_files(self):
         here = os.path.dirname(os.path.abspath(__file__))
-        local = os.path.normpath(os.path.join(here, "..", "..", "_local"))
-        order_path = os.path.join(local, "wave6_order_seed20261016.txt")
-        plan_path = os.path.join(local, "wave6_plan.txt")
+        order_path = os.environ.get("WAVE6_ORDER", "")
+        plan_path = os.environ.get("WAVE6_PLAN", "")
         sweep_path = os.path.join(here, "..", "ci", "sweep.json")
-        if not (os.path.exists(order_path) and os.path.exists(plan_path)):
-            self.skipTest("no _local/wave6 files in this checkout")
+        if not (os.path.isfile(order_path) and os.path.isfile(plan_path)):
+            self.skipTest("WAVE6_ORDER and WAVE6_PLAN not given")
         order = d.read_order(order_path)
         blocks = d.read_plan(plan_path, order)
         with open(sweep_path, encoding="utf-8") as f:
