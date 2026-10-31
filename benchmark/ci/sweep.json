@@ -469,6 +469,107 @@
           "arms": ["env-only", "env+skill"]
         }
       }
+    },
+    "7": {
+      "environment": "ci-env7 (ENVIRONMENT.md version 7 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env7-apptainer1.4.5-lmod8.7.25-uv0.12.24-astra0.2.18-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "eb246b0"
+      },
+      "measured": {
+        "cpus": 4,
+        "memory_limit_gib": 18,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true,
+        "no_new_privs": true,
+        "sudo": false
+      },
+      "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+      "model_fingerprints": {
+        "_comment": [
+          "From the preflight probe of 2026-10-31 05:38Z (preflight 41173387857); nrp/qwen3-small gave no",
+          "answer there and answered the repeat probe of 05:44Z (preflight 41173793504). Served: kimi-k3 on",
+          "vllm-0.31.0-tp8 (EGI); MiniMax-M3.1-Flash, DeepSeek-V4.1-Flash-1017 and Qwen3.8-27B-FP8 (NRP).",
+          "Declared once, before the first run; a model whose fingerprint changes during",
+          "the wave is reported incomplete and its runs are exploratory."
+        ],
+        "egi/kimi-k3": "f8abcb458a42",
+        "nrp/minimax-m2": "97880aed0255",
+        "nrp/deepseek-v4-flash": "9b7b747a14f3",
+        "nrp/qwen3-small": "215ade352194"
+      },
+      "arms_compared": {
+        "_comment": [
+          "The primary comparison is env+skill-michele against env+skill (stratified_effect.py --runs --arm env+skill-michele --control env+skill).",
+          "Secondary: each skill against env-only, stratified the same way. The env-only arm is measured again:",
+          "the access path and model versions differ from wave 6.",
+          "A family's subject tasks are pooled with strata model x subject (wave_report.py)."
+        ],
+        "primary": ["env+skill-michele", "env+skill"],
+        "secondary": [
+          ["env+skill", "env-only"],
+          ["env+skill-michele", "env-only"]
+        ]
+      },
+      "rules": {
+        "_comment": ["As in wave 6."],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "lost": {
+        "_comment": [
+          "As in wave 6. Key: <run id>__<model>__<arm>__r<n>, the model by its wave id (nrp/minimax-m2)."
+        ]
+      },
+      "tasks": {
+        "structural-brain-extraction-7t-nodura@sub-025": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-025",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        },
+        "structural-brain-extraction-7t-nodura@sub-045": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-045",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        },
+        "structural-brain-extraction-7t-nodura@sub-075": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-075",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        },
+        "structural-brain-extraction@sub-0008": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0008",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        },
+        "structural-brain-extraction@sub-0023": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0023",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        },
+        "structural-brain-extraction@sub-0039": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0039",
+          "models": ["egi/kimi-k3", "nrp/minimax-m2", "nrp/deepseek-v4-flash", "nrp/qwen3-small"],
+          "arms": ["env-only", "env+skill", "env+skill-michele"]
+        }
+      },
+      "reps": 7,
+      "_comment_design": [
+        "2 tasks x 3 subjects x 4 models x 3 arms x 7 reps = 504 runs.",
+        "A task graded per subject runs as <task>@<subject> (run_ids.py); each entry's family and subject",
+        "must agree with its key (wave_check.py). 7t-nodura: all three subjects of ds003642. Plain T1:",
+        "random.Random(20261031).sample(sorted([sub-0004, sub-0008, sub-0023, sub-0025, sub-0039]), 3)",
+        "= sub-0023, sub-0008, sub-0039; sub-0004 and sub-0025 are held out. Cell order within a block:",
+        "random.Random(20261031).shuffle of each run id's 12 model x arm cells, run ids in the order above."
+      ]
     }
   }
 }

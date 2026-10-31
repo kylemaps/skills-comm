@@ -385,6 +385,21 @@ grep -q "predate the label field" "$T/o" && ok "  and say so" || bad "  passed s
 rm -rf "$T"
 
 echo
+echo "=== assemble: a wave's own reps decide when a cell is complete"
+T=$(mktemp -d); TASK=structural-brain-extraction-7t; SW="$T/sweep.json"
+cat > "$SW" <<J
+{"reps":3,"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"6":{"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}},
+          "7":{"reps":2,"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}}}}
+J
+mklab 1 ',"label":"benchmark"'; mklab 2 ',"label":"benchmark"'
+asm() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 --arm env-only --sweep "$SW" --wave "$1" >"$T/o" 2>&1; }
+asm 7; expect 0 $? "a wave declaring reps 2: two runs make a complete cell"
+asm 6; expect 1 $? "a wave without reps takes the sweep's 3: two runs do not"
+grep -q "expected 3" "$T/o" && ok "  via the complete gate" || bad "  wrong gate"
+rm -rf "$T"
+
+echo
 echo "=== finalize_run off_spec: commands count, prose does not"
 # Each case changes one thing. The ones that must NOT fire are prose, a download
 # inside a CVMFS container, an echoed command, and scripts inside a fetched dataset.

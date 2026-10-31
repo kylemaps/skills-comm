@@ -345,6 +345,38 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(sum("egi/kimi-k3" in c for c in state2["dispatched"]), 0)
         self.assertEqual(sum("nrp/" in c for c in state2["dispatched"]), 1)
 
+    # Each block is dispatched with its own skill arm's snapshot (sweep.json arms);
+    # a block with no skill arm keeps the default; two skill arms in one block refuse.
+    def test_snapshot_follows_the_blocks_skill_arm(self):
+        order = d.read_order(self.order_path([
+            "1 taskA nrp/minimax-m2 env+skill",
+            "2 taskA nrp/qwen3-small env-only",
+            "3 taskB nrp/minimax-m2 env+skill-michele",
+            "4 taskC nrp/minimax-m2 env-only",
+        ]))
+        blocks = d.read_plan(self.plan_path([
+            "taskA reps=1 cells=1,2", "taskB reps=1 cells=3", "taskC reps=1 cells=4",
+        ]), order)
+        snaps = d.arm_snapshots_of({"arms": {
+            "_comment": ["arms"], "env-only": {"skills_hash": None},
+            "env+skill": {"skills_hash": "291f844a43ec"},
+            "env+skill-michele": {"skills_hash": "5ba66f0c7ddf"}}})
+        self.assertEqual(snaps, {"env+skill": "291f844a", "env+skill-michele": "5ba66f0c"})
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={})
+        rc, state = d.poll(gh, "o/r", 7, order, blocks, self.wave(reps=1), lanes=3,
+                           dry_run=True, snapshot="default0", arm_snapshots=snaps)
+        self.assertEqual(rc, 0)
+        snap = {c.split("-f task=")[1].split()[0]: c.split("-f snapshot=")[1].split()[0]
+                for c in state["dispatched"]}
+        self.assertEqual(snap, {"taskA": "291f844a", "taskB": "5ba66f0c", "taskC": "default0"})
+        with self.assertRaises(ValueError):
+            d.block_snapshot([1, 3], order, snaps, "default0")
+
+    def test_load_wave_takes_the_waves_own_reps(self):
+        sweep = {"reps": 10, "waves": {"6": {"tasks": {}}, "7": {"reps": 7, "tasks": {}}}}
+        self.assertEqual(d.load_wave(sweep, 6)["reps"], 10)
+        self.assertEqual(d.load_wave(sweep, 7)["reps"], 7)
+
     # A dry-run smoke test against wave 6's real order and plan files, named by
     # WAVE6_ORDER and WAVE6_PLAN; skipped when they are not given.
     def test_dry_run_against_real_wave6_files(self):

@@ -350,6 +350,8 @@ def main():
         return 0
 
     w = wave_spec(spec, a.wave)
+    if "reps" in w:
+        spec = dict(spec, reps=w["reps"])  # the wave's own repeat count, over the sweep's
     rules = rules_for(spec, a.wave) if "waves" in spec else None
     if a.task not in w["tasks"]:
         raise SystemExit("REFUSED: %s is not a task in %s%s. A cell nobody declared is "

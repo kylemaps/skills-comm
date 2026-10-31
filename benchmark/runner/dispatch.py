@@ -122,14 +122,15 @@ def read_plan(path, order):
 
 def load_wave(sweep, wave):
     """incomplete models, acknowledged lost (task/model/arm/rep) keys, and the
-    rep count a wave declares. Both sweep dicts may carry a "_comment" key."""
+    rep count: the wave's own `reps`, else the sweep's. Both sweep dicts may
+    carry a "_comment" key."""
     w = (sweep.get("waves") or {}).get(str(wave))
     if not isinstance(w, dict):
         raise SystemExit("wave %s is not declared in the sweep" % wave)
     return {
         "incomplete": {k for k in (w.get("incomplete") or {}) if not k.startswith("_")},
         "lost": {k: v for k, v in (w.get("lost") or {}).items() if not k.startswith("_")},
-        "reps": sweep.get("reps", 10),
+        "reps": w.get("reps", sweep.get("reps", 10)),
     }
 
 
@@ -348,6 +349,24 @@ def block_demand(block, order):
     return {p: min(block.parallel, n) for p, n in pairs.items()}
 
 
+def arm_snapshots_of(sweep):
+    """Skill arm -> snapshot directory under skills/<capability>/: the first 8
+    characters of the arm's skills_hash in sweep.json `arms`. Arms without a
+    hash (env-only) are absent."""
+    return {arm: spec["skills_hash"][:8] for arm, spec in (sweep.get("arms") or {}).items()
+            if not arm.startswith("_") and isinstance(spec, dict) and spec.get("skills_hash")}
+
+
+def block_snapshot(cells, order, arm_snapshots, default):
+    """The snapshot a block is dispatched with: its skill arm's, or `default` for
+    a block with no skill arm. run.yml takes one snapshot per run, so a block
+    carries at most one skill arm."""
+    arms = {order[c][2] for c in cells if order[c][2] in arm_snapshots}
+    if len(arms) > 1:
+        raise ValueError("a block carries at most one skill arm, got %s" % ", ".join(sorted(arms)))
+    return arm_snapshots[arms.pop()] if arms else default
+
+
 def build_run_fields(task, cells, order, reps, snapshot, capability, wave, parallel=1):
     cells_arg = " ".join("%s:%s" % (opencode_id(order[c][1]), order[c][2]) for c in cells)
     # A single rep sent bare ("5") is read by run.yml as a COUNT (reps 1-5), not
@@ -418,10 +437,12 @@ def load_job_cache(path):
 
 def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
          results_dir=None, dry_run=True, snapshot="", capability="brain-extraction",
-         job_cache=None, provider_caps=None):
+         job_cache=None, provider_caps=None, arm_snapshots=None):
     """One stateless poll. Returns (exit_code, state). provider_caps: provider ->
     most jobs in flight at once (sweep.json providers.<p>.max_in_flight); a block
-    that could push a provider over its cap waits for a later poll."""
+    that could push a provider over its cap waits for a later poll. arm_snapshots:
+    skill arm -> snapshot (arm_snapshots_of); a block with no skill arm gets
+    `snapshot`."""
     provider_caps = provider_caps or {}
     log = []
     job_cache = dict(job_cache or {})
@@ -542,8 +563,9 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
                 block.line or task, ", ".join(over), ", ".join("%s %d" % kv for kv in sorted(flight.items()))))
             continue
         flight.update(demand)
-        fields = build_run_fields(task, block.cells, order, block.reps, snapshot, capability, wave,
-                                  block.parallel)
+        fields = build_run_fields(task, block.cells, order, block.reps,
+                                  block_snapshot(block.cells, order, arm_snapshots or {}, snapshot),
+                                  capability, wave, block.parallel)
         cmd = _gh_command("run.yml", repo, fields)
         dispatched.append(cmd)
         log.append(("DRY " if dry_run else "") + cmd)
@@ -593,7 +615,9 @@ def main(argv=None):
     ap.add_argument("--state-in", help="a previous --state-json: reuse its job classifications")
     ap.add_argument("--results", help="results/ root, to check what is already published")
     ap.add_argument("--repo", default=DEFAULT_REPO)
-    ap.add_argument("--snapshot", default="291f844a")
+    ap.add_argument("--snapshot", default="291f844a",
+                    help="snapshot for a block with no skill arm; a skill arm's block takes its own "
+                         "from sweep.json arms")
     ap.add_argument("--capability", default="brain-extraction")
     a = ap.parse_args(argv)
 
@@ -612,7 +636,7 @@ def main(argv=None):
     rc, state = poll(gh, a.repo, a.wave, order, blocks, wave_sweep, lanes,
                      since=a.since, results_dir=a.results, dry_run=a.dry_run,
                      snapshot=a.snapshot, capability=a.capability, job_cache=job_cache,
-                     provider_caps=provider_caps)
+                     provider_caps=provider_caps, arm_snapshots=arm_snapshots_of(sweep))
 
     declared = sum(1 for _, m, _ in order.values() if m not in wave_sweep["incomplete"])
     for line in state["log"]:
