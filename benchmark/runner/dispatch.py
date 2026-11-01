@@ -55,6 +55,11 @@ RATE_KILL = "Rate limit exceeded for api_key"
 OUTAGE = "Model '' was not found"
 PROBE_NONE = "and the probe recorded none"
 ROSTER_MISSING = "is not resolvable after writing the config"
+# The "opencode provider config" step could not reach a provider's roster, before
+# the agent. At the start of a log line, as AGENT_OUTCOME_RE, so an agent's
+# indented transcript quoting it does not match.
+ROSTER_UNREACHABLE_RE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?FAIL: could not reach https?://\S+/models: ", re.M)
 UPLOAD_EACCES = "EACCES: permission denied, scandir"
 OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
 # Among completed jobs with no "Agent outcome" line, the worst classification
@@ -255,6 +260,8 @@ def classify_job(gh, job):
         return "rerun", "probe-none"
     if ROSTER_MISSING in log:
         return "rerun", "roster-missing"
+    if ROSTER_UNREACHABLE_RE.search(log):
+        return "rerun", "roster-unreachable"
     if UPLOAD_EACCES in log:
         return "rerun", "upload-eacces"
     if job["conclusion"] == "cancelled":

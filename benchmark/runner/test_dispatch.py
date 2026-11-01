@@ -261,6 +261,21 @@ class DispatchTest(unittest.TestCase):
         gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5001: log})
         self.assertEqual(d.classify_job(gh, j1), ("valid", "timeout"))
 
+    # The provider config step could not reach a roster, before the agent: re-run.
+    # The same words in an agent's indented transcript are not that step.
+    def test_unreachable_roster_is_a_rerun_and_a_transcript_quoting_it_is_not(self):
+        j1 = job("rep 6 taskA egi/kimi-k3 env+skill", 5001, conclusion="failure")
+        log = "\n".join([
+            "2026-11-01T10:19:02.6359277Z FAIL: could not reach https://llm.ai.egi.eu/v1/models:"
+            " <urlopen error [Errno 104] Connection reset by peer>",
+            "2026-11-01T10:19:02.6489967Z ##[error]Process completed with exit code 1.",
+        ])
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5001: log})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "roster-unreachable"))
+        quoted = "2026-11-01T10:30:00.0000000Z   | FAIL: could not reach https://llm.ai.egi.eu/v1/models: x"
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5001: quoted})
+        self.assertEqual(d.classify_job(gh, j1), ("unknown", "unclassified failure"))
+
     # A pair already published on disk needs no job and no log read, even when
     # a job happens to exist for it (requirement 2 and the speed requirement 3).
     def test_published_pair_skips_the_log_read(self):
