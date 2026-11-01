@@ -41,7 +41,12 @@ from model_ids import opencode_id, segment, wave_id
 DEFAULT_REPO = "neurodesk/skills-benchmark"
 
 JOB_RE = re.compile(r"^rep (\d+) (\S+) (\S+) (\S+)$")
-AGENT_OUTCOME_RE = re.compile(r"agent_outcome=(\S+) run=(\S+)")
+# The "Agent outcome" step's own line: at the start of a log line, after
+# GitHub's timestamp. An agent's tool output is echoed into the Run step's log
+# indented ("  | ..."), so a transcript that quotes this pattern or the step's
+# wording does not match.
+AGENT_OUTCOME_RE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?agent_outcome=(\S+) run=(\S+)", re.M)
 # The gateway served a different model or serving engine than the wave declared
 # (wave_check.py's two wordings: the probe before a run, the fingerprint check after).
 FINGERPRINT_RE = re.compile(
@@ -219,9 +224,9 @@ def classify_job(gh, job):
         log = clean_log(log)
     outcome = None
     if log:
-        m = AGENT_OUTCOME_RE.search(log)
-        if m:
-            outcome = m.group(1)
+        found = AGENT_OUTCOME_RE.findall(log)
+        if found:
+            outcome = found[-1][0]  # the step runs after the agent: its line is last
     if outcome in ("completed", "timeout"):
         return "valid", outcome
     if outcome in ("gateway_cut", "no_model_call"):

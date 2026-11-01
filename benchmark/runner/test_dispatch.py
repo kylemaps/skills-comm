@@ -248,6 +248,19 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(state["pairs"]["1:1"], "valid")
         self.assertEqual(state["reasons"], [])
 
+    # An agent's tool output is echoed into the Run step's log, indented; an agent
+    # that prints dispatch.py carries AGENT_OUTCOME_RE's own source text. Only
+    # the "Agent outcome" step's line, at the start of a log line, is the outcome.
+    def test_agent_transcript_quoting_the_outcome_pattern_is_not_the_outcome(self):
+        j1 = job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 5001)
+        log = "\n".join([
+            '2026-11-01T00:22:47.9088745Z   | AGENT_OUTCOME_RE = re.compile(r"agent_outcome=(\\S+) run=(\\S+)")',
+            "2026-11-01T00:22:48.0000000Z   | agent_outcome=gateway_cut run=x",
+            "2026-11-01T01:15:47.6123672Z agent_outcome=timeout run=taskA__EGI-kimi-k3__env-only__r1",
+        ])
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5001: log})
+        self.assertEqual(d.classify_job(gh, j1), ("valid", "timeout"))
+
     # A pair already published on disk needs no job and no log read, even when
     # a job happens to exist for it (requirement 2 and the speed requirement 3).
     def test_published_pair_skips_the_log_read(self):
