@@ -521,7 +521,119 @@
       "lost": {
         "_comment": [
           "As in wave 6. Key: <run id>__<model>__<arm>__r<n>, the model by its wave id (nrp/minimax-m2)."
-        ]
+        ],
+        "structural-brain-extraction-7t-nodura@sub-025__nrp/qwen3-small__env+skill__r1": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41187238834"
+          ],
+          "evidence": "Job 124496563089, runner pod jrb98 on node t2gfn. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 09:17:49Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,097,620 kB\", then the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-025__egi/kimi-k3__env+skill__r1": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41187238834"
+          ],
+          "evidence": "Job 124496563093, runner pod jb4ft on node v2lbb. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 09:49:01Z: kernel \"Memory cgroup out of memory: Killed process (python) anon-rss 18,058,604 kB\", then the runner; exit code 137. No node memory pressure and no eviction; no other benchmark runner on the node. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-075__nrp/minimax-m2__env-only__r1": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41187242619"
+          ],
+          "evidence": "Job 124496576257, runner pod rgz7b on node ws5fg. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 09:52:32Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,028,844 kB\", then the agent and the runner; exit code 137. No node memory pressure and no eviction; no other benchmark runner on the node at the time. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0008__nrp/qwen3-small__env+skill__r1": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41195857280"
+          ],
+          "evidence": "Job 124521782731, runner pod 94sxk on node 59gnm. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 11:21:28Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,109,624 kB\", then the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-045__nrp/qwen3-small__env-only__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41205647452"
+          ],
+          "evidence": "Job 124550089895, runner pod f2shc on node kltnz. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 13:43:58Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,101,384 kB\", then the runner; no node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-075__nrp/qwen3-small__env+skill__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41205650776"
+          ],
+          "evidence": "Job 124550101891, runner pod vvk69 on node ws5fg. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 13:45:28Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 17,928,148 kB\", then the runner; no node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0039__nrp/minimax-m2__env+skill__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41218243151"
+          ],
+          "evidence": "Job 124587264984, runner pod t9vmc on node 59gnm. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 16:43:51Z: kernel \"Memory cgroup out of memory: Killed process (python) anon-rss 18,069,936 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0008__nrp/minimax-m2__env+skill__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41220117898"
+          ],
+          "evidence": "Job 124592772934, runner pod 4zh55 on node zq679. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 17:03:15Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,068,616 kB\", then the agent and the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0023__nrp/qwen3-small__env+skill__r2": {
+          "reason": "Evicted: pod ephemeral-storage limit",
+          "ci_runs": [
+            "41223151354"
+          ],
+          "evidence": "Job 124601742629, runner pod zmg9w on node zq679. Evicted in the Run step at 17:19:36Z by the kubelet for the pod's own ephemeral-storage limit: \"Pod ephemeral local storage usage exceeds the total limit of containers 2Gi\" (writes outside the 60 GiB work volume); runner exit code 137. No node disk, memory or PID pressure and no other eviction. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-025__nrp/qwen3-small__env-only__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41220874709"
+          ],
+          "evidence": "Job 124595002162, runner pod wmqdp on node 9llzf. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 17:28:21Z: kernel \"Memory cgroup out of memory: Killed process (python) anon-rss 18,016,644 kB\", then the agent and the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0023__nrp/deepseek-v4-flash__env+skill__r2": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41223151354"
+          ],
+          "evidence": "Job 124601742589, runner pod 9tbqx on node zlnbk. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 17:29:03Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,055,308 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0023__nrp/qwen3-small__env+skill__r3": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41241619335"
+          ],
+          "evidence": "Job 124656548994, runner pod r57zv on node rmslt. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 21:11:22Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 17,998,616 kB\", then the agent and the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-075__nrp/minimax-m2__env-only__r3": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41241233516"
+          ],
+          "evidence": "Job 124655419888, runner pod tx9t8 on node zlnbk. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 21:52:01Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 16,302,632 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-025__nrp/qwen3-small__env-only__r3": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41243208466"
+          ],
+          "evidence": "Job 124661217760, runner pod tkvg2 on node g6qrx. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 21:57:24Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,073,396 kB\", then the agent and the runner; exit code 137. No node memory pressure and no eviction; the other runner on the node kept running. No run record or artifact."
+        },
+        "structural-brain-extraction@sub-0023__nrp/minimax-m2__env-only__r4": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41248221814"
+          ],
+          "evidence": "Job 124676070876, runner pod tsf2f on node rmslt. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 22:56:20Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 17,945,580 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-075__nrp/minimax-m2__env-only__r4": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41262707885"
+          ],
+          "evidence": "Job 124719087072, runner pod ldcrn on node ws5fg. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 03:19:02Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 17,235,844 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        }
       },
       "tasks": {
         "structural-brain-extraction-7t-nodura@sub-025": {

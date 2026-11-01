@@ -151,6 +151,8 @@ INFRA_ERROR_RES = [
     (re.compile(r"No matching route found"), "provider has no route for the model"),
     (re.compile(r"Invalid model name passed in model="), "provider does not serve the model"),
     (re.compile(r"upstream connect error|no healthy upstream"), "provider backend unreachable"),
+    # NRP's inference gateway when the model's deployment has no pod ready to serve.
+    (re.compile(r"failed to find candidate pods"), "provider has no serving pods"),
     # opencode's own word for a provider that stopped streaming its answer.
     (re.compile(r"SSE read timed out"), "provider stream timed out"),
     # opencode keeps shared state -- one SQLite database and one local server -- and

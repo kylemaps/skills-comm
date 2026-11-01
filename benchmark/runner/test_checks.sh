@@ -527,6 +527,7 @@ outc "the model gone from the NRP gateway, no output" 1 "${E}[91m${E}[1mError: N
 outc "the model gone from EGI, no output" 1 "${E}[91m${E}[1mError: /chat/completions: Invalid model name passed in model=kimi-k3." "" gateway_cut
 outc "the EGI parallel-request cap, no output" 1 "${E}[91m${E}[1mError: Rate limit exceeded for api_key: 0123abcd. Limit type: max_parallel_requests. Current limit: 4" "" gateway_cut
 outc "a provider that stopped streaming, no output" 1 "${E}[91m${E}[1mError: SSE read timed out" "" gateway_cut
+outc "a model with no serving pods at NRP, no output" 1 "${E}[91m${E}[1mError: Service Unavailable: inference gateway: ServiceUnavailable - failed to find candidate pods for serving the request" "" gateway_cut
 outc "the same error but an output was still written" 0 "${E}[91m${E}[1mError: Rate limit exceeded for api_key" yes completed
 mkdir -p "$T/k5"; printf 'cat <<EOF\nsudo make install\nEOF\npip install x\n' > "$T/k5/setup.sh"
 echo '{"task_id":"t"}' > "$T/k5/run.json"; printf '$ bash setup.sh\n' > "$T/k5/transcript.txt"
@@ -1146,6 +1147,7 @@ msgs = {"gateway returned empty model name": "Model '' was not found",
         "provider has no route for the model": "No matching route found. It is likely that the model specified your request is not configured in the Gateway.",
         "provider does not serve the model": "/chat/completions: Invalid model name passed in model=glm-5. Call `/v1/models` to view available models for your key.",
         "provider backend unreachable": "upstream connect error or disconnect/reset before headers. reset reason: connection failure",
+        "provider has no serving pods": "Service Unavailable: inference gateway: ServiceUnavailable - failed to find candidate pods for serving the request",
         "provider stream timed out": "SSE read timed out",
         "opencode database contention": 'Failed query: insert into "project"',
         "opencode session lost": "Session not found",
@@ -1164,7 +1166,7 @@ EOF
 while IFS= read -r line; do
   case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
 done < "$T/infra.out"
-[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 12 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 13 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
 sed -i 's/"timeout":"fail"/"timeout":"maybe"/' "$T/sweep.json"
 "$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 1 >/dev/null 2>&1
 expect 1 $? "an unknown rule value is refused"
