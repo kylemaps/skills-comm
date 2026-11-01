@@ -675,6 +675,13 @@
             "41295546684"
           ],
           "evidence": "Job 124815564176, runner pod nj5v7 on node 7zcwp. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 10:18:35Z: kernel \"Memory cgroup out of memory: Killed process (python) anon-rss 18,062,680 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
+        },
+        "structural-brain-extraction-7t-nodura@sub-045__nrp/deepseek-v4-flash__env+skill-michele__r6": {
+          "reason": "OOM-killed: pod memory limit",
+          "ci_runs": [
+            "41310111271"
+          ],
+          "evidence": "Job 124858558389, runner pod gvqq5 on node zq679. Killed in the Run step by the pod's memory cgroup (18 GiB limit) at 13:34:18Z: kernel \"Memory cgroup out of memory: Killed process (python3) anon-rss 18,007,872 kB\", then the runner; exit code 137. No node memory pressure and no eviction. No run record or artifact."
         }
       },
       "tasks": {
