@@ -276,6 +276,17 @@ class DispatchTest(unittest.TestCase):
         gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5001: quoted})
         self.assertEqual(d.classify_job(gh, j1), ("unknown", "unclassified failure"))
 
+    def test_finished_run_whose_upload_failed_is_a_rerun_and_a_transcript_quoting_it_is_not(self):
+        j1 = job("rep 5 taskA egi/kimi-k3 env+skill", 5002, conclusion="failure")
+        outcome = "2026-11-01T04:08:19.1000000Z agent_outcome=completed run=taskA__egi-kimi-k3__env+skill__r5"
+        upload = ("2026-11-01T04:08:32.5617505Z ##[error]EACCES: permission denied, scandir"
+                  " '/home/runner/_work/_temp/bench/r5/runs/x/containers/sandbox/usr/lib/ssl/private'")
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5002: outcome + "\n" + upload})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "upload-eacces"))
+        quoted = "2026-11-01T04:00:00.0000000Z   | ##[error]EACCES: permission denied, scandir '/x'"
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5002: quoted + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("valid", "completed"))
+
     # A pair already published on disk needs no job and no log read, even when
     # a job happens to exist for it (requirement 2 and the speed requirement 3).
     def test_published_pair_skips_the_log_read(self):

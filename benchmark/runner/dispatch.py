@@ -61,6 +61,11 @@ ROSTER_MISSING = "is not resolvable after writing the config"
 ROSTER_UNREACHABLE_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?FAIL: could not reach https?://\S+/models: ", re.M)
 UPLOAD_EACCES = "EACCES: permission denied, scandir"
+# The Upload step's own error line, at the start of a log line as AGENT_OUTCOME_RE:
+# the run tree holds a directory the runner cannot read, so no artifact was
+# uploaded even though the agent finished.
+UPLOAD_EACCES_RE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[error\]EACCES: permission denied, scandir ", re.M)
 OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
 # Among completed jobs with no "Agent outcome" line, the worst classification
 # any single attempt reached wins (see _merge).
@@ -233,6 +238,10 @@ def classify_job(gh, job):
         if found:
             outcome = found[-1][0]  # the step runs after the agent: its line is last
     if outcome in ("completed", "timeout"):
+        # A finished run whose record never uploaded has no artifact to
+        # assemble: a harness error, re-run under the same rep.
+        if UPLOAD_EACCES_RE.search(log):
+            return "rerun", "upload-eacces"
         return "valid", outcome
     if outcome in ("gateway_cut", "no_model_call"):
         return "rerun", outcome
