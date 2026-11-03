@@ -61,6 +61,13 @@ ROSTER_MISSING = "is not resolvable after writing the config"
 ROSTER_UNREACHABLE_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?FAIL: could not reach https?://\S+/models: ", re.M)
 UPLOAD_EACCES = "EACCES: permission denied, scandir"
+# run_bench.sh, when the key proxy refuses the lock, is not ready, or reaches no
+# provider (before the agent).
+PROXY_ABORT_RE = re.compile(r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?ABORT: the key proxy ", re.M)
+# run_bench.sh, after the agent, when the proxy's summary is unavailable or an impostor's:
+# the run cannot show which models it called.
+PROXY_INVALID_RE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?INVALID: the key proxy's summary is unavailable", re.M)
 # The Upload step's own error line, at the start of a log line as AGENT_OUTCOME_RE:
 # the run tree holds a directory the runner cannot read, so no artifact was
 # uploaded even though the agent finished.
@@ -242,6 +249,8 @@ def classify_job(gh, job):
         # assemble: a harness error, re-run under the same rep.
         if UPLOAD_EACCES_RE.search(log):
             return "rerun", "upload-eacces"
+        if PROXY_INVALID_RE.search(log):
+            return "rerun", "proxy-summary"
         return "valid", outcome
     if outcome in ("gateway_cut", "no_model_call"):
         return "rerun", outcome
@@ -251,6 +260,10 @@ def classify_job(gh, job):
         # here, by its own wording elsewhere in the log.
         if log and FINGERPRINT_RE.search(log):
             return "fingerprint-changed", "fingerprint changed"
+        # The key proxy refused the lock or reaches no provider: the pod's fault, not
+        # the model's. run_bench.sh prints this before the agent, at a line's start.
+        if log and PROXY_ABORT_RE.search(log):
+            return "rerun", "proxy-failed"
         return "unknown", "stopped before the agent, reason not in the printed line"
     if outcome is not None:
         return "unknown", "unrecognized agent_outcome " + outcome

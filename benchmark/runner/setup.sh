@@ -4,8 +4,8 @@
 set -u
 
 SKILLS_REPO="${SKILLS_REPO:-https://github.com/nipreps/skills-comm.git}"
-GRADER_REPO="${GRADER_REPO:-https://github.com/MoniDoerig/skills-comm.git}"
-GRADER_BRANCH="${GRADER_BRANCH:-feat/brain-extraction-grader}"
+GRADER_REPO="${GRADER_REPO:-https://github.com/neurodesk/skills-benchmark.git}"
+GRADER_BRANCH="${GRADER_BRANCH:-graders}"
 
 echo "=== 1. skills source (~/skills-comm) ==="
 if [ -d "$HOME/skills-comm/.git" ]; then

@@ -90,6 +90,30 @@ fi
 # see, which in a pod are the node's, not the pod's limit.
 AGENT_THREADS="${AGENT_THREADS:-}"
 case "$AGENT_THREADS" in ''|*[!0-9]*) AGENT_THREADS="" ;; esac
+# AGENT_DATA_LIMIT_KB: when set, every command the agent runs gets this data limit
+# (ulimit -d, KiB: heap and private mappings), set as a hard limit in the bash that runs
+# it, so its children inherit it and cannot raise it. A command that asks for more
+# fails with its own out-of-memory error, which the agent sees. Without it one runaway
+# process takes the container to its memory limit, where the kernel kills the whole
+# run and nothing is recorded.
+# A value that is not a whole number above 0 stops the run: set wrong, the limit would
+# be dropped or would stop every command, and the run would go ahead regardless.
+AGENT_DATA_LIMIT_KB="${AGENT_DATA_LIMIT_KB:-}"
+case "$AGENT_DATA_LIMIT_KB" in
+  '') ;;
+  0*|*[!0-9]*) echo "ABORT: AGENT_DATA_LIMIT_KB='$AGENT_DATA_LIMIT_KB' is not a whole number of KiB above 0" >&2; exit 2 ;;
+esac
+# AGENT_MEMWATCH_PCT: when set, memwatch.py watches the pod's memory while the agent
+# runs and stops the agent's largest command above this percentage of the limit
+# (several processes together; 0 records only). Its record lands in run.json. A value
+# that is not a whole percentage stops the run.
+AGENT_MEMWATCH_PCT="${AGENT_MEMWATCH_PCT:-}"
+case "$AGENT_MEMWATCH_PCT" in
+  '') ;;
+  *[!0-9]*) echo "ABORT: AGENT_MEMWATCH_PCT='$AGENT_MEMWATCH_PCT' is not a whole percentage" >&2; exit 2 ;;
+  *) [ "$AGENT_MEMWATCH_PCT" -le 100 ] || {
+       echo "ABORT: AGENT_MEMWATCH_PCT=$AGENT_MEMWATCH_PCT is above 100" >&2; exit 2; } ;;
+esac
 # The wall. It was 2700 by default, and that default was a trap: the working value
 # lives in ~/bench/.env on the VM, which exists on exactly one machine. A fresh pod
 # has no .env, so CI would have fallen back to 45 minutes -- the wall that sat INSIDE
@@ -194,6 +218,10 @@ land() {
 # working directory is still inside $WORK (opencode can start commands in process
 # groups of their own).
 stop_agent() {
+  if [ -n "${MEMWATCH_PID:-}" ]; then
+    kill -TERM "$MEMWATCH_PID" 2>/dev/null; wait "$MEMWATCH_PID" 2>/dev/null
+  fi
+  unset MEMWATCH_PID
   [ -n "${AGENT_PID:-}" ] && kill -KILL -- "-$AGENT_PID" 2>/dev/null
   unset AGENT_PID
   for p in /proc/[0-9]*; do
@@ -209,7 +237,7 @@ stop_agent() {
 # directory is empty.
 trap 'stop_agent
       land
-      rm -f "$META/$ID.skills.json" "$META/$ID.config.json"
+      rm -f "$META/$ID.skills.json" "$META/$ID.config.json" "$META/$ID.bash_env.sh" "$META/$ID.memwatch.json"
       rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
       for s in $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done' EXIT
 trap 'exit 130' INT
@@ -218,6 +246,20 @@ trap 'exit 143' TERM
 python "$HERE/mkprompt.py" "$TASKS" "$TASK" > "$PROMPT"
 if [ ! -s "$PROMPT" ]; then echo "FATAL: empty prompt for $TASK" >&2; exit 1; fi
 cat "$HERE/wrapper.txt" >> "$PROMPT"
+# AGENT_MACHINE_FACTS: when set, a template (machine.txt) of what the agent is told about
+# its machine, rendered by machine_facts.py from the pod's limits and this run's settings
+# and appended to the prompt: the same in every arm of a wave, as prompt_hash shows. A
+# value it cannot read stops the run, rather than describe the server instead of the pod.
+if [ -n "${AGENT_MACHINE_FACTS:-}" ]; then
+  FACTS=$(python "$HERE/machine_facts.py" "$AGENT_MACHINE_FACTS" --timeout "$TIMEOUT" \
+            ${AGENT_DATA_LIMIT_KB:+--data-limit-kb "$AGENT_DATA_LIMIT_KB"} \
+            ${AGENT_MEMWATCH_PCT:+--memwatch-pct "$AGENT_MEMWATCH_PCT"} \
+            ${AGENT_LAYER_LIMIT_BYTES:+--layer-bytes "$AGENT_LAYER_LIMIT_BYTES"} \
+            --cgroup "${BENCH_CGROUP:-/sys/fs/cgroup}" --work "$BENCH_HOME" \
+            --shm "${BENCH_SHM:-/dev/shm}") && [ -n "$FACTS" ] \
+    || { echo "FATAL: the machine facts for the prompt could not be read" >&2; exit 1; }
+  printf '\n%s\n' "$FACTS" >> "$PROMPT"
+fi
 
 # skills_sha only means anything when SKILLS_SRC is inside our git checkout. When we
 # test a skill delivered some other way -- an unzipped drop from a collaborator, say --
@@ -274,6 +316,9 @@ PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 # NOT in PROVENANCE_KEYS. Scheduling is not ours to control, so making a multi-node
 # cell un-poolable would fire constantly and be ignored. This exists to join against
 # the cluster's own per-node logs when a result looks strange.
+#
+# Recorded as a pseudonym, "node-" + the first 12 hex digits of the name's sha256: runs
+# on one node share it, and whoever holds the cluster's node list can map it back.
 # label: benchmark | exploratory. run.yml has offered this as a dispatch input from
 # the start and NOTHING recorded it -- the value was passed into this script as
 # RUN_LABEL and dropped. So "exploratory" was a promise made at dispatch and absent
@@ -290,6 +335,8 @@ PROMPT_HASH=$(md5sum "$PROMPT" 2>/dev/null | cut -c1-12)
 # task_id is the run id; subject is its subject, "" for a task with one reference.
 # env_skills, env_skills_hash, instructions_hash: the environment's skills (every
 # arm) and standing instruction file, "" when there are none.
+NODE_ID=""
+[ -n "${NODE_NAME:-}" ] && NODE_ID="node-$(printf '%s' "$NODE_NAME" | sha256sum | cut -c1-12)"
 IDENT=$(printf '{"task_id":"%s","subject":"%s","model":"%s","condition":"%s","repeat":%s,"skills_sha":"%s","skills_src":"%s","skills_hash":"%s","skills_installed":"%s","label":"%s","wave":"%s","env_skills":"%s","env_skills_hash":"%s","instructions_hash":"%s"}' \
   "$TASK" "$SUBJECT" "$MODEL" "$COND" "$REP" \
   "$(git -C "$(dirname "$SKILLSRC")/.." rev-parse --short HEAD 2>/dev/null)" \
@@ -302,7 +349,7 @@ printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_
   "${NEURODESKTOP_VERSION:-unknown}" "$("$OPENCODE_BIN" --version 2>/dev/null)" \
   "${PROMPT_HASH:-none}" \
   "${TASKS_SHA:-$(git -C "$(dirname "$(dirname "$TASKS")")" rev-parse --short HEAD 2>/dev/null)}" \
-  "${NODE_NAME:-}" "$WORK" "$(date -u +%FT%TZ)" "${AGENT_HOME:-}" \
+  "$NODE_ID" "$WORK" "$(date -u +%FT%TZ)" "${AGENT_HOME:-}" \
   "${AGENT_THREADS:-null}" > "$RECORD"
 
 # A random id for this run, sent to the gateway on every model call as
@@ -310,6 +357,22 @@ printf '{"image_version":"%s","opencode_version":"%s","prompt_hash":"%s","tasks_
 BENCH_SESSION_ID=$(python -c "import uuid; print(uuid.uuid4().hex)" 2>/dev/null)
 export BENCH_SESSION_ID
 python "$HERE/env_record.py" --record "$RECORD" || true
+# model_limit: the run's model's context and per-reply output limits as opencode applies
+# them, from the config the agent runs with (write_opencode_config.py); null when absent.
+python - "$RECORD" "${AGENT_HOME:-$HOME}/.config/opencode/opencode.json" "$MODEL" "$HERE" <<'PY' || true
+import json, sys
+rec_p, cfg_p, model, here = sys.argv[1:5]
+sys.path.insert(0, here)
+from model_ids import opencode_id
+prov, mid = opencode_id(model).split("/", 1)
+try:
+    limit = json.load(open(cfg_p, encoding="utf-8"))["provider"][prov]["models"][mid]["limit"]
+except Exception:
+    limit = None
+rec = json.load(open(rec_p, encoding="utf-8"))
+rec["model_limit"] = limit
+json.dump(rec, open(rec_p, "w", encoding="utf-8"))
+PY
 
 # Keep tool scratch inside the working dir so it is cleaned with everything else.
 export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
@@ -371,12 +434,27 @@ if [ -f "$SWEEP_FILE" ]; then
 fi
 for v in SKILLS_SRC SKILLS_DST RUN_LABEL RUN_WAVE ARM TASK MODEL REP TASKS_JSON \
          BENCH_HOME TASKS_SHA NEURODESKTOP_VERSION AGENT_VIEW_CHECK AGENT_BASH_ENV \
-         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT AGENT_HOME AGENT_THREADS $OTHER_KEYS \
-         $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_)' \
+         OPENCODE_BIN OPENCODE_ISOLATE RUN_TIMEOUT AGENT_HOME AGENT_THREADS \
+         AGENT_DATA_LIMIT_KB AGENT_MEMWATCH_PCT AGENT_MACHINE_FACTS AGENT_OUTPUT_LIMIT \
+         AGENT_CONTEXT_LIMIT AGENT_LAYER_LIMIT_BYTES BENCH_CGROUP BENCH_SHM NODE_NAME \
+         $OTHER_KEYS \
+         $(compgen -e | grep -E '^(GITHUB_|RUNNER_|ACTIONS_|INPUT_|GRADER_|HARNESS_|LLM_PROXY_)' \
                       | grep -vx RUNNER_TRACKING_ID); do
   AGENT_ENV+=(-u "$v")
 done
 [ -n "${AGENT_HOME:-}" ] && AGENT_ENV+=("HOME=$AGENT_HOME")
+# The data limit, through a BASH_ENV of the run's own: the environment's BASH_ENV (Lmod
+# and the module tree), then the limit. agent_data_limit_kb records what a bash started
+# that way reports, so a limit that did not apply reads as such.
+if [ -n "$AGENT_DATA_LIMIT_KB" ]; then
+  AGENT_RC="$META/$ID.bash_env.sh"
+  { [ -n "${BASH_ENV:-}" ] && printf '. %q\n' "$BASH_ENV"
+    printf 'ulimit -d %s 2>/dev/null\n' "$AGENT_DATA_LIMIT_KB"; } > "$AGENT_RC"
+  AGENT_ENV+=("BASH_ENV=$AGENT_RC")
+  GOT_LIMIT=$(env BASH_ENV="$AGENT_RC" bash -c 'ulimit -d' 2>/dev/null)
+  python -c "import json,sys; r=json.load(open(sys.argv[1])); v=sys.argv[2]; r['agent_data_limit_kb']=int(v) if v.isdigit() else v; json.dump(r, open(sys.argv[1], 'w'))" \
+    "$RECORD" "${GOT_LIMIT:-unset}" 2>/dev/null
+fi
 if [ -n "$AGENT_THREADS" ]; then
   for v in OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS \
            NUMEXPR_MAX_THREADS ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS; do
@@ -424,10 +502,24 @@ PY
 [ "$VIEW_RC" = 0 ] || stop_before_agent "agent-view-mismatch" \
   "what opencode offers the agent does not match the arm. No tokens spent."
 
+# With the key proxy (LLM_PROXY_CONTROL_URL on the pod), the run's model is locked before
+# any model call: the proxy then refuses every other model, so the probe and the agent
+# reach this one alone. A lock that fails stops the run here.
+if [ -n "${LLM_PROXY_CONTROL_URL:-}" ]; then
+  python "$HERE/llm_proxy.py" lock --model "$MODEL" --record "$RECORD" >&2 \
+    || stop_before_agent "proxy-lock-failed" "the key proxy did not lock $MODEL. No tokens spent."
+fi
+
 # The gateway's roster and what it reports serving for this model, recorded before
 # the agent starts (gateway_roster, model_served, model_fingerprint, provider) and
 # again after it ends (the same with _end, and model_changed). Record only.
 python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" "${PROVIDERS_ARGS[@]}" || true
+# Through the proxy, a first call refused by the provider's key (401), the proxy (403), a
+# rate limit (429), a 5xx or no answer means the pod or its keys are at fault, not the
+# model: stopped here, as infrastructure (llm_proxy.py upstream).
+if [ -n "${LLM_PROXY_CONTROL_URL:-}" ] && ! python "$HERE/llm_proxy.py" upstream --record "$RECORD"; then
+  stop_before_agent "proxy-upstream-failed" "the key proxy reaches no provider for $MODEL. Only the probe was spent."
+fi
 
 # The model must be the one the wave declares (waves.<n>.model_fingerprints in
 # sweep.json). A different or missing fingerprint means the gateway serves another
@@ -444,15 +536,35 @@ timeout -k "${RUN_KILL_AFTER:-60}" "$TIMEOUT" "${AGENT_ENV[@]}" \
   "$OPENCODE_BIN" run --dir "$WORK" -m "$MODEL" --auto "$(cat "$PROMPT")" \
   < /dev/null > "$TRANSCRIPT" 2>&1 &
 AGENT_PID=$!
+if [ -n "$AGENT_MEMWATCH_PCT" ]; then
+  # --work: commands the agent started in the background (nohup, setsid) leave its
+  # process tree when their shell exits; they still work in its directories.
+  python "$HERE/memwatch.py" --root "$AGENT_PID" --pct "$AGENT_MEMWATCH_PCT" --work "$WORK" \
+    ${AGENT_HOME:+--work "$AGENT_HOME"} --cgroup "${BENCH_CGROUP:-/sys/fs/cgroup}" \
+    --out "$META/$ID.memwatch.json" 2>/dev/null &
+  MEMWATCH_PID=$!
+fi
 wait "$AGENT_PID"
 RC=$?
 stop_agent
+# memwatch's record, or what was asked of it when it left none (no memory limit on the
+# pod, or it never started), so an unwatched run reads as one.
+if [ -n "$AGENT_MEMWATCH_PCT" ]; then
+  python -c "import json,os,sys; r=json.load(open(sys.argv[1])); p=sys.argv[2]
+r['memwatch']=json.load(open(p)) if os.path.exists(p) else {'pct': float(sys.argv[3]), 'error': 'memwatch left no record'}
+json.dump(r, open(sys.argv[1], 'w'))" "$RECORD" "$META/$ID.memwatch.json" "$AGENT_MEMWATCH_PCT" 2>/dev/null
+  rm -f "$META/$ID.memwatch.json"
+fi
 # Fold opencode's write-ahead log into the database, so the database is one file
 # and masking a value inside it (redact.py) cannot break WAL frame checksums.
 DB="$WORK/.xdg-data/opencode/opencode.db"
 [ -f "$DB" ] && python -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('PRAGMA wal_checkpoint(TRUNCATE)')" \
   "$DB" 2>/dev/null
 python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" --phase end "${PROVIDERS_ARGS[@]}" || true
+# What the proxy saw this job call, both probes included (llm_proxy in the record).
+# Without it the run cannot show which models it called and is not valid.
+python "$HERE/llm_proxy.py" summary --record "$RECORD" \
+  || echo "INVALID: the key proxy's summary is unavailable; the run cannot show which models it called" >&2
 land
 # run.json is written before the agent starts, so it cannot know which tools the
 # agent picked. Read them back out of the transcript now.

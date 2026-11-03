@@ -51,7 +51,11 @@ import hashlib
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from model_ids import provider_base_url  # noqa: E402
 
 PROVIDER = "neurodesk"  # the one gateway every model went through before dedicated keys
 
@@ -134,7 +138,12 @@ def resolve(model_id, providers_path, default_gateway):
     if providers_path and provider and provider != PROVIDER:
         pdef = load_providers(providers_path).get(provider)
         if pdef:
-            return pdef["base_url"], pdef["key_env"], provider
+            # Through the key proxy when the pod has one; unserved, the probe finds nothing.
+            try:
+                base = provider_base_url(provider, pdef["base_url"])
+            except ValueError:
+                base = "http://unserved.invalid"
+            return base, pdef["key_env"], provider
     return default_gateway, "NEURODESK_API_KEY", provider
 
 
@@ -163,6 +172,7 @@ def main():
     model = a.model.split("/", 1)[-1]
 
     roster_json = response_json = headers = None
+    probe_error = None
     if a.offline:
         loaded = []
         for p in a.offline:
@@ -184,9 +194,13 @@ def main():
                 "messages": [{"role": "user", "content": "Reply with the word ok."}]})
         except Exception as e:
             print("model_probe: chat probe failed (%s)" % e)
+            # The status alone: an error body can carry a key's digest.
+            probe_error = ("HTTP %s" % e.code) if isinstance(e, urllib.error.HTTPError) \
+                else type(e).__name__
 
     out = summarize(roster_json, response_json, headers)
     out["provider"] = provider
+    out["model_probe_error"] = probe_error
     try:
         rec = json.load(open(a.record, encoding="utf-8"))
         if a.phase == "end":

@@ -163,6 +163,13 @@ INFRA_ERROR_RES = [
     (re.compile(r'Failed query:\s*(insert|update|delete)'), "opencode database contention"),
     (re.compile(r"Error: Session not found"), "opencode session lost"),
     (re.compile(r"Unexpected server error\. Check server logs"), "opencode server error"),
+    # The key proxy (environment 8) and its keys: a key the provider rejects (a pod still
+    # holding a key just switched off), and the proxy's own faults. A refused OTHER model
+    # ("is not allowed for this job") is the agent's attempt, not a fault: not listed.
+    (re.compile(r"\b401\b|Unauthori[sz]ed|Authentication Error|Invalid API key|Incorrect API key",
+                re.I), "provider rejected the key"),
+    (re.compile(r"llm-proxy: (no key configured|no model lock set)|llm_proxy_error"),
+     "key proxy fault"),
 ]
 
 # How runs are classified. A wave declares its rules in sweep.json (`waves.<n>.rules`);

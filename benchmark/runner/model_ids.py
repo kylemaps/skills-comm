@@ -56,3 +56,17 @@ def from_segment(seg, providers=None):
     if sep and rest and p in (provider_names() if providers is None else providers):
         return p + "/" + rest
     return seg
+
+
+def provider_base_url(provider, base_url):
+    """The base URL a run uses for a provider: the key proxy's when the pod has one,
+    else sweep.json's base_url. A pod with the proxy sets LLM_PROXY_CONTROL_URL and one
+    LLM_PROXY_<PROVIDER>_BASE_URL per provider it serves; the job then holds no provider
+    key, so a provider the proxy does not serve is a ValueError, never a direct call."""
+    if not os.environ.get("LLM_PROXY_CONTROL_URL"):
+        return base_url
+    name = "LLM_PROXY_%s_BASE_URL" % provider.upper()
+    url = os.environ.get(name)
+    if not url:
+        raise ValueError("the key proxy serves no provider %s (%s is unset)" % (provider, name))
+    return url

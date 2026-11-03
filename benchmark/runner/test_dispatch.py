@@ -287,6 +287,34 @@ class DispatchTest(unittest.TestCase):
         gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5002: quoted + "\n" + outcome})
         self.assertEqual(d.classify_job(gh, j1), ("valid", "completed"))
 
+    # The key proxy refused the lock before the agent: the pod's fault, re-run the pair.
+    # A stop before the agent for any other reason still needs a human.
+    def test_refused_proxy_lock_is_a_rerun(self):
+        j1 = job("rep 1 taskA nrp/qwen3-small env-only", 5003, conclusion="failure")
+        outcome = "2026-11-03T01:00:01.0000000Z agent_outcome=not_started run=taskA__nrp-qwen3-small__env-only__r1"
+        abort = "2026-11-03T01:00:00.0000000Z ABORT: the key proxy did not lock nrp/qwen3-small. No tokens spent."
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5003: abort + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "proxy-failed"))
+        upstream = "2026-11-03T01:00:00.0000000Z ABORT: the key proxy reaches no provider for nrp/qwen3-small."
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5003: upstream + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "proxy-failed"))
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5003: outcome})
+        self.assertEqual(d.classify_job(gh, j1)[0], "unknown")
+        quoted = "2026-11-03T01:00:00.0000000Z   | ABORT: the key proxy did not lock x"
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5003: quoted + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1)[0], "unknown")
+
+    # A finished run without the proxy's summary cannot show which models it called.
+    def test_finished_run_without_the_proxy_summary_is_a_rerun(self):
+        j1 = job("rep 1 taskA nrp/qwen3-small env-only", 5004)
+        outcome = "2026-11-03T02:00:01.0000000Z agent_outcome=completed run=taskA__nrp-qwen3-small__env-only__r1"
+        invalid = ("2026-11-03T02:00:00.0000000Z INVALID: the key proxy's summary is unavailable;"
+                   " the run cannot show which models it called")
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5004: invalid + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "proxy-summary"))
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5004: outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("valid", "completed"))
+
     # A pair already published on disk needs no job and no log read, even when
     # a job happens to exist for it (requirement 2 and the speed requirement 3).
     def test_published_pair_skips_the_log_read(self):

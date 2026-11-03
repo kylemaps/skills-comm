@@ -15,7 +15,9 @@ agent chose. This reads them back out of the transcript once the run is over:
   tokens_*       token accounting, read out of opencode's own SQLite database. The
                  gateway returns a `usage` block on every call and opencode totals it
                  per session, so this works retroactively on runs already on disk --
-                 nothing has to be re-run to get it.
+                 nothing has to be re-run to get it. Summed over the run's sessions:
+                 its main session and the sessions of subagents it started.
+  sessions       how many sessions that is (1 + subagents)
   dataset_pin    dataset version the agent pinned itself (e.g. `git checkout 1.1.0`)
   skill_loads    successful skill tool calls
   skills_seen    which skills those were
@@ -200,22 +202,53 @@ def _session_dirs(run_dir):
                    if d})
 
 
+def _run_session_ids(con, dirs):
+    """(main, ids): the run's main session in opencode's database, and it with the
+    sessions of the subagents it started. The main session is the newest top-level
+    session in the run's directories (a directory can be reused across sweeps). A
+    subagent (a skill's QC step, say) gets a session of its own in the same directory,
+    created later, pointing at its parent through parent_id: the newest session of any
+    kind is then the subagent's, not the run's. A database without the parent_id column
+    has no subagent sessions. (None, []) when there is no session."""
+    import sqlite3
+    q = ("select id from session where directory in (%s)%s order by time_created "
+         "desc limit 1")
+    ph = ",".join("?" * len(dirs))
+    try:
+        main = con.execute(q % (ph, " and parent_id is null"), dirs).fetchone()
+        links = con.execute("select id, parent_id from session "
+                            "where parent_id is not null").fetchall()
+    except sqlite3.OperationalError:
+        main = con.execute(q % (ph, ""), dirs).fetchone()
+        links = []
+    if main is None:
+        return None, []
+    children = {}
+    for sid, parent in links:
+        children.setdefault(parent, []).append(sid)
+    ids, todo = [], [main[0]]
+    while todo:
+        sid = todo.pop(0)
+        if sid not in ids:
+            ids.append(sid)
+            todo.extend(children.get(sid, []))
+    return main[0], ids
+
+
 def _db_tool_calls(run_dir):
-    """(tool, input) of this run's session's tool calls, in order; None if unavailable."""
+    """(tool, input) of this run's tool calls, its subagents' included, in order; None
+    if unavailable."""
     opened = _open_db(run_dir)
     if opened is None:
         return None
     con, _ = opened
     try:
-        dirs = _session_dirs(run_dir)
-        sid = con.execute(
-            "select id from session where directory in (%s) order by time_created "
-            "desc limit 1" % ",".join("?" * len(dirs)), dirs).fetchone()
-        if sid is None:
+        _main, ids = _run_session_ids(con, _session_dirs(run_dir))
+        if not ids:
             return None
         out = []
-        for row in con.execute("select data from part where session_id = ? "
-                               "order by time_created", (sid[0],)):
+        for row in con.execute("select data from part where session_id in (%s) "
+                               "order by time_created" % ",".join("?" * len(ids)), ids):
             try:
                 d = json.loads(row["data"])
             except Exception:
@@ -572,25 +605,23 @@ rec["transcript_lines"] = txt.count("\n")
 #
 # `cost` is 0.0 on this gateway (self-hosted vLLM with no pricing configured), so
 # tokens are the currency, not dollars.
-def _session_row(run_dir):
+def _session_rows(run_dir):
+    """The run's session rows, its main session first; [] when there are none."""
     # With OPENCODE_ISOLATE=1 each run has its own database under the run
     # directory; otherwise every run shares the one in $HOME. Prefer the local
     # copy so isolated runs still get token accounting.
     opened = _open_db(run_dir)
     if opened is None:
-        return None
+        return []
     con, _ = opened
     try:
-        # A directory can be reused across sweeps, so take the newest session.
-        dirs = _session_dirs(run_dir)
-        cur = con.execute(
-            "select * from session where directory in (%s) order by time_created desc "
-            "limit 1" % ",".join("?" * len(dirs)), dirs)
-        row = cur.fetchone()
-        con.close()
-        return row
+        _main, ids = _run_session_ids(con, _session_dirs(run_dir))
+        return [con.execute("select * from session where id = ?", (i,)).fetchone()
+                for i in ids]
     except Exception:
-        return None
+        return []
+    finally:
+        con.close()
 
 
 def _generation_speed(run_dir):
@@ -618,29 +649,20 @@ def _generation_speed(run_dir):
 def _final_text(run_dir):
     """The agent's last words: the last text part of an assistant message in the run's
     top-level session. "" when it wrote none; None without a readable database."""
-    import sqlite3
     opened = _open_db(run_dir)
     if opened is None:
         return None
     con, _ = opened
     try:
-        dirs = _session_dirs(run_dir)
-        q = ("select id from session where directory in (%s)%s order by time_created "
-             "desc limit 1")
-        # A subagent's session shares the directory; its words are not the run's. A
-        # database without the parent_id column has no subagent sessions to skip.
-        try:
-            sid = con.execute(q % (",".join("?" * len(dirs)), " and parent_id is null"),
-                              dirs).fetchone()
-        except sqlite3.OperationalError:
-            sid = con.execute(q % (",".join("?" * len(dirs)), ""), dirs).fetchone()
+        # A subagent's words are not the run's: the main session only.
+        sid, _ids = _run_session_ids(con, _session_dirs(run_dir))
         if sid is None:
             return None
         roles = {row["id"]: json.loads(row["data"]).get("role") for row in con.execute(
-            "select id, data from message where session_id = ?", (sid[0],))}
+            "select id, data from message where session_id = ?", (sid,))}
         last = ""
         for row in con.execute("select message_id, data from part where session_id = ? "
-                               "order by time_created", (sid[0],)):
+                               "order by time_created", (sid,)):
             d = json.loads(row["data"])
             if d.get("type") == "text" and roles.get(row["message_id"]) == "assistant":
                 last = d.get("text") or last
@@ -689,13 +711,16 @@ ASK_RE = re.compile(
     r"|would you like me to|do you want me to|shall i|should i proceed)\b", re.I)
 
 
-srow = _session_row(run_dir)
-if srow is not None:
+_srows = _session_rows(run_dir)
+if _srows:
+    srow = _srows[0]
     keys = srow.keys()
     for k in ("tokens_input", "tokens_output", "tokens_reasoning",
               "tokens_cache_read", "tokens_cache_write", "cost"):
-        if k in keys and srow[k] is not None:
-            rec[k] = srow[k]
+        vals = [r[k] for r in _srows if k in keys and r[k] is not None]
+        if vals:
+            rec[k] = sum(vals)
+    rec["sessions"] = len(_srows)
     if "id" in keys:
         rec["session_id"] = srow["id"]
     if "model" in keys and srow["model"]:

@@ -19,6 +19,12 @@
     # with --for-model, only that model's:
     python3 write_opencode_config.py --providers ../ci/sweep.json --list-key-envs
 
+    # One run's config: its provider lists its model alone, which is also the config's
+    # `model` and `small_model` (opencode's titles and summaries), so nothing in the run
+    # can reach another model through opencode. Reply and context limits for it:
+    python3 write_opencode_config.py --providers ../ci/sweep.json --for-model nrp/glm-5 \
+        --pin-model --output-limit 32000 --context-limit 131000
+
 WHY THIS EXISTS
 On the Play server this file was written once, interactively, by the neurodesktop
 image's own opencode wrapper on first run. Nothing in our harness wrote it --
@@ -53,7 +59,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from model_ids import opencode_id
+from model_ids import opencode_id, provider_base_url
 
 GATEWAY =os.environ.get("NEURODESK_GATEWAY", "https://llm.neurodesk.org/openai")
 PROVIDER = "neurodesk"
@@ -114,11 +120,12 @@ def refuse_if_bad(name, ids, source):
             "      Nothing written." % (source, sorted(ids)))
 
 
-def build_provider(name, base_url, key_env, ids, limits, extra_headers=None):
+def build_provider(name, base_url, key_env, ids, limits, extra_headers=None,
+                   default_limit=(DEFAULT_CONTEXT, DEFAULT_OUTPUT)):
     """One opencode provider block: an OpenAI-compatible endpoint plus its models."""
     models = {}
     for i in ids:
-        ctx, out = limits.get(i, (DEFAULT_CONTEXT, DEFAULT_OUTPUT))
+        ctx, out = limits.get(i, default_limit)
         models[i] = {"name": i, "limit": {"context": ctx, "output": out}}
     # The key is referenced, never inlined. This file is world-readable on a shared
     # image and gets copied into bug reports.
@@ -129,12 +136,12 @@ def build_provider(name, base_url, key_env, ids, limits, extra_headers=None):
             "options": options, "models": models}
 
 
-def build(ids, limits):
+def build(ids, limits, default_limit=(DEFAULT_CONTEXT, DEFAULT_OUTPUT)):
     """The default, single-provider block: the neurodesk gateway. x-litellm-session-id
     groups a run's calls in the gateway's logs; run_bench.sh sets BENCH_SESSION_ID per
     run and records it, and the header is empty when it is unset."""
     return build_provider(PROVIDER, GATEWAY, "NEURODESK_API_KEY", ids, limits,
-                          {"x-litellm-session-id": "{env:BENCH_SESSION_ID}"})
+                          {"x-litellm-session-id": "{env:BENCH_SESSION_ID}"}, default_limit)
 
 
 def load_providers(path, for_model=None):
@@ -205,9 +212,23 @@ def main():
                          "-- for a workflow step to pass them all to redact.py")
     ap.add_argument("--for-model", metavar="MODEL_ID",
                     help="with --providers: only the provider this model id names")
+    ap.add_argument("--pin-model", action="store_true",
+                    help="with --for-model: its provider lists that model alone, and it is "
+                         "the config's model and small_model")
+    ap.add_argument("--output-limit", type=int, default=DEFAULT_OUTPUT, metavar="TOKENS",
+                    help="per-reply output limit (reasoning included) for every model "
+                         "--limit does not name; default %(default)s")
+    ap.add_argument("--context-limit", type=int, default=DEFAULT_CONTEXT, metavar="TOKENS",
+                    help="context limit for every model --limit does not name; "
+                         "default %(default)s")
     a = ap.parse_args()
     if a.for_model and not a.providers:
         raise SystemExit("FAIL: --for-model needs --providers FILE")
+    if a.pin_model and not a.for_model:
+        raise SystemExit("FAIL: --pin-model needs --for-model MODEL_ID")
+    if not 0 < a.output_limit < a.context_limit:
+        raise SystemExit("FAIL: --output-limit must be above 0 and below --context-limit")
+    default_limit = (a.context_limit, a.output_limit)
 
     if a.list_key_envs:
         if not a.providers:
@@ -245,7 +266,11 @@ def main():
         explicit = parse_explicit_models(a.models)
         cfg.setdefault("provider", {})
         for name, pdef in sorted(providers.items()):
-            base_url, key_env = pdef["base_url"], pdef["key_env"]
+            # Through the key proxy when the pod has one (model_ids.provider_base_url).
+            try:
+                base_url, key_env = provider_base_url(name, pdef["base_url"]), pdef["key_env"]
+            except ValueError as e:
+                raise SystemExit("FAIL: %s. Nothing written." % e)
             if pdef.get("models_endpoint"):
                 key = os.environ.get(key_env, "")
                 if not key:
@@ -266,13 +291,19 @@ def main():
                         "FAIL: provider %s has no models_endpoint; its models must be "
                         "given explicitly: --models %s/id,..." % (name, name))
                 refuse_if_bad(name, ids, "--models for %s" % name)
+            if a.pin_model:
+                mid = opencode_id(a.for_model).split("/", 1)[1]
+                if mid not in ids:
+                    raise SystemExit("FAIL: %s does not list %s. Nothing written."
+                                     % (name, mid))
+                ids = [mid]
             print("provider %s (%s): %s" % (name, base_url, ", ".join(ids)))
             old_ids = sorted((cfg["provider"].get(name, {}).get("models") or {}).keys())
             report_diff(name, old_ids, ids)
             extra_headers = ({"x-litellm-session-id": "{env:BENCH_SESSION_ID}"}
                              if name == PROVIDER else None)
             cfg["provider"][name] = build_provider(name, base_url, key_env, ids, limits,
-                                                   extra_headers)
+                                                   extra_headers, default_limit)
             written_models += len(ids)
     else:
         # Today's behaviour: one provider, the neurodesk gateway, discovered from its
@@ -297,7 +328,7 @@ def main():
 
         cfg.setdefault("provider", {})
         # Only our provider. ollama and jetstream on the VM are not ours to touch.
-        cfg["provider"][PROVIDER] = build(ids, limits)
+        cfg["provider"][PROVIDER] = build(ids, limits, default_limit)
         written_models = len(ids)
 
     cfg.setdefault("$schema", "https://opencode.ai/config.json")
@@ -305,6 +336,8 @@ def main():
     # Runs must not be shareable. The transcripts carry the task prompts.
     cfg["share"] = "disabled"
     cfg.setdefault("model", a.default_model)
+    if a.pin_model:
+        cfg["model"] = cfg["small_model"] = opencode_id(a.for_model)
 
     if a.check:
         print("\n--check: nothing written. %s would %s."

@@ -1084,6 +1084,95 @@ echo '{"task_id":"t"}' > "$d/run.json"
   && ok "  and without it, a session in another directory is not taken" || bad "  matched a session it should not have"
 
 echo
+echo "=== finalize_run: the run's own session, with its subagents'"
+d="$T/subagent"; mkdir -p "$d/.xdg-data/opencode"
+echo '{"task_id":"t","workdir":"/w/bench/work/run-sa"}' > "$d/run.json"; echo x > "$d/transcript.txt"
+"$PY" - "$d/.xdg-data/opencode/opencode.db" <<'EOF'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("create table session (id text, directory text, parent_id text, time_created int, "
+          "time_updated int, tokens_input int, tokens_output int, model text)")
+c.execute("create table part (id text, message_id text, session_id text, time_created int, "
+          "time_updated int, data text)")
+w, m = "/w/bench/work/run-sa", json.dumps({"id": "m-run"})
+# The run (s1), a QC subagent it started later (s2), and that subagent's own (s3).
+c.execute("insert into session values ('s1',?,null,1000,91000,500,20,?)", (w, m))
+c.execute("insert into session values ('s2',?,'s1',5000,9000,300,10,?)", (w, m))
+c.execute("insert into session values ('s3',?,'s2',6000,7000,7,1,?)", (w, m))
+for sid, t, cmd in (("s1", 1100, "bet in.nii.gz out"), ("s2", 5100, "fslstats out -V"),
+                    ("s3", 6100, "fslinfo out")):
+    c.execute("insert into part values (?,?,?,?,?,?)", (sid + "p", sid + "m", sid, t, t, json.dumps(
+        {"type": "tool", "tool": "bash", "state": {"input": {"command": cmd}}})))
+c.commit()
+EOF
+"$PY" "$HERE/finalize_run.py" "$d" 0
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['session_id'] == 's1' and r['session_duration_s'] == 90, r
+assert r['tokens_input'] == 807 and r['tokens_output'] == 31 and r['sessions'] == 3, r
+assert r['bash_calls'] == 3, r" "$d/run.json" 2>/dev/null \
+  && ok "the run's session names it; its subagents' tokens and commands count" \
+  || bad "a subagent's session stood in for the run: $(cat "$d/run.json")"
+
+echo
+echo "=== memwatch: stops the agent's largest command, never the agent"
+T2=$(mktemp -d)
+# A fake memory cgroup (MiB) and process tree (RSS in 4 KiB pages). 10 = timeout (the
+# root the harness started), 11 = opencode, 12 = bash, 13 and 14 = its tools, 20 = the
+# runner, not the agent's. mkcg MAX CURRENT FILE SHMEM [SLAB_RECLAIMABLE].
+mkcg() { mkdir -p "$T2/cg"; echo $(( $1 * 1048576 )) > "$T2/cg/memory.max"
+  echo $(( $2 * 1048576 )) > "$T2/cg/memory.current"
+  printf 'anon %s\nfile %s\nshmem %s\nslab_reclaimable %s\n' $(( ($2 - $3) * 1048576 )) $(( $3 * 1048576 )) \
+    $(( $4 * 1048576 )) $(( ${5:-0} * 1048576 )) > "$T2/cg/memory.stat"
+  printf 'low 0\nhigh 0\nmax 3\noom 0\noom_kill 0\n' > "$T2/cg/memory.events"
+  echo $(( $2 * 1048576 )) > "$T2/cg/memory.peak"; }
+# mkp PID NAME PPID RSS_PAGES [STATE] [CWD]: a /proc entry; cwd as a plain file (no links here).
+mkp() { mkdir -p "$T2/proc/$1"; echo "$1 ($2) ${5:-S} $3 $1 $1 0 -1" > "$T2/proc/$1/stat"
+  echo "100 $4 0 0 0 0 0" > "$T2/proc/$1/statm"; [ -n "${6:-}" ] && printf '%s' "$6" > "$T2/proc/$1/cwd"; :; }
+mkp 10 timeout 1 100; mkp 11 opencode 10 900000; mkp 12 bash 11 2000
+mkp 13 python3 12 100000; mkp 14 'ants Reg' 12 80000; mkp 20 Runner.Worker 1 200000
+# The run directory as the watcher reads it (on a Windows test host, cygpath gives that form).
+WR="$(cygpath -m "$T2" 2>/dev/null || echo "$T2")/w/run"
+mw() { "$PY" "$HERE/memwatch.py" --root 10 --out "$T2/mw.json" --cgroup "$T2/cg" --proc "$T2/proc" \
+  --work "$WR" --once --dry-run "$@" >/dev/null 2>&1; }
+mwk() { "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(','.join(k['name'] for k in r['kills']) or '-')" "$T2/mw.json" | tr -d '\r'; }
+mwf() { "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$T2/mw.json" "$1" | tr -d '\r'; }
+mkcg 1000 850 0 0; mw; expect 0 $? "below the threshold"
+[ "$(mwk)" = - ] && ok "  and nothing is stopped" || bad "  stopped $(mwk) below the threshold"
+mkcg 1000 950 0 0; mw
+[ "$(mwk)" = python3 ] && ok "above it: the largest of the agent's commands (not opencode, not the runner)" \
+  || bad "above the threshold it chose: $(mwk)"
+mkcg 1000 950 200 0; mw
+[ "$(mwk)" = - ] && ok "file cache the kernel can reclaim does not count" || bad "counted file cache: $(mwk)"
+mkcg 1000 950 200 200; mw
+[ "$(mwk)" = python3 ] && ok "shmem (in the file count, not reclaimable) does" || bad "shmem not counted: $(mwk)"
+mkcg 1000 950 0 0 100; mw
+[ "$(mwk)" = - ] && ok "reclaimable slab does not count" || bad "counted reclaimable slab: $(mwk)"
+mkcg 1000 950 0 0; mw --pct 0
+[ "$(mwk)" = - ] && ok "--pct 0 records and stops nothing" || bad "--pct 0 stopped $(mwk)"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['max_pressure_mib'] == 950 and r['memory_peak_mib'] == 950 and r['memory_events'] == {'max': 3, 'oom': 0, 'oom_kill': 0}, r" \
+  "$T2/mw.json" 2>/dev/null && ok "  the highest pressure, memory.peak and the OOM counters are recorded" || bad "  record: $(cat "$T2/mw.json")"
+# A command started with nohup: re-parented to 1 when its shell exited, still in the run's directory.
+mkp 30 hdbet 1 150000 S "$WR/tmp"; mkcg 1000 950 0 0; mw
+[ "$(mwk)" = hdbet ] && ok "a command the agent left running in the background (re-parented) is found by its directory" \
+  || bad "missed the background command: $(mwk)"
+mkp 31 big-elsewhere 1 300000 S /home/runner; mw
+[ "$(mwk)" = hdbet ] && ok "  a process outside the run's directories is not the agent's" || bad "  chose $(mwk)"
+mkp 30 hdbet 1 150000 Z "$WR/tmp"; mw
+[ "$(mwk)" = python3 ] && ok "a zombie is not chosen" || bad "chose $(mwk)"
+rm -rf "$T2/proc/30" "$T2/proc/31" "$T2/proc/13/stat"; mkcg 1000 950 0 0; mw
+[ "$(mwk)" = 'ants Reg' ] && ok "a name with a space is read whole" || bad "chose $(mwk)"
+mkp 14 'ants Reg' 12 20000; mw
+[ "$(mwk)" = - ] && [ "$(mwf no_victim_passes)" = 1 ] && ok "only commands too small to matter: nothing stopped, the pass recorded" \
+  || bad "small commands: kills $(mwk), no_victim_passes $(mwf no_victim_passes)"
+rm -rf "$T2/proc/12" "$T2/proc/14"; mw
+[ "$(mwk)" = - ] && ok "the agent itself is never chosen" || bad "chose $(mwk) with only opencode left"
+printf '13 (py\377\376) S 12 1 1 0 -1' > "$T2/proc/15stat"; mkdir -p "$T2/proc/15"; mv "$T2/proc/15stat" "$T2/proc/15/stat"
+echo "100 100000 0 0 0 0 0" > "$T2/proc/15/statm"; mw; expect 0 $? "a process name that is not UTF-8 does not end the watch"
+rm -f "$T2/cg/memory.max"; mw; expect 2 $? "no memory limit: nothing to watch"
+rm -rf "$T2"
+
+echo
 echo "=== finalize_run opencode_errors: opencode's own errors, not tool errors or output"
 o=$(fa n opencode_errors "${E}[91m${E}[1mError: ${E}[0mModel '' was not found")
 has   "a standalone opencode error is recorded" "$o" "Model '' was not found"
@@ -1151,7 +1240,9 @@ msgs = {"gateway returned empty model name": "Model '' was not found",
         "provider stream timed out": "SSE read timed out",
         "opencode database contention": 'Failed query: insert into "project"',
         "opencode session lost": "Session not found",
-        "opencode server error": "Unexpected server error. Check server logs"}
+        "opencode server error": "Unexpected server error. Check server logs",
+        "provider rejected the key": "Unauthorized: Authentication Error, Invalid API key",
+        "key proxy fault": "llm-proxy: no key configured for nrp"}
 labels = [l for _, l in INFRA_ERROR_RES]
 print(("OK:" if sorted(labels) == sorted(msgs) else "FAIL:") + "every infra label has a stored-format message")
 for label, m in msgs.items():
@@ -1166,7 +1257,7 @@ EOF
 while IFS= read -r line; do
   case "$line" in OK:*) ok "${line#OK:}";; FAIL:*) bad "${line#FAIL:}";; esac
 done < "$T/infra.out"
-[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 13 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
+[ "$(grep -c '^OK:\|^FAIL:' "$T/infra.out")" = 15 ] || bad "infra pattern checks did not all run: $(tail -2 "$T/infra.out")"
 sed -i 's/"timeout":"fail"/"timeout":"maybe"/' "$T/sweep.json"
 "$PY" "$HERE/summarize.py" "$T/runs" "$TK" --out-dir "$T/w1" --sweep "$T/sweep.json" --wave 1 >/dev/null 2>&1
 expect 1 $? "an unknown rule value is refused"
@@ -1664,6 +1755,292 @@ has   "  and no thread count is imposed" "$tr_" "THREADS=unset unset unset"
 rm -rf "$T"
 
 echo
+echo "=== run_bench: memory limits for the agent's commands, the node as a pseudonym"
+T=$(mktemp -d)
+mkdir -p "$T/runnerhome/.config/opencode" "$T/cg"
+echo '{"provider":{"neurodesk":{"models":{"m":{"limit":{"context":200000,"output":32000}}}}}}' \
+  > "$T/runnerhome/.config/opencode/opencode.json"
+printf 'export MARK=lmod-loaded\n' > "$T/envrc.sh"
+echo $((1000 * 1048576)) > "$T/cg/memory.max"; echo $((100 * 1048576)) > "$T/cg/memory.current"
+printf 'file 0\nshmem 0\n' > "$T/cg/memory.stat"; printf 'max 0\noom 0\noom_kill 0\n' > "$T/cg/memory.events"
+# The agent reports what a command it runs would see.
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+[ "$1 $2" = "debug skill" ] && { echo '[]'; exit 0; }
+[ "$1 $2" = "debug config" ] && { echo '{}'; exit 0; }
+echo "DATA=$(bash -c 'ulimit -d') MARK=$(bash -c 'echo ${MARK-unset}')"
+echo "LEAK=${NODE_NAME-unset} ${AGENT_DATA_LIMIT_KB-unset} ${AGENT_MEMWATCH_PCT-unset} ${BENCH_CGROUP-unset} ${AGENT_OUTPUT_LIMIT-unset}"
+sleep 1
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+rbm() { rm -rf "$T/bench"; env HOME="$T/runnerhome" BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" \
+  OPENCODE_BIN="$T/opencode" SKILLS_SRC="" RUN_TIMEOUT=60 NEURODESK_API_KEY=k OPENCODE_ISOLATE=0 \
+  NEURODESK_GATEWAY=http://127.0.0.1:9 BASH_ENV="$T/envrc.sh" "$@" \
+  bash "$HERE/run_bench.sh" t-x neurodesk/m env-only 1 >/dev/null 2>&1; }
+R="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
+# What this machine's bash reports under the limit (Git Bash cannot set it).
+want=$(bash -c 'ulimit -d 1048576 2>/dev/null; ulimit -d')
+rbm AGENT_DATA_LIMIT_KB=1048576 AGENT_MEMWATCH_PCT=90 BENCH_CGROUP="$T/cg" NODE_NAME=worker-7 AGENT_OUTPUT_LIMIT=32000
+tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+has "the agent's commands run under the data limit, and still get the environment's BASH_ENV" "$tr_" "DATA=$want MARK=lmod-loaded"
+has "  none of the harness's memory, limit or node settings reach the agent" "$tr_" "LEAK=unset unset unset unset unset"
+node_want="node-$(printf '%s' worker-7 | sha256sum | cut -c1-12)"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); w=sys.argv[2]
+assert str(r['agent_data_limit_kb']) == w, (r.get('agent_data_limit_kb'), w)
+assert r['node'] == sys.argv[3] and 'worker-7' not in open(sys.argv[1]).read(), r['node']
+m = r['memwatch']; assert m['limit_mib'] == 1000 and m['threshold_mib'] == 900 and m['kills'] == [], m
+assert r['model_limit'] == {'context': 200000, 'output': 32000}, r.get('model_limit')" \
+  "$R/run.json" "$want" "$node_want" 2>/dev/null \
+  && ok "  recorded: the limit bash applied, the node's pseudonym (not its name), memwatch's record, the model's limits" \
+  || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 400)"
+[ -z "$(ls "$T/bench/.meta" 2>/dev/null)" ] && ok "  and the run's BASH_ENV and memwatch files are cleaned up" \
+  || bad "  left in .meta: $(ls "$T/bench/.meta")"
+for bad_ in AGENT_DATA_LIMIT_KB=8G AGENT_DATA_LIMIT_KB=0 AGENT_MEMWATCH_PCT=92.5 AGENT_MEMWATCH_PCT=101; do
+  rbm "$bad_"; rc=$?
+  [ "$rc" = 2 ] && [ ! -f "$R/transcript.txt" ] && ok "$bad_ stops the run before the agent (exit 2)" \
+    || bad "$bad_: exit $rc, transcript $( [ -f "$R/transcript.txt" ] && echo present || echo absent)"
+done
+mkdir -p "$T/nocg"; rbm AGENT_MEMWATCH_PCT=90 BENCH_CGROUP="$T/nocg"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['memwatch'] == {'pct': 90.0, 'error': 'memwatch left no record'}, r['memwatch']" \
+  "$R/run.json" 2>/dev/null && ok "a watch that could not run (no memory limit) is recorded as such" \
+  || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
+rbm
+tr_=$(cat "$R/transcript.txt" 2>/dev/null)
+has "without them the agent's commands keep the environment's own limit" "$tr_" "DATA=$(bash -c 'ulimit -d') MARK=lmod-loaded"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert 'agent_data_limit_kb' not in r and 'memwatch' not in r and r['node'] == '', r" "$R/run.json" 2>/dev/null \
+  && ok "  and the record holds no limit, no memwatch and no node" || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
+rm -rf "$T"
+
+echo
+echo "=== machine_facts: the agent is told its machine, measured, the same in every arm"
+T=$(mktemp -d)
+mkdir -p "$T/cg" "$T/cg-nomem"
+echo "700000 100000" > "$T/cg/cpu.max"; echo $((28 * 1073741824)) > "$T/cg/memory.max"
+echo "max 100000" > "$T/cg-nomem/cpu.max"
+mf() { "$PY" "$HERE/machine_facts.py" "$HERE/machine.txt" --timeout 5400 --work "$T" "$@" 2>/dev/null | tr -d '\r'; }
+disk=$("$PY" -c "import shutil,sys; print(shutil.disk_usage(sys.argv[1]).total // 2**30)" "$T" | tr -d '\r')
+o=$(mf --cgroup "$T/cg" --data-limit-kb 25165824 --memwatch-pct 90)
+has "the pod's CPUs and memory, not the server's" "$o" "MACHINE: you have 7 CPUs and 28 GiB of memory"
+has "  the per-process limit" "$o" "at most 24 GiB of memory"
+has "  the watchdog" "$o" "the largest process is stopped"
+has "  the disk the run works on" "$o" "Your working disk is $disk GiB"
+has "  and the time" "$o" "You have 90 minutes in total."
+case "$o" in *"Shared memory"*|*"budget"*) bad "shared memory or a layer budget stated without a value: $o";;
+  *) ok "  no shared memory of its own, no layer budget given: neither is stated";; esac
+o=$(mf --cgroup "$T/cg" --layer-bytes 2147483648 --shm "$T")
+has "  the layer budget, when given" "$o" "share a 2 GiB budget; past it, your session is ended"
+case "$o" in *"Shared memory"*) bad "a --shm on the work disk is stated as shared memory: $o";;
+  *) ok "  a --shm on the same filesystem as the work disk is not shared memory of its own";; esac
+o=$(mf --cgroup "$T/cg" --memwatch-pct 0)
+case "$o" in *"single process"*|*"largest process"*) bad "a limit that is not set is still stated: $o";;
+  *MACHINE*) ok "a limit that is not set is not stated";; *) bad "no text: $o";; esac
+"$PY" "$HERE/machine_facts.py" "$HERE/machine.txt" --timeout 5400 --work "$T" --cgroup "$T/cg-nomem" >/dev/null 2>&1; rc=$?
+o=$(mf --cgroup "$T/cg-nomem")
+[ "$rc" = 1 ] && [ -z "$o" ] && ok "no memory limit to read: nothing printed, exit 1 (never the server's memory)" \
+  || bad "no memory limit: exit $rc, text '$o'"
+echo "$((28 * 1073741824))" > "$T/cg-nomem/memory.max"
+has "no CPU limit: every CPU is the agent's" "$(mf --cgroup "$T/cg-nomem")" \
+  "you have $("$PY" -c "import os; print(os.cpu_count())" | tr -d '\r') CPUs"
+# Through run_bench: appended to the prompt, byte-identical across arms, kept from the agent.
+mkdir -p "$T/runnerhome/.config/opencode"
+echo '{"provider":{"neurodesk":{}}}' > "$T/runnerhome/.config/opencode/opencode.json"
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+[ "$1 $2" = "debug skill" ] && { echo '[]'; exit 0; }
+[ "$1 $2" = "debug config" ] && { echo '{}'; exit 0; }
+echo "LEAK=${AGENT_MACHINE_FACTS-unset}"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+rbf2() { env HOME="$T/runnerhome" BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" OPENCODE_BIN="$T/opencode" \
+  SKILLS_SRC="" RUN_TIMEOUT=5400 NEURODESK_API_KEY=k OPENCODE_ISOLATE=0 NEURODESK_GATEWAY=http://127.0.0.1:9 \
+  AGENT_MACHINE_FACTS="$HERE/machine.txt" AGENT_DATA_LIMIT_KB=25165824 AGENT_MEMWATCH_PCT=0 "$@" \
+  bash "$HERE/run_bench.sh" t-x neurodesk/m "$ARM_" 1 >/dev/null 2>&1; }
+ph() { "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['prompt_hash'])" "$1" | tr -d '\r'; }
+ARM_=env-only; rbf2 BENCH_CGROUP="$T/cg"; expect 0 $? "a run with machine facts"
+R1="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
+has "  the prompt ends with them" "$(tail -1 "$R1/prompt.txt" 2>/dev/null)" "MACHINE: you have 7 CPUs and 28 GiB of memory"
+has "  the agent does not get the template's path" "$(cat "$R1/transcript.txt" 2>/dev/null)" "LEAK=unset"
+h1=$(ph "$R1/run.json")
+ARM_=env+skill; rbf2 BENCH_CGROUP="$T/cg"
+h2=$(ph "$T/bench/runs/t-x__neurodesk-m__env+skill__r1/run.json")
+[ -n "$h1" ] && [ "$h1" = "$h2" ] && ok "  and the prompt is byte-identical across arms (prompt_hash $h1)" || bad "  prompt_hash $h1 vs $h2"
+rm -rf "$T/bench"; ARM_=env-only; rbf2 BENCH_CGROUP="$T/cg-empty"; rc=$?
+[ "$rc" = 1 ] && [ ! -f "$R1/transcript.txt" ] && ok "a pod whose limits cannot be read stops before the agent" \
+  || bad "unreadable limits: exit $rc"
+rm -rf "$T"
+
+echo
+echo "=== llm_proxy: the run locks its model at the key proxy, and records what it called"
+T=$(mktemp -d)
+# A stand-in for the proxy's control endpoint: one lock per job, as the proxy has it.
+cat > "$T/fakeproxy.py" <<'EOF'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+state = {"locked": None, "calls": {}}
+mode = sys.argv[2] if len(sys.argv) > 2 else ""
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def reply(self, code, body):
+        b = (body if isinstance(body, str) else json.dumps(body)).encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    def do_GET(self):
+        if self.path == "/healthz":
+            if mode == "nokey":
+                return self.reply(503, {"ok": False, "error": "missing key: nrp"})
+            return self.reply(200, {"ok": True, "mode": "enforce"})
+        if self.path == "/summary":
+            return self.reply(200, {"mode": "enforce", "locked": state["locked"], "calls": state["calls"],
+                                    "mismatches": 0, "denied": 0, "unlocked_calls": 0,
+                                    "relock_attempts": 0})
+        if self.path == "/v1/models":
+            return self.reply(200, {"data": [{"id": "m"}, {"id": "other"}]})
+        self.reply(404, {"error": "not found"})
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/v1/chat/completions":
+            # As the proxy: only a locked model is answered.
+            m = body.get("model")
+            state["calls"]["nrp/%s" % m] = state["calls"].get("nrp/%s" % m, 0) + 1
+            if not state["locked"] or m not in state["locked"]:
+                return self.reply(403, {"error": {"message": "llm-proxy: denied", "type": "llm_proxy_denied"}})
+            return self.reply(200, {"model": m, "system_fingerprint": "fp-test",
+                                    "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+        if self.path != "/lock":
+            return self.reply(404, {"error": "not found"})
+        if state["locked"] is not None:
+            return self.reply(409, {"error": "already locked", "models": state["locked"]})
+        state["locked"] = body["models"]
+        echo = [m.upper() for m in body["models"]] if mode == "upper" else body["models"]
+        self.reply(200, {"locked": echo, "mode": "enforce"})
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1]))
+import os; os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+EOF
+FP=""
+fakeproxy() { [ -n "$FP" ] && kill "$FP" 2>/dev/null; rm -f "$T/port"
+  "$PY" "$T/fakeproxy.py" "$T/port" "${1:-}" & FP=$!
+  i=0; while [ ! -s "$T/port" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  CTL="http://127.0.0.1:$(cat "$T/port")"; }
+fakeproxy
+lp() { env LLM_PROXY_CONTROL_URL="$CTL" "$PY" "$HERE/llm_proxy.py" "$@" --record "$T/r.json" >/dev/null 2>&1; }
+rj() { "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(json.dumps(r.get(sys.argv[2])))" "$T/r.json" "$1" | tr -d '\r'; }
+echo '{}' > "$T/r.json"
+lp lock --model nrp/qwen3-small; expect 0 $? "a lock the proxy accepts"
+[ "$(rj llm_proxy_lock)" = '{"locked": ["qwen3-small"], "mode": "enforce"}' ] \
+  && ok "  is the model id opencode sends (no provider prefix), recorded" || bad "  lock record: $(rj llm_proxy_lock)"
+lp lock --model nrp/qwen3-small; expect 1 $? "a second lock is refused (409)"
+has "  and recorded as refused" "$(rj llm_proxy_lock)" '"status": 409'
+lp summary; expect 0 $? "the summary is read"
+has "  into llm_proxy" "$(rj llm_proxy)" '"locked": ["qwen3-small"]'
+echo '{}' > "$T/r.json"
+env -u LLM_PROXY_CONTROL_URL "$PY" "$HERE/llm_proxy.py" lock --model nrp/x --record "$T/r.json" >/dev/null 2>&1
+expect 0 $? "a pod without the proxy: nothing to lock"
+[ "$(rj llm_proxy_lock)" = null ] && ok "  and nothing recorded" || bad "  recorded $(rj llm_proxy_lock)"
+env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" lock --model nrp/x --record "$T/r.json" \
+  --tries 2 >/dev/null 2>&1
+expect 1 $? "a proxy that does not answer stops the run"
+env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" summary --record "$T/r.json" >/dev/null 2>&1
+expect 1 $? "a summary that cannot be read fails"
+has "  and is recorded as unavailable" "$(rj llm_proxy)" '"error": "summary unavailable"'
+fakeproxy nokey; echo '{}' > "$T/r.json"; lp lock --model nrp/x
+expect 1 $? "a proxy with no key for the provider (healthz 503) stops the run"
+has "  recorded with its answer" "$(rj llm_proxy_lock)" "missing key: nrp"
+fakeproxy upper; echo '{}' > "$T/r.json"; lp lock --model nrp/qwen3-small
+expect 1 $? "a lock answered with anything but exactly the model sent is refused"
+fakeproxy; echo '{}' > "$T/r.json"; lp lock --model nrp/qwen3-small --model egi/kimi-k3
+expect 0 $? "a lock of several models (preflight's probes)"
+[ "$(rj llm_proxy_lock)" = '{"locked": ["qwen3-small", "kimi-k3"], "mode": "enforce"}' ] \
+  && ok "  locks each, in order" || bad "  lock record: $(rj llm_proxy_lock)"
+fakeproxy
+# An impostor: a process in this container listens on the control port (fixture /proc).
+ctlport=$(printf '%04X' "$(cat "$T/port")")
+mkdir -p "$T/proc/net" "$T/proc/77/fd"
+printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:%s 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4242 1
+' \
+  "$ctlport" > "$T/proc/net/tcp"
+printf 'socket:[4242]' > "$T/proc/77/fd/3"
+echo '{}' > "$T/r.json"; lp summary --proc "$T/proc"
+expect 1 $? "a process in the job's own container holding the proxy's port is an impostor"
+has "  recorded as such" "$(rj llm_proxy)" "impostor"
+printf 'socket:[999]' > "$T/proc/77/fd/3"; lp summary --proc "$T/proc"
+expect 0 $? "  the real proxy's socket, owned by no process here, is not"
+# The probe right after the lock: a 502 from the proxy is the pod's fault.
+for e in "HTTP 502" "HTTP 401" "HTTP 403" "HTTP 429" "URLError"; do
+  echo "{\"model_probe_error\": \"$e\"}" > "$T/r.json"; lp upstream
+  expect 1 $? "a probe through the proxy failing with $e stops the run as the pod's fault"
+done
+for e in "HTTP 400" "HTTP 404"; do
+  echo "{\"model_probe_error\": \"$e\"}" > "$T/r.json"; lp upstream
+  expect 0 $? "  $e (the probe or the id is wrong) is left to the fingerprint check"
+done
+echo '{}' > "$T/r.json"; lp upstream; expect 0 $? "  a probe that worked passes"
+# The provider's base URL is the proxy's when the pod has one; never the direct one.
+cat > "$T/sweep.json" <<'J'
+{"providers":{"nrp":{"base_url":"https://nrp.example/v1","key_env":"NRP_API_KEY","models_endpoint":false}}}
+J
+env LLM_PROXY_CONTROL_URL="$CTL" LLM_PROXY_NRP_BASE_URL=http://127.0.0.1:8081/v1 "$PY" "$HERE/write_opencode_config.py" \
+  --providers "$T/sweep.json" --for-model nrp/glm-5 --models nrp/glm-5 --out "$T/oc.json" >/dev/null 2>&1
+"$PY" -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['provider']['nrp']['options']['baseURL'] == 'http://127.0.0.1:8081/v1'" \
+  "$T/oc.json" 2>/dev/null && ok "with the proxy, opencode's provider is the proxy's URL" || bad "  baseURL: $(cat "$T/oc.json" 2>/dev/null)"
+env LLM_PROXY_CONTROL_URL="$CTL" "$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" \
+  --for-model nrp/glm-5 --models nrp/glm-5 --out "$T/oc2.json" >/dev/null 2>&1
+expect 1 $? "a provider the proxy does not serve is refused, not called directly"
+[ -f "$T/oc2.json" ] && bad "  and a config was written" || ok "  and nothing is written"
+# The placeholder key is not a secret: the proxy's own messages start with it.
+mkdir -p "$T/up"; printf "llm-proxy: model 'x' is not allowed for this job\n" > "$T/up/t.txt"
+env NRP_API_KEY=llm-proxy "$PY" "$HERE/redact.py" "$T/up" NRP_API_KEY >/dev/null 2>&1
+has "redact leaves the proxy's placeholder alone" "$(cat "$T/up/t.txt")" "llm-proxy: model 'x'"
+dg=$("$PY" -c "import hashlib; print(hashlib.sha256(b'k').hexdigest())" | tr -d '\r')
+printf 'Rate limit exceeded for api_key: %s. Retry later.\nchecksum %s\n' "$dg" "$dg" > "$T/up/e.txt"
+env NRP_API_KEY=llm-proxy "$PY" "$HERE/redact.py" "$T/up" NRP_API_KEY >/dev/null 2>&1
+o=$(cat "$T/up/e.txt")
+case "$o" in *"api_key: ****************************************************************."*"checksum $dg"*)
+  ok "a key digest in a provider error is masked by its shape; other hex is not";;
+  *) bad "digest masking: $o";; esac
+# A run end to end: locked before the agent, the summary after; a refused lock stops it.
+mkdir -p "$T/runnerhome/.config/opencode"
+echo '{"provider":{"neurodesk":{}}}' > "$T/runnerhome/.config/opencode/opencode.json"
+cat > "$T/opencode" <<'EOF'
+#!/bin/bash
+[ "$1" = --version ] && { echo 1.18.32; exit 0; }
+[ "$1 $2" = "debug skill" ] && { echo '[]'; exit 0; }
+[ "$1 $2" = "debug config" ] && { echo '{}'; exit 0; }
+echo "CTL=${LLM_PROXY_CONTROL_URL-unset}"; touch "$SEEN"
+EOF
+chmod +x "$T/opencode"
+echo '{"categories":{"c":{"tasks":{"t-x":{"prompt":{"goal":"extract","dataset":{"id":"ds1"}}}}}}}' > "$T/tasks.json"
+# An nrp model, as in a wave: its calls (the probe's) go through the proxy's address.
+rbp() { rm -rf "$T/bench" "$T/seen"; env HOME="$T/runnerhome" BENCH_HOME="$T/bench" TASKS_JSON="$T/tasks.json" \
+  OPENCODE_BIN="$T/opencode" SKILLS_SRC="" RUN_TIMEOUT=60 NRP_API_KEY=llm-proxy OPENCODE_ISOLATE=0 \
+  LLM_PROXY_CONTROL_URL="$CTL" LLM_PROXY_NRP_BASE_URL="$CTL/v1" SEEN="$T/seen" \
+  bash "$HERE/run_bench.sh" t-x nrp/m env-only 1 >/dev/null 2>&1; }
+R="$T/bench/runs/t-x__nrp-m__env-only__r1"
+fakeproxy; rbp; expect 0 $? "a run with the proxy"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['llm_proxy_lock']['locked'] == ['m'] and r['llm_proxy']['locked'] == ['m'], r
+assert r['model_served'] == 'm' and r['llm_proxy']['calls'] == {'nrp/m': 2}, r" "$R/run.json" 2>/dev/null \
+  && ok "  locks its model before the agent, probes through the proxy (start and end), records the summary" \
+  || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
+has "  the agent does not get the proxy's control URL" "$(cat "$R/transcript.txt" 2>/dev/null)" "CTL=unset"
+rbp; expect 3 $? "a proxy already locked (409) stops the run before the agent"
+[ -f "$T/seen" ] && bad "  the agent ran anyway" || ok "  the agent never started"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['stopped_before_agent'] == 'proxy-lock-failed', r" \
+  "$R/run.json" 2>/dev/null && ok "  recorded as proxy-lock-failed" || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
+kill "$FP" 2>/dev/null
+rm -rf "$T"
+
+echo
 echo "=== run_bench: the environment's own skills and instructions, in every arm"
 T=$(mktemp -d)
 mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc" "$T/envskills/astra" "$T/runnerhome/.config/opencode"
@@ -2068,6 +2445,24 @@ assert c['provider']['nrp']['options']['apiKey'] == '{env:NRP_API_KEY}'" "$T/oc.
 "$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --models nrp/glm-5 \
   --out "$T/oc2.json" >/dev/null 2>&1
 expect 1 $? "without --for-model an unreachable provider stops the whole config"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --for-model nrp/glm-5 --pin-model \
+  --models nrp/glm-5,nrp/vision-x --output-limit 32000 --context-limit 200000 --out "$T/oc3.json" >/dev/null 2>&1
+expect 0 $? "--pin-model writes one run's config"
+"$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))
+assert list(c['provider']['nrp']['models']) == ['glm-5'], c['provider']['nrp']['models']
+assert c['model'] == c['small_model'] == 'nrp/glm-5', (c['model'], c.get('small_model'))
+assert c['provider']['nrp']['models']['glm-5']['limit'] == {'context': 200000, 'output': 32000}" "$T/oc3.json" 2>/dev/null \
+  && ok "  its model alone, as model and small_model, with the limits given" || bad "  pinned config: $(cat "$T/oc3.json")"
+"$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))
+assert 'small_model' not in c and c['provider']['nrp']['models']['glm-5']['limit'] == {'context': 131000, 'output': 8192}" "$T/oc.json" 2>/dev/null \
+  && ok "  without it: no small_model, the 131000/8192 defaults" || bad "  unpinned config changed: $(cat "$T/oc.json")"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --for-model nrp/glm-5 --pin-model \
+  --models nrp/vision-x --out "$T/oc4.json" >/dev/null 2>&1
+expect 1 $? "--pin-model refuses a model its provider does not list"
+[ -f "$T/oc4.json" ] && bad "  and wrote a config anyway" || ok "  and writes nothing"
+"$PY" "$HERE/write_opencode_config.py" --providers "$T/sweep.json" --for-model nrp/glm-5 \
+  --models nrp/glm-5 --output-limit 131000 --out "$T/oc5.json" >/dev/null 2>&1
+expect 1 $? "an output limit that fills the context is refused"
 rm -rf "$T"
 
 echo

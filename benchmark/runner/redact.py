@@ -17,14 +17,23 @@ not stop on a per-file error.
 
 Exit 0 when done. Exit 2, before touching anything, if a secret is shorter than 8
 characters: masking it would overwrite unrelated bytes. Finding a secret is reported
-as a GitHub warning.
+as a GitHub warning. A variable holding PLACEHOLDER (the key proxy's stand-in key) is
+skipped: it is no secret, and the proxy's own messages start with it.
+
+Behind the key proxy the job holds no provider key, so a key's digest cannot be looked
+up; a provider's error still names it ("Rate limit exceeded for api_key: <digest>").
+Any 64-hex-digit run within 24 bytes after "api_key" is masked by that shape (DIGEST_RE)
+whether or not a variable names it.
 """
 import hashlib
 import os
+import re
 import stat
 import sys
 
 MAX_BYTES = 256 * 1024 * 1024
+PLACEHOLDER = "llm-proxy"
+DIGEST_RE = re.compile(rb"(?i)(api_key[^0-9a-f]{0,24})([0-9a-f]{64})(?![0-9a-f])")
 SKIP_DIRS = {"data", "tmp", "site-packages", "node_modules", ".git"}
 
 
@@ -43,6 +52,10 @@ def mask_file(path, secrets):
             new = new.replace(v, b"*" * len(v))
             hits += c
             warn("%s found %d time(s) in %s; masked" % (name, c, path))
+    new, c = DIGEST_RE.subn(lambda m: m.group(1) + b"*" * 64, new)
+    if c:
+        hits += c
+        warn("a key digest (api_key: <64 hex>) found %d time(s) in %s; masked" % (c, path))
     if hits:
         try:
             fh = open(path, "wb")
@@ -52,7 +65,8 @@ def mask_file(path, secrets):
         with fh:
             fh.write(new)
         with open(path, "rb") as fh:
-            if any(v in fh.read() for _, v in secrets):
+            back = fh.read()
+            if any(v in back for _, v in secrets) or DIGEST_RE.search(back):
                 raise ValueError("secret still present after masking")
     return hits
 
@@ -66,6 +80,9 @@ def main():
         v = os.environ.get(n, "").strip()
         if not v:
             print("skip  %s is unset" % n)
+            continue
+        if v == PLACEHOLDER:
+            print("skip  %s holds the key proxy's placeholder" % n)
             continue
         if len(v) < 8:
             print("ERROR: %s is shorter than 8 characters; refusing to mask it" % n)

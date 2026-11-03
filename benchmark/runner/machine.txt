@@ -1,0 +1,8 @@
+MACHINE: you have {cpus} CPUs and {memory_gib} GiB of memory, shared by everything you run.
+?command_gib A single process may use at most {command_gib} GiB of memory; above that it fails with an out-of-memory error.
+?watch If everything you run together comes close to {memory_gib} GiB, the largest process is stopped.
+`free`, `top` and `nproc` show the whole server, not your share.
+?shm_gib Shared memory (/dev/shm) holds {shm_gib} GiB and counts towards your memory.
+Your working disk is {disk_gib} GiB, shared by everything you write and download, including containers.
+?layer_gib Files written outside your working disk and home share a {layer_gib} GiB budget; past it, your session is ended.
+You have {minutes} minutes in total.
