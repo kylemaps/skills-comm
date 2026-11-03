@@ -2061,6 +2061,120 @@ kill "$FP" 2>/dev/null
 rm -rf "$T"
 
 echo
+echo "=== proxy_selftest: passes against a proxy that refuses, fails against one that does not"
+T=$(mktemp -d)
+# A stand-in for the key proxy with its rules (strict), or with none of them (lax):
+# no seal, routing fields and other models allowed, ?model= honoured, no end, relocks.
+cat > "$T/proxy.py" <<'EOF'
+import json, sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlsplit, parse_qs
+lax = len(sys.argv) > 2 and sys.argv[2] == "lax"
+S = {"models": None, "sealed": False, "ended": False, "calls": {}, "denied": 0, "mismatches": 0,
+     "unlocked": 0, "relocks": 0, "after_end": 0}
+BUCKET = {}   # chat calls per port: 10/s with a burst of 30, as limit_req nodelay
+def rate_ok(prov):
+    tokens, t = BUCKET.get(prov, (31.0, time.time()))
+    now = time.time()
+    tokens = min(31.0, tokens + 10 * (now - t))
+    if tokens < 1:
+        BUCKET[prov] = (tokens, now)
+        return False
+    BUCKET[prov] = (tokens - 1, now)
+    return True
+SERVED = {"deepseek-v4-flash": "deepseek-ai/DeepSeek-V4.1-Flash-1017", "qwen3-vl": "Qwen/Qwen3.8-Flash-Next-FP8"}
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def reply(self, code, body):
+        b = json.dumps(body).encode()
+        self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers()
+        self.wfile.write(b)
+    def deny(self, msg):
+        S["denied"] += 1
+        return self.reply(403, {"error": {"message": "llm-proxy: " + msg, "type": "llm_proxy_denied"}})
+    def do_GET(self):
+        p = urlsplit(self.path).path
+        if p == "/healthz":
+            return self.reply(200, {"ok": True})
+        if p == "/summary":
+            return self.reply(200, {"locked": S["models"], "sealed_without_lock": S["sealed"], "ended": S["ended"],
+                                    "calls": S["calls"], "denied": S["denied"], "mismatches": S["mismatches"],
+                                    "unlocked_calls": S["unlocked"], "relock_attempts": S["relocks"],
+                                    "calls_after_end": S["after_end"]})
+        self.reply(404, {})
+    def do_POST(self):
+        u = urlsplit(self.path)
+        n = int(self.headers.get("Content-Length") or 0)
+        # Sizes are judged from the headers, before the body is read.
+        if lax and n > 4096:
+            return self.reply(200, {})
+        if not lax and ((u.path == "/lock" and n > 4096) or n > 8 * 2**20):
+            return self.reply(413, {})
+        body = json.loads(self.rfile.read(n) or b"{}")
+        if u.path == "/lock":
+            if S["models"] is not None and not lax:
+                S["relocks"] += 1
+                return self.reply(409, {"error": "already locked", "models": S["models"]})
+            S["models"] = body["models"]
+            return self.reply(200, {"locked": S["models"], "mode": "enforce"})
+        if u.path == "/end":
+            S["ended"] = True
+            return self.reply(200, {"ended": True})
+        prov = u.path.split("/")[1]
+        if u.path not in ("/nrp/v1/chat/completions", "/egi/v1/chat/completions"):
+            return self.reply(404, {})
+        if not lax and not rate_ok(prov):
+            return self.reply(429, {})
+        if S["ended"] and not lax:
+            S["after_end"] += 1     # counted here only, not as denied
+            return self.reply(403, {"error": {"message": "llm-proxy: this job's agent phase has ended",
+                                              "type": "llm_proxy_denied"}})
+        if not lax and any(k in body for k in ("api_base", "base_url", "api_key")) or \
+           (not lax and any(k.endswith("fallbacks") for k in body)):
+            return self.deny("request field is not allowed")
+        model = body.get("model")
+        if lax and "model" in parse_qs(u.query):
+            model = parse_qs(u.query)["model"][0]
+        S["calls"]["%s/%s" % (prov, model)] = S["calls"].get("%s/%s" % (prov, model), 0) + 1
+        if S["models"] is None and not lax:
+            S["unlocked"] += 1; S["models"] = []; S["sealed"] = True
+            return self.deny("no model lock set for this job")
+        if not lax and "%s/%s" % (prov, model) not in S["models"]:
+            S["mismatches"] += 1
+            return self.deny("model is not allowed for this job")
+        served = SERVED.get(model, model) if prov == "nrp" else model
+        self.reply(200, {"model": served, "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1]))
+import os; os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+EOF
+PX=""
+proxy() { [ -n "$PX" ] && kill "$PX" 2>/dev/null; rm -f "$T/port"
+  "$PY" "$T/proxy.py" "$T/port" "${1:-}" & PX=$!
+  i=0; while [ ! -s "$T/port" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+  U="http://127.0.0.1:$(cat "$T/port")"; }
+st() { env LLM_PROXY_CONTROL_URL="$U" LLM_PROXY_NRP_BASE_URL="$U/nrp/v1" LLM_PROXY_EGI_BASE_URL="$U/egi/v1" \
+  "$PY" "$HERE/proxy_selftest.py" --case "$1" > "$T/o" 2>&1; }
+proxy; st seal; expect 0 $? "the seal case passes against the proxy's rules"
+has "  a chat before any lock is refused and seals it" "$(cat "$T/o")" "ok   a chat before any lock is refused"
+proxy; st locked; expect 0 $? "the locked case passes against the proxy's rules"
+has "  the summary check ran" "$(cat "$T/o")" "ok   the summary counts all of it"
+proxy lax; st seal; expect 1 $? "the seal case fails against a proxy that does not seal"
+proxy lax; st locked; expect 1 $? "the locked case fails against a proxy that refuses nothing"
+for w in "?model=qwen3-vl is dropped" "a fallbacks field is refused" "another model (qwen3-vl) is refused" \
+         "on the EGI port is refused" "a second lock is refused" "after the end the locked model is refused" \
+         "the summary counts all of it" "a chat body over 8 MB is refused" "a lock body over 4 KB is refused" \
+         "is rate-limited (some 429)"; do
+  grep -q "^FAIL .*$w" "$T/o" && ok "  and names it: $w" || bad "  no FAIL line for: $w"
+done
+env -u LLM_PROXY_CONTROL_URL "$PY" "$HERE/proxy_selftest.py" --case locked >/dev/null 2>&1
+expect 2 $? "a pod without the proxy: exit 2, nothing sent"
+kill "$PX" 2>/dev/null
+rm -rf "$T"
+
+echo
 echo "=== run_bench: the environment's own skills and instructions, in every arm"
 T=$(mktemp -d)
 mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc" "$T/envskills/astra" "$T/runnerhome/.config/opencode"
