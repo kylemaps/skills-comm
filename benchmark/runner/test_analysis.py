@@ -534,6 +534,8 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         with open(os.path.join(HERE, "summarize.py"), encoding="utf-8") as fh:
             src = fh.read()
         ordered = [
+            # First: a run whose model calls were not this cell's is nothing else.
+            "harness failure: key proxy locked %s, not this run's model",
             'contaminated: env-only run loaded the skill',
             'contaminated: env-only run read skill files',
             'misassigned: skill installed in env-only run',
@@ -567,9 +569,9 @@ class TestTimeoutIsOurFailure(unittest.TestCase):
         # still could not count it.
         n = src.count('r["exclude_reason"] = ')
         self.assertEqual(
-            n, 11,
-            "the chain has %d exclude_reason assignments, expected 11 (one reset to "
-            "empty plus ten branches). If you added a branch, decide where it "
+            n, 12,
+            "the chain has %d exclude_reason assignments, expected 12 (one reset to "
+            "empty plus eleven branches). If you added a branch, decide where it "
             "belongs in the order and update this number deliberately." % n)
 
     def test_a_timeout_with_output_is_still_excluded(self):

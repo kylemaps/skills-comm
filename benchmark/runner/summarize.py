@@ -64,6 +64,7 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_ids import output_rel  # noqa: E402
+from model_ids import opencode_id  # noqa: E402
 
 # Verdicts that mean "the agent did not deliver a usable result". Everything else is
 # treated as a pass. Kept as a set rather than a ladder because the vocabulary is
@@ -594,9 +595,19 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     r["timed_out"] = r["exit_code"] == RUN_TIMEOUT_EXIT
     # Why a declared lost run was lost (lost_run); "" for every recorded run.
     r["lost"] = ""
-    # Why a run is flagged but kept: "answer-key", "arm-seen", "control-read-skill".
+    # Why a run is flagged but kept: "answer-key", "arm-seen", "control-read-skill",
+    # and from the key proxy's summary (environment 8, run.json llm_proxy):
+    # "proxy-refused" when it refused a call (another model, a forbidden field) and
+    # "proxy-unlocked" when a chat call came before the lock or the lock was sealed.
+    # The run's own calls still went to its model, so it is kept and flagged.
+    px = rec.get("llm_proxy") if isinstance(rec.get("llm_proxy"), dict) else {}
     r["flags"] = (["answer-key"] * bool(r["answer_key_reads"])
-                  + ["arm-seen"] * bool(r["arm_seen"]))
+                  + ["arm-seen"] * bool(r["arm_seen"])
+                  + ["proxy-refused"] * bool((px.get("denied") or 0) > 0
+                                             or (px.get("mismatches") or 0) > 0)
+                  + ["proxy-unlocked"] * bool((px.get("unlocked_calls") or 0) > 0
+                                              or px.get("sealed_without_lock"))
+                  + ["proxy-after-end"] * bool((px.get("calls_after_end") or 0) > 0))
     # Behaviours seen across runs, one tag each. Descriptive: never an exclusion, and
     # never a flag (flags drive the "flagged removed" sensitivity row).
     #   placeholder-output    an output that is not a NIfTI image or holds fewer than
@@ -642,6 +653,12 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # Uptake: the agent loaded the skill, or opened its files directly.
     r["uptake"] = has_skill_seen or (r["arm"].startswith("env+skill") and bool(own_reads))
     r["exclude_reason"] = ""
+    # The key proxy must have been locked to this run's model and nothing else: a
+    # summary that names another lock means the run's calls were not this cell's. A
+    # harness failure (the lock is the harness's), so the run is re-run.
+    if px.get("locked") is not None and px["locked"] != [opencode_id(r["model"])]:
+        r["exclude_reason"] = ("harness failure: key proxy locked %s, not this run's model"
+                               % ",".join(map(str, px["locked"])))
     if r["arm"] == "env-only" and own_reads and rules["control_skill_reads"] == "keep":
         r["flags"].append("control-read-skill")
     if r["arm"] == "env-only" and has_skill_seen:

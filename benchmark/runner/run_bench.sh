@@ -561,8 +561,11 @@ DB="$WORK/.xdg-data/opencode/opencode.db"
 [ -f "$DB" ] && python -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('PRAGMA wal_checkpoint(TRUNCATE)')" \
   "$DB" 2>/dev/null
 python "$HERE/model_probe.py" --model "$MODEL" --record "$RECORD" --phase end "${PROVIDERS_ARGS[@]}" || true
-# What the proxy saw this job call, both probes included (llm_proxy in the record).
-# Without it the run cannot show which models it called and is not valid.
+# The job's model calls end here: the proxy refuses every chat call from now on, so a
+# process the agent left behind cannot use the key while the graders run. Then what
+# the proxy saw this job call, both probes included (llm_proxy in the record). Without
+# the summary the run cannot show which models it called and is not valid.
+python "$HERE/llm_proxy.py" end --record "$RECORD" >&2 || true
 python "$HERE/llm_proxy.py" summary --record "$RECORD" \
   || echo "INVALID: the key proxy's summary is unavailable; the run cannot show which models it called" >&2
 land

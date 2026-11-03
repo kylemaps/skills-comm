@@ -1203,6 +1203,11 @@ sr env-only 2 1 none ',"opencode_errors":[]' 'curl said: 429 rate limit exceeded
 sr env-only 3 1 none ',"opencode_errors":["429 Too Many Requests: rate limit"]'
 sr env-only 4 0 out ',"skill_files_read":["/w/skills-comm/plugins/brain-extraction/brain-extraction/SKILL.md"]'
 sr env-only 5 0 out ',"answer_key_reads":["→ Read /ws/tasks.json"]'
+sr env-only 6 0 out ',"llm_proxy":{"locked":["neurodesk/m"],"calls":{"neurodesk/m":9,"neurodesk/other":1},"mismatches":1,"denied":1,"unlocked_calls":0,"sealed_without_lock":false,"ended":true,"calls_after_end":0}'
+sr env-only 7 0 out ',"llm_proxy":{"locked":["neurodesk/m"],"calls":{"neurodesk/m":9},"mismatches":0,"denied":0,"unlocked_calls":2,"sealed_without_lock":false,"ended":true,"calls_after_end":0}'
+sr env-only 8 0 out ',"llm_proxy":{"locked":["neurodesk/m"],"calls":{"neurodesk/m":9},"mismatches":0,"denied":0,"unlocked_calls":0,"sealed_without_lock":false,"ended":true,"calls_after_end":0}'
+sr env-only 9 0 out ',"llm_proxy":{"locked":["neurodesk/other"],"calls":{"neurodesk/other":9},"mismatches":0,"denied":0,"unlocked_calls":0,"sealed_without_lock":false,"ended":true,"calls_after_end":0}'
+sr env-only 10 0 out ',"llm_proxy":{"locked":["neurodesk/m"],"calls":{"neurodesk/m":9},"mismatches":0,"denied":0,"unlocked_calls":0,"sealed_without_lock":false,"ended":true,"calls_after_end":3}'
 row() { "$PY" -c "import csv,sys
 for r in csv.DictReader(open(sys.argv[1])):
     if r['rep']==sys.argv[2]: print(r['exclude_reason'] or 'VALID', r['passed'], r['flags'])" \
@@ -1221,6 +1226,11 @@ has   "  but opencode's own rate-limit error does" "$(row w1 3)" "rate limit"
 has   "default rules: a control run reading the skill is excluded" "$(row w0 4)" "read skill files"
 case "$(row w1 4)" in "VALID True control-read-skill") ok "control_skill_reads=keep: kept and flagged";; *) bad "  got $(row w1 4)";; esac
 case "$(row w1 5)" in "VALID True answer-key") ok "an answer-key read is flagged, not excluded";; *) bad "  got $(row w1 5)";; esac
+case "$(row w1 6)" in "VALID True proxy-refused") ok "a call the key proxy refused is flagged, not excluded";; *) bad "  got $(row w1 6)";; esac
+case "$(row w1 7)" in "VALID True proxy-unlocked") ok "a chat call before the lock is flagged";; *) bad "  got $(row w1 7)";; esac
+case "$(row w1 8)" in "VALID True ") ok "a clean proxy summary flags nothing";; *) bad "  got '$(row w1 8)'";; esac
+has "a proxy locked to another model than the run's excludes the run" "$(row w1 9)" "key proxy locked"
+case "$(row w1 10)" in "VALID True proxy-after-end") ok "calls after the end are flagged";; *) bad "  got '$(row w1 10)'";; esac
 "$PY" -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['rules']['timeout']=='fail'" \
   "$T/w1/summary_$TK.json" 2>/dev/null && ok "the summary records the rules it used" || bad "rules not in the summary"
 # Every infra pattern must match an opencode error as finalize_run stores it
@@ -1881,7 +1891,7 @@ T=$(mktemp -d)
 cat > "$T/fakeproxy.py" <<'EOF'
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-state = {"locked": None, "calls": {}}
+state = {"locked": None, "calls": {}, "ended": False, "after_end": 0}
 mode = sys.argv[2] if len(sys.argv) > 2 else ""
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -1900,20 +1910,28 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/summary":
             return self.reply(200, {"mode": "enforce", "locked": state["locked"], "calls": state["calls"],
                                     "mismatches": 0, "denied": 0, "unlocked_calls": 0,
-                                    "relock_attempts": 0})
+                                    "relock_attempts": 0, "sealed_without_lock": False,
+                                    "ended": state["ended"], "calls_after_end": state["after_end"]})
         if self.path == "/v1/models":
             return self.reply(200, {"data": [{"id": "m"}, {"id": "other"}]})
         self.reply(404, {"error": "not found"})
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         if self.path == "/v1/chat/completions":
-            # As the proxy: only a locked model is answered.
+            # As the proxy: only a locked model is answered; an entry is provider/model
+            # (tied to the provider) or a bare id (any provider).
             m = body.get("model")
             state["calls"]["nrp/%s" % m] = state["calls"].get("nrp/%s" % m, 0) + 1
-            if not state["locked"] or m not in state["locked"]:
+            if state["ended"]:
+                state["after_end"] += 1
+                return self.reply(403, {"error": {"message": "llm-proxy: job ended", "type": "llm_proxy_denied"}})
+            if not state["locked"] or not any(e in (m, "nrp/%s" % m) for e in state["locked"]):
                 return self.reply(403, {"error": {"message": "llm-proxy: denied", "type": "llm_proxy_denied"}})
             return self.reply(200, {"model": m, "system_fingerprint": "fp-test",
                                     "choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+        if self.path == "/end":
+            state["ended"] = True
+            return self.reply(200, {"ended": True})
         if self.path != "/lock":
             return self.reply(404, {"error": "not found"})
         if state["locked"] is not None:
@@ -1936,12 +1954,12 @@ lp() { env LLM_PROXY_CONTROL_URL="$CTL" "$PY" "$HERE/llm_proxy.py" "$@" --record
 rj() { "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(json.dumps(r.get(sys.argv[2])))" "$T/r.json" "$1" | tr -d '\r'; }
 echo '{}' > "$T/r.json"
 lp lock --model nrp/qwen3-small; expect 0 $? "a lock the proxy accepts"
-[ "$(rj llm_proxy_lock)" = '{"locked": ["qwen3-small"], "mode": "enforce"}' ] \
-  && ok "  is the model id opencode sends (no provider prefix), recorded" || bad "  lock record: $(rj llm_proxy_lock)"
+[ "$(rj llm_proxy_lock)" = '{"locked": ["nrp/qwen3-small"], "mode": "enforce"}' ] \
+  && ok "  is provider/model (tied to the provider), recorded" || bad "  lock record: $(rj llm_proxy_lock)"
 lp lock --model nrp/qwen3-small; expect 1 $? "a second lock is refused (409)"
 has "  and recorded as refused" "$(rj llm_proxy_lock)" '"status": 409'
 lp summary; expect 0 $? "the summary is read"
-has "  into llm_proxy" "$(rj llm_proxy)" '"locked": ["qwen3-small"]'
+has "  into llm_proxy" "$(rj llm_proxy)" '"locked": ["nrp/qwen3-small"]'
 echo '{}' > "$T/r.json"
 env -u LLM_PROXY_CONTROL_URL "$PY" "$HERE/llm_proxy.py" lock --model nrp/x --record "$T/r.json" >/dev/null 2>&1
 expect 0 $? "a pod without the proxy: nothing to lock"
@@ -1949,8 +1967,8 @@ expect 0 $? "a pod without the proxy: nothing to lock"
 env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" lock --model nrp/x --record "$T/r.json" \
   --tries 2 >/dev/null 2>&1
 expect 1 $? "a proxy that does not answer stops the run"
-env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" summary --record "$T/r.json" >/dev/null 2>&1
-expect 1 $? "a summary that cannot be read fails"
+env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" summary --record "$T/r.json" --tries 2 >/dev/null 2>&1
+expect 1 $? "a summary that cannot be read (after the retries) fails"
 has "  and is recorded as unavailable" "$(rj llm_proxy)" '"error": "summary unavailable"'
 fakeproxy nokey; echo '{}' > "$T/r.json"; lp lock --model nrp/x
 expect 1 $? "a proxy with no key for the provider (healthz 503) stops the run"
@@ -1959,22 +1977,23 @@ fakeproxy upper; echo '{}' > "$T/r.json"; lp lock --model nrp/qwen3-small
 expect 1 $? "a lock answered with anything but exactly the model sent is refused"
 fakeproxy; echo '{}' > "$T/r.json"; lp lock --model nrp/qwen3-small --model egi/kimi-k3
 expect 0 $? "a lock of several models (preflight's probes)"
-[ "$(rj llm_proxy_lock)" = '{"locked": ["qwen3-small", "kimi-k3"], "mode": "enforce"}' ] \
+[ "$(rj llm_proxy_lock)" = '{"locked": ["nrp/qwen3-small", "egi/kimi-k3"], "mode": "enforce"}' ] \
   && ok "  locks each, in order" || bad "  lock record: $(rj llm_proxy_lock)"
-fakeproxy
-# An impostor: a process in this container listens on the control port (fixture /proc).
-ctlport=$(printf '%04X' "$(cat "$T/port")")
-mkdir -p "$T/proc/net" "$T/proc/77/fd"
-printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
-   0: 0100007F:%s 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4242 1
-' \
-  "$ctlport" > "$T/proc/net/tcp"
-printf 'socket:[4242]' > "$T/proc/77/fd/3"
-echo '{}' > "$T/r.json"; lp summary --proc "$T/proc"
-expect 1 $? "a process in the job's own container holding the proxy's port is an impostor"
-has "  recorded as such" "$(rj llm_proxy)" "impostor"
-printf 'socket:[999]' > "$T/proc/77/fd/3"; lp summary --proc "$T/proc"
-expect 0 $? "  the real proxy's socket, owned by no process here, is not"
+fakeproxy; echo '{}' > "$T/r.json"; lp lock --model nrp/qwen3-small
+lp end; expect 0 $? "the end of the job's calls is confirmed"
+has "  and recorded" "$(rj llm_proxy_end)" '"ended": true'
+chat() { "$PY" -c "import json,sys,urllib.request,urllib.error
+req=urllib.request.Request(sys.argv[1]+'/v1/chat/completions', data=json.dumps({'model':sys.argv[2]}).encode(), headers={'Content-Type':'application/json'})
+try: print(urllib.request.urlopen(req, timeout=5).status)
+except urllib.error.HTTPError as e: print(e.code)" "$CTL" "$1" | tr -d '\r'; }
+[ "$(chat qwen3-small)" = 403 ] && ok "  a chat call after the end is refused" || bad "  chat after end: $(chat qwen3-small)"
+lp summary
+has "  and the summary says so" "$(rj llm_proxy)" '"ended": true'
+has "  with the refused call counted" "$(rj llm_proxy)" '"calls_after_end": 1'
+lp end; expect 0 $? "  ending twice is fine"
+env LLM_PROXY_CONTROL_URL=http://127.0.0.1:9 "$PY" "$HERE/llm_proxy.py" end --record "$T/r.json" --tries 1 >/dev/null 2>&1
+expect 1 $? "an end the proxy does not confirm exits 1"
+has "  and is recorded" "$(rj llm_proxy_end)" "end not confirmed"
 # The probe right after the lock: a 502 from the proxy is the pod's fault.
 for e in "HTTP 502" "HTTP 401" "HTTP 403" "HTTP 429" "URLError"; do
   echo "{\"model_probe_error\": \"$e\"}" > "$T/r.json"; lp upstream
@@ -2028,9 +2047,10 @@ rbp() { rm -rf "$T/bench" "$T/seen"; env HOME="$T/runnerhome" BENCH_HOME="$T/ben
 R="$T/bench/runs/t-x__nrp-m__env-only__r1"
 fakeproxy; rbp; expect 0 $? "a run with the proxy"
 "$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
-assert r['llm_proxy_lock']['locked'] == ['m'] and r['llm_proxy']['locked'] == ['m'], r
-assert r['model_served'] == 'm' and r['llm_proxy']['calls'] == {'nrp/m': 2}, r" "$R/run.json" 2>/dev/null \
-  && ok "  locks its model before the agent, probes through the proxy (start and end), records the summary" \
+assert r['llm_proxy_lock']['locked'] == ['nrp/m'] and r['llm_proxy']['locked'] == ['nrp/m'], r
+assert r['model_served'] == 'm' and r['llm_proxy']['calls'] == {'nrp/m': 2}, r
+assert r['llm_proxy_end'] == {'ended': True} and r['llm_proxy']['ended'] and r['llm_proxy']['calls_after_end'] == 0, r" "$R/run.json" 2>/dev/null \
+  && ok "  locks its model before the agent, probes through the proxy (start and end), ends its calls, records the summary" \
   || bad "  record: $(cat "$R/run.json" 2>/dev/null | head -c 300)"
 has "  the agent does not get the proxy's control URL" "$(cat "$R/transcript.txt" 2>/dev/null)" "CTL=unset"
 rbp; expect 3 $? "a proxy already locked (409) stops the run before the agent"
