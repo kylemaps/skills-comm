@@ -796,15 +796,17 @@
       ],
       "model_fingerprints": {
         "_comment": [
-          "TBD: from the preflight probe through the key proxy on the declaration day. A TBD",
-          "value matches no probe, so no wave 8 run can start before the declaration.",
+          "From the preflight probe through the key proxy of 2026-11-04 00:59Z (preflight",
+          "41750842716). Served: kimi-k3 on vllm-0.33.0-tp8 (EGI; wave 7: vllm-0.31.0-tp8, so its",
+          "fingerprint differs from wave 7's); MiniMax-M3.1-Flash, DeepSeek-V4.1-Flash-1017 and",
+          "Qwen3.8-27B-FP8 (NRP), the same fingerprints as wave 7.",
           "Declared once, before the first run; a model whose fingerprint changes during",
           "the wave is reported incomplete and its runs are exploratory."
         ],
-        "egi/kimi-k3": "TBD",
-        "nrp/minimax-m2": "TBD",
-        "nrp/deepseek-v4-flash": "TBD",
-        "nrp/qwen3-small": "TBD"
+        "egi/kimi-k3": "30a88ff42637",
+        "nrp/minimax-m2": "97880aed0255",
+        "nrp/deepseek-v4-flash": "9b7b747a14f3",
+        "nrp/qwen3-small": "215ade352194"
       },
       "arms_compared": {
         "_comment": [
