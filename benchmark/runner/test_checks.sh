@@ -2175,6 +2175,45 @@ kill "$PX" 2>/dev/null
 rm -rf "$T"
 
 echo
+echo "=== memwatch_selftest: its checks pass on a good result and fail on each bad one"
+T=$(mktemp -d)
+# A result as the pod prints it: 28 GiB limit, threshold 25804 MiB, one kill.
+cat > "$T/good.json" <<'J'
+{"limit_mib": 28672, "threshold_mib": 25804, "data_limit_kb": 25165824, "pct": 90.0, "expect_limit_mib": 28672,
+ "single": {"over_rc": 1, "over_memoryerror": true, "under_rc": 0},
+ "pair": {"pressure_before_mib": 900, "size_each_mib": 13026, "rcs": [137, 0], "done": 1,
+          "events_before": {"max": 0, "oom": 0, "oom_kill": 0}, "events_after": {"max": 0, "oom": 0, "oom_kill": 0},
+          "memwatch": {"pct": 90.0, "threshold_mib": 25804, "max_pressure_mib": 26100, "no_victim_passes": 0, "errors": 0, "slow_exits": 0,
+                       "kills": [{"t": "x", "name": "python3", "rss_mib": 12600, "pressure_mib": 25950}]}}}
+J
+# mj NAME PYTHON-EXPR: the good result with one change, judged.
+mj() { "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); p=r['pair']; m=p['memwatch']; s=r['single']; $2; json.dump(r, open(sys.argv[2], 'w'))" \
+    "$T/good.json" "$T/bad.json" && "$PY" "$HERE/memwatch_selftest.py" --judge "$T/bad.json" > "$T/o" 2>&1; rc=$?
+  [ $rc = 1 ] && grep -q "^FAIL .*$1" "$T/o" && ok "  fails, and names it: $1" || bad "  $1: exit $rc, $(grep '^FAIL' "$T/o" | head -2)"; }
+"$PY" "$HERE/memwatch_selftest.py" --judge "$T/good.json" > "$T/o" 2>&1; expect 0 $? "a good result passes"
+[ "$(grep -c '^ok' "$T/o")" = 10 ] && ok "  all ten checks ran" || bad "  checks: $(cat "$T/o")"
+mj "memory limit is the run's" "r['limit_mib'] = 16384"
+mj "fails with MemoryError" "s['over_memoryerror'] = False"
+mj "fails with MemoryError" "s['over_rc'] = -9"
+mj "1 GiB under it succeeds" "s['under_rc'] = 1"
+mj "stopped exactly one command" "m['kills'] = []"
+mj "stopped exactly one command" "m['kills'] = m['kills'] * 2"
+mj "agent's commands, above the threshold" "m['kills'][0]['name'] = 'bash'"
+mj "agent's commands, above the threshold" "m['kills'][0]['pressure_mib'] = 25000"
+mj "agent's commands, above the threshold" "m['kills'][0]['rss_mib'] = 300"
+mj "saw it killed (137)" "p['rcs'] = [137, 137]; p['done'] = 0"
+mj "saw it killed (137)" "p['rcs'] = [0, 0]; p['done'] = 2"
+mj "the kernel killed nothing" "p['events_after']['oom_kill'] = 1"
+mj "the kernel killed nothing" "p['events_after'] = {}"
+mj "highest pressure recorded" "m['max_pressure_mib'] = 20000"
+mj "had a command to stop" "m['no_victim_passes'] = 3"
+mj "had a command to stop" "p['memwatch'] = None"
+mj "gone within memwatch's wait" "m['slow_exits'] = 1"
+mkdir -p "$T/cg"; "$PY" "$HERE/memwatch_selftest.py" --cgroup "$T/cg" >/dev/null 2>&1
+expect 2 $? "a cgroup with no memory limit: exit 2, nothing allocated"
+rm -rf "$T"
+
+echo
 echo "=== run_bench: the environment's own skills and instructions, in every arm"
 T=$(mktemp -d)
 mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc" "$T/envskills/astra" "$T/runnerhome/.config/opencode"

@@ -29,7 +29,8 @@ the threshold with nothing to choose, it records the pass and kills nothing.
 each kill, when the highest pressure has risen 256 MiB since the last write, and on
 SIGTERM or after one pass with --once: the limit and threshold, the highest pressure
 seen, each kill (time, process name, resident MiB, pressure MiB), passes above the
-threshold with nothing to stop, errors, and the cgroup's memory.peak and memory.events
+threshold with nothing to stop, kills whose process was not gone within 10 s
+(slow_exits), errors, and the cgroup's memory.peak and memory.events
 counters (oom, oom_kill, max), which the kernel keeps for the container's whole life.
 No command lines: they can carry anything the agent typed. An error in one pass is
 counted and the watch goes on.
@@ -175,7 +176,8 @@ def main():
     threshold = limit * a.pct / 100 if a.pct > 0 else None
     rec = {"pct": a.pct, "interval_s": a.interval, "limit_mib": limit // MIB,
            "threshold_mib": int(threshold // MIB) if threshold else None,
-           "max_pressure_mib": 0, "kills": [], "no_victim_passes": 0, "errors": 0}
+           "max_pressure_mib": 0, "kills": [], "no_victim_passes": 0, "errors": 0,
+           "slow_exits": 0}
     stop = []
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
 
@@ -224,8 +226,8 @@ def main():
                                 "name": name, "rss_mib": rss // MIB, "pressure_mib": p[0] // MIB})
                             write()
                             # Let its memory come back before the next reading counts it.
-                            if not a.dry_run:
-                                _gone(a.proc, pid, 10.0)
+                            if not a.dry_run and not _gone(a.proc, pid, 10.0):
+                                rec["slow_exits"] += 1
         except Exception as e:  # one bad pass must not end the watch
             rec["errors"] += 1
             rec["last_error"] = ("%s: %s" % (type(e).__name__, e))[:200]
