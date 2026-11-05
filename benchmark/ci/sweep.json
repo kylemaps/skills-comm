@@ -795,8 +795,14 @@
         "nrp/qwen3-small"
       ],
       "incomplete": {
-        "_comment": ["As in waves 3 and 6."],
-        "nrp/qwen3-small": "fingerprint changed during the wave (d345faf4ab69, served on vllm-0.32.0-tp4, from between 2026-11-04 05:24 and 05:47 UTC)"
+        "_comment": [
+          "As in waves 3 and 6. After rep 1 every model's fingerprint changed, so wave 8 publishes",
+          "no cell; its runs are exploratory."
+        ],
+        "nrp/qwen3-small": "fingerprint changed during the wave (d345faf4ab69, served on vllm-0.32.0-tp4, from between 2026-11-04 05:24 and 05:47 UTC)",
+        "egi/kimi-k3": "fingerprint changed during the wave (9d8e9a88f681, served on vllm-0.1.dev24216+g266e88c05-tp8, first seen 2026-11-05 00:54 UTC)",
+        "nrp/minimax-m2": "fingerprint changed during the wave (c51dbbd045fe, served on vllm-0.33.0rc1.dev711+gdd4e40142, first seen 2026-11-05 00:54 UTC)",
+        "nrp/deepseek-v4-flash": "fingerprint changed during the wave (19d1ce27d8bf, served on vllm-0.33.0rc1.dev711+gdd4e40142, first seen 2026-11-05 00:54 UTC)"
       },
       "model_fingerprints": {
         "_comment": [
