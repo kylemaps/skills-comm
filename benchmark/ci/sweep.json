@@ -948,6 +948,173 @@
         "Wave 7's design in environment 8: 2 tasks x 3 subjects x 4 models x 3 arms x 7 reps = 504 runs,",
         "the same subjects, cell order and held-out subjects (sub-0004, sub-0025) as wave 7."
       ]
+    },
+    "9": {
+      "environment": "ci-env8 (ENVIRONMENT.md version 8 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env8-apptainer1.4.5-lmod8.7.25-uv0.12.24-astra0.2.18-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "eb246b0"
+      },
+      "measured": {
+        "cpus": 7,
+        "memory_limit_gib": 28,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true,
+        "no_new_privs": true,
+        "sudo": false
+      },
+      "models": [
+        "egi/kimi-k3",
+        "nrp/minimax-m2",
+        "nrp/deepseek-v4-flash",
+        "nrp/qwen3-small"
+      ],
+      "model_fingerprints": {
+        "_comment": [
+          "From the preflight probe through the key proxy of 2026-11-05 01:42Z (preflight",
+          "41950228605). Served: kimi-k3 on vllm-0.1.dev24216+g266e88c05-tp8 (EGI);",
+          "MiniMax-M3.1-Flash and DeepSeek-V4.1-Flash-1017 on vllm-0.33.0rc1.dev711+gdd4e40142 and",
+          "Qwen3.8-27B-FP8 on vllm-0.33.0 (NRP): the served names of wave 8 on newer serving",
+          "builds, so every fingerprint differs from wave 8's.",
+          "Declared once, before the first run; a model whose fingerprint changes during",
+          "the wave is reported incomplete and its runs are exploratory."
+        ],
+        "egi/kimi-k3": "9d8e9a88f681",
+        "nrp/minimax-m2": "c51dbbd045fe",
+        "nrp/deepseek-v4-flash": "19d1ce27d8bf",
+        "nrp/qwen3-small": "2d5db70ad762"
+      },
+      "arms_compared": {
+        "_comment": [
+          "As wave 8 (results/wave9/README.md): primary env+skill-michele against env+skill,",
+          "secondary each skill against env-only, strata model x subject (wave_report.py); tested",
+          "secondary outcomes minutes to a passing output and log tokens, B against A, permutation",
+          "tests within strata."
+        ],
+        "primary": [
+          "env+skill-michele",
+          "env+skill"
+        ],
+        "secondary": [
+          [
+            "env+skill",
+            "env-only"
+          ],
+          [
+            "env+skill-michele",
+            "env-only"
+          ]
+        ]
+      },
+      "rules": {
+        "_comment": [
+          "As in wave 8: a process the memory watch stops is part of its run; a run stopped before",
+          "the agent by the key proxy, or whose proxy summary is missing, is a harness fault and",
+          "re-run (dispatch.py proxy-failed, proxy-summary)."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "tasks": {
+        "structural-brain-extraction-7t-nodura@sub-025": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-025",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-7t-nodura@sub-045": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-045",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-7t-nodura@sub-075": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "sub-075",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction@sub-0008": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0008",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction@sub-0023": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0023",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction@sub-0039": {
+          "family": "structural-brain-extraction",
+          "subject": "sub-0039",
+          "models": [
+            "egi/kimi-k3",
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash",
+            "nrp/qwen3-small"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        }
+      },
+      "reps": 7,
+      "_comment_design": [
+        "Wave 8's design, unchanged, on the providers' serving builds of 2026-11-05: 2 tasks x 3",
+        "subjects x 4 models x 3 arms x 7 reps = 504 runs; the same subjects, cell order and held-out",
+        "subjects (sub-0004, sub-0025) as waves 7 and 8."
+      ]
     }
   }
 }
