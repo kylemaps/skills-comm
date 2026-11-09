@@ -27,16 +27,26 @@ class FakeGh:
     set up; dispatch_run/dispatch_assemble record the fields instead of calling
     gh for real."""
 
-    def __init__(self, runs, jobs_by_run, logs_by_job):
+    def __init__(self, runs, jobs_by_run, logs_by_job, assemble_runs=None, record=False):
         self.runs = runs
         self.jobs_by_run = jobs_by_run
         self.logs_by_job = logs_by_job
+        self.assemble_runs = assemble_runs
+        self.record = record  # a dispatch creates a queued run, as GitHub does
+        self.next_id = 900
         self.dispatched_run = []
         self.dispatched_assemble = []
         self.log_reads = []  # job ids job_log() was actually called for
 
     def run_list(self, workflow, since=None):
+        if workflow == "assemble.yml" and self.assemble_runs is not None:
+            return list(self.assemble_runs)
         return list(self.runs)
+
+    def _new_run(self):
+        self.next_id += 1
+        return {"id": self.next_id, "status": "queued", "conclusion": None,
+                "created_at": "2026-11-07T09:00:00Z"}
 
     def jobs(self, run_id):
         return list(self.jobs_by_run.get(run_id, []))
@@ -47,9 +57,13 @@ class FakeGh:
 
     def dispatch_run(self, fields):
         self.dispatched_run.append(dict(fields))
+        if self.record:
+            self.runs.append(self._new_run())
 
     def dispatch_assemble(self, fields):
         self.dispatched_assemble.append(dict(fields))
+        if self.record:
+            self.assemble_runs.append(self._new_run())
 
 
 def job(name, jid, status="completed", conclusion="success", runner="r1"):
@@ -115,6 +129,122 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(rc2, 0)
         self.assertEqual(len(state2["dispatched"]), 0)
         self.assertIn("1:1", state2["in_flight"])
+
+    # (b2) a run whose plan job has not run yet shows no "rep ..." job: its
+    # pairs are invisible, so nothing is dispatched until its jobs appear.
+    def test_run_without_its_jobs_yet_holds_every_dispatch(self):
+        order = d.read_order(self.order_path([
+            "1 taskA EGI.kimi-k3 env-only",
+            "2 taskB EGI.kimi-k3 env-only",
+        ]))
+        blocks = d.read_plan(self.plan_path(["taskA reps=1 cells=1", "taskB reps=1 cells=2"]), order)
+        run = {"id": 201, "status": "queued", "conclusion": None, "created_at": "2026-11-07T01:56:43Z"}
+        plan_job = job("plan", 2001, status="queued", conclusion=None, runner="")
+        gh = FakeGh(runs=[run], jobs_by_run={201: [plan_job]}, logs_by_job={})
+        rc, state = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=True)
+        self.assertEqual(rc, 0)                      # not a stall: something is in flight
+        self.assertEqual(state["dispatched"], [])
+        self.assertTrue(any(x.startswith("HOLD every block: run 201") for x in state["log"]))
+
+        # A run with no jobs at all (pending in its concurrency group) holds too.
+        pending = {"id": 202, "status": "pending", "conclusion": None, "created_at": "2026-11-07T02:02:51Z"}
+        gh_p = FakeGh(runs=[pending], jobs_by_run={}, logs_by_job={})
+        rc_p, state_p = d.poll(gh_p, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=True)
+        self.assertEqual((rc_p, state_p["dispatched"]), (0, []))
+
+        # Once its rep job shows, its pair is in flight and the other block goes.
+        rep_job = job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 2002, status="queued", conclusion=None, runner="")
+        gh2 = FakeGh(runs=[run], jobs_by_run={201: [job("plan", 2001), rep_job]}, logs_by_job={})
+        rc2, state2 = d.poll(gh2, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=True)
+        self.assertEqual(rc2, 0)
+        self.assertEqual(len(state2["dispatched"]), 1)
+        self.assertIn("taskB", state2["dispatched"][0])
+        self.assertIn("1:1", state2["in_flight"])
+
+        # A finished run with no jobs (cancelled before it started) holds nothing.
+        cancelled = {"id": 203, "status": "completed", "conclusion": "cancelled", "created_at": "2026-11-07T02:02:56Z"}
+        gh3 = FakeGh(runs=[cancelled], jobs_by_run={}, logs_by_job={})
+        rc3, state3 = d.poll(gh3, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=True)
+        self.assertEqual(len(state3["dispatched"]), 2)
+
+    # (b3) a blind run this dispatcher sent is its remembered block: only that
+    # task waits, every other lane still fills.
+    def test_remembered_blind_run_holds_only_its_task(self):
+        order = d.read_order(self.order_path([
+            "1 taskA EGI.kimi-k3 env-only",
+            "2 taskB EGI.kimi-k3 env-only",
+        ]))
+        blocks = d.read_plan(self.plan_path(["taskA reps=1 cells=1", "taskB reps=1 cells=2"]), order)
+        run = {"id": 301, "status": "queued", "conclusion": None, "created_at": "2026-11-07T05:11:07Z"}
+        gh = FakeGh(runs=[run], jobs_by_run={301: [job("plan", 3001, status="queued", conclusion=None, runner="")]},
+                    logs_by_job={})
+        sent = {"301": {"task": "taskA", "pairs": [[1, 1]]}}
+        rc, state = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=True, sent_runs=sent)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(state["dispatched"]), 1)
+        self.assertIn("taskB", state["dispatched"][0])
+        self.assertIn("1:1", state["in_flight"])
+        self.assertFalse(any(x.startswith("HOLD") for x in state["log"]))
+        self.assertEqual(state["sent_runs"], sent)
+
+    # (b4) what a poll sends is remembered by run id, in send order, and forgotten
+    # once the run's jobs show.
+    def test_sent_runs_are_remembered_then_forgotten(self):
+        order = d.read_order(self.order_path([
+            "1 taskA EGI.kimi-k3 env-only",
+            "2 taskB EGI.kimi-k3 env-only",
+        ]))
+        blocks = d.read_plan(self.plan_path(["taskA reps=1 cells=1", "taskB reps=1 cells=2"]), order)
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={}, record=True)
+        rc, state = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=False)
+        self.assertEqual(len(gh.dispatched_run), 2)
+        sent = state["sent_runs"]
+        self.assertEqual(sorted(sent), ["901", "902"])
+        self.assertEqual({sent["901"]["task"], sent["902"]["task"]}, {"taskA", "taskB"})
+
+        # Next poll: both runs still blind, both remembered: no HOLD, no second send.
+        rc2, state2 = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=False, sent_runs=sent)
+        self.assertEqual(len(gh.dispatched_run), 2)
+        self.assertFalse(any(x.startswith("HOLD") for x in state2["log"]))
+        self.assertEqual(sorted(state2["in_flight"]), ["1:1", "2:1"])
+
+        # The taskA run shows its rep job: it is forgotten, its pair is in flight from the job.
+        rid_a = [k for k, v in sent.items() if v["task"] == "taskA"][0]
+        gh.jobs_by_run[int(rid_a)] = [job("plan", 9001), job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 9002,
+                                                              status="in_progress", conclusion=None)]
+        rc3, state3 = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=1), lanes=6, dry_run=False,
+                             sent_runs=state2["sent_runs"])
+        self.assertNotIn(rid_a, state3["sent_runs"])
+        self.assertEqual(len(state3["sent_runs"]), 1)
+        self.assertEqual(sorted(state3["in_flight"]), ["1:1", "2:1"])
+        self.assertEqual(len(gh.dispatched_run), 2)
+
+    # (b5) an assemble run sent for a cell is not sent again while it is queued
+    # or running; once it ends without publishing, the cell is sent again.
+    def test_assemble_not_sent_twice_while_queued(self):
+        order = d.read_order(self.order_path(["1 taskA EGI.kimi-k3 env-only"]))
+        blocks = d.read_plan(self.plan_path([]), order)
+        run1 = {"id": 201, "status": "completed", "conclusion": "success", "created_at": "2026-10-22T00:00:00Z"}
+        jobs, logs = [], {}
+        for rep in range(1, 4):
+            jid = 2000 + rep
+            jobs.append(job("rep %d taskA neurodesk/EGI.kimi-k3 env-only" % rep, jid))
+            logs[jid] = outcome_log("completed")
+        gh = FakeGh(runs=[run1], jobs_by_run={201: jobs}, logs_by_job=logs, assemble_runs=[], record=True)
+        rc, state = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=3), lanes=4, dry_run=False)
+        self.assertEqual(len(gh.dispatched_assemble), 1)
+        self.assertEqual(list(state["sent_assembles"]), ["1"])
+
+        rc2, state2 = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=3), lanes=4, dry_run=False,
+                             sent_assembles=state["sent_assembles"])
+        self.assertEqual(len(gh.dispatched_assemble), 1)
+        self.assertEqual(rc2, 0)
+        self.assertTrue(any(x.startswith("WAIT assemble cell 1") for x in state2["log"]))
+
+        gh.assemble_runs[0]["status"], gh.assemble_runs[0]["conclusion"] = "completed", "failure"
+        rc3, state3 = d.poll(gh, "o/r", 9, order, blocks, self.wave(reps=3), lanes=4, dry_run=False,
+                             sent_assembles=state2["sent_assembles"])
+        self.assertEqual(len(gh.dispatched_assemble), 2)
 
     # (c) Q75: a block nobody has dispatched yet must not read as a stall.
     def test_undispatched_block_is_not_a_stall(self):
@@ -285,6 +415,17 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(d.classify_job(gh, j1), ("rerun", "upload-eacces"))
         quoted = "2026-11-01T04:00:00.0000000Z   | ##[error]EACCES: permission denied, scandir '/x'"
         gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={5002: quoted + "\n" + outcome})
+        self.assertEqual(d.classify_job(gh, j1), ("valid", "completed"))
+
+    def test_finished_run_whose_upload_refused_a_path_is_a_rerun(self):
+        j1 = job("rep 4 taskA nrp/minimax-m2 env+skill-michele", 6004, conclusion="failure")
+        outcome = "2026-11-06T07:09:40.1000000Z agent_outcome=completed run=taskA__nrp-minimax-m2__env+skill-michele__r4"
+        upload = ("2026-11-06T07:10:18.2912027Z ##[error]The path for one of the files in artifact is not valid:"
+                  " /runs/x/r4/mamba/envs/afnifull/lib/a:b")
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={6004: outcome + "\n" + upload})
+        self.assertEqual(d.classify_job(gh, j1), ("rerun", "upload-path"))
+        quoted = "2026-11-06T07:00:00.0000000Z   | ##[error]The path for one of the files in artifact is not valid: /x"
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={6004: quoted + "\n" + outcome})
         self.assertEqual(d.classify_job(gh, j1), ("valid", "completed"))
 
     # The key proxy refused the lock before the agent: the pod's fault, re-run the pair.

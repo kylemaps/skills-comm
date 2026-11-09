@@ -19,7 +19,13 @@ line when present, else its conclusion and the legacy log patterns. A pair is
 *owed* when it has no valid run and nothing in flight; a block is dispatched
 only when some of its pairs are owed, so a block nobody has touched yet still
 counts as owed (not a stall) and a block whose re-run is already queued does
-not get a second one.
+not get a second one. A run whose jobs are not visible yet (its plan job has
+not run: it waits for a hosted runner, sometimes minutes) is matched to the
+block this dispatcher sent it with (--state-in remembers sent runs): its pairs
+count as in flight and only its task waits. A run with no visible jobs that
+no remembered poll sent could hold any block, so while one exists the poll
+dispatches nothing. An assemble run sent for a cell is remembered the same
+way: no second one while it is queued or running.
 
 Exit 0  continue (something dispatched, assembled, or still in flight)
      10 wave complete (every non-incomplete cell is already published)
@@ -34,6 +40,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from collections import Counter, namedtuple
 
 from model_ids import opencode_id, segment, wave_id
@@ -73,6 +80,10 @@ PROXY_INVALID_RE = re.compile(
 # uploaded even though the agent finished.
 UPLOAD_EACCES_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[error\]EACCES: permission denied, scandir ", re.M)
+# The same when a file in the run tree has a name the artifact service refuses
+# (a colon, a quote, ...): no artifact was uploaded, though the agent finished.
+UPLOAD_PATH_RE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[error\]The path for one of the files in artifact is not valid", re.M)
 OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
 # Among completed jobs with no "Agent outcome" line, the worst classification
 # any single attempt reached wins (see _merge).
@@ -249,6 +260,8 @@ def classify_job(gh, job):
         # assemble: a harness error, re-run under the same rep.
         if UPLOAD_EACCES_RE.search(log):
             return "rerun", "upload-eacces"
+        if UPLOAD_PATH_RE.search(log):
+            return "rerun", "upload-path"
         if PROXY_INVALID_RE.search(log):
             return "rerun", "proxy-summary"
         return "valid", outcome
@@ -460,6 +473,32 @@ def _state(wave, lanes, pair_status, acked_lost, owed, in_flight, dispatched, as
     }
 
 
+def _match_new_runs(gh, workflow, since, before, entries, log):
+    """Run ids of the runs this poll just created, matched to `entries` in the
+    order they were sent (run ids grow with creation). {} when the count does
+    not match: such runs then hold every block until their jobs show."""
+    new = []
+    for _ in range(4):
+        new = sorted(r["id"] for r in gh.run_list(workflow, since=since) if r["id"] not in before)
+        if len(new) >= len(entries):
+            break
+        time.sleep(3)  # a run just created can take a moment to be listed
+    if len(new) != len(entries):
+        log.append("NOTE %s: %d new runs for %d sent; not remembered" % (workflow, len(new), len(entries)))
+        return {}
+    return {str(rid): e for rid, e in zip(new, entries)}
+
+
+def load_sent(path):
+    """The runs a previous poll sent and still remembers, for --state-in."""
+    if not path:
+        return {}, {}
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return (dict(data.get("sent_runs") or {}),
+            {k: int(v) for k, v in (data.get("sent_assembles") or {}).items()})
+
+
 def load_job_cache(path):
     """The job_cache a previous poll's --state-json wrote, for --state-in."""
     if not path:
@@ -471,13 +510,16 @@ def load_job_cache(path):
 
 def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
          results_dir=None, dry_run=True, snapshot="", capability="brain-extraction",
-         job_cache=None, provider_caps=None, arm_snapshots=None):
+         job_cache=None, provider_caps=None, arm_snapshots=None, sent_runs=None,
+         sent_assembles=None):
     """One stateless poll. Returns (exit_code, state). provider_caps: provider ->
     most jobs in flight at once (sweep.json providers.<p>.max_in_flight); a block
     that could push a provider over its cap waits for a later poll. arm_snapshots:
     skill arm -> snapshot (arm_snapshots_of); a block with no skill arm gets
     `snapshot`."""
     provider_caps = provider_caps or {}
+    sent_runs = dict(sent_runs or {})            # str(run id) -> {"task", "pairs"}
+    sent_assembles = dict(sent_assembles or {})  # str(cell) -> run id
     log = []
     job_cache = dict(job_cache or {})
     incomplete = wave_sweep["incomplete"]
@@ -508,6 +550,14 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
 
     runs = gh.run_list("run.yml", since=since)
     jobs_by_run = {r["id"]: gh.jobs(r["id"]) for r in runs}
+    # An unfinished run with no "rep ..." job yet carries pairs this poll cannot
+    # see; dispatching now could send its block a second time.
+    blind = sorted(r["id"] for r in runs if r["status"] != "completed"
+                   and not any(JOB_RE.match(j["name"]) for j in jobs_by_run[r["id"]]))
+    # A blind run this dispatcher sent is its remembered block: those pairs are in
+    # flight and its task waits. Only a blind run nobody remembers holds everything.
+    sent_runs = {k: v for k, v in sent_runs.items() if int(k) in blind}
+    unknown_blind = [rid for rid in blind if str(rid) not in sent_runs]
 
     for run in runs:
         for job in jobs_by_run[run["id"]]:
@@ -533,6 +583,12 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
                 job_cache[jid] = (kind, detail)
             pair_status[pair] = _merge(pair_status.get(pair), kind)
 
+    for entry in sent_runs.values():
+        for cell, rep in entry["pairs"]:
+            pair = (int(cell), int(rep))
+            if pair_status.get(pair) != "valid":
+                pair_status[pair] = _merge(pair_status.get(pair), "in-flight")
+
     # Acknowledge what sweep.json already declares: a fingerprint-changed job on
     # a model already marked incomplete, or a lost-candidate job already in
     # `lost`, needs no human and no re-run.
@@ -549,8 +605,10 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
             reasons.append("cell %d rep %d (%s %s %s): %s" % (cell, rep, task, model, arm, status))
 
     if reasons:
-        return 20, _state(wave, lanes, pair_status, acked_lost, set(), set(), [], [], reasons,
-                          log, job_cache, published_cells)
+        st = _state(wave, lanes, pair_status, acked_lost, set(), set(), [], [], reasons,
+                    log, job_cache, published_cells)
+        st["sent_runs"], st["sent_assembles"] = sent_runs, sent_assembles
+        return 20, st
 
     # In flight is read off every job seen, regardless of the plan: a run
     # dispatched out of band is still a reason not to dispatch another. Owed is
@@ -575,13 +633,15 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
     owed_by_task = {}
     for cell, rep in owed:
         owed_by_task.setdefault(order[cell][0], []).append((cell, rep))
-    free = max(0, lanes - len(active_tasks))
+    free = 0 if unknown_blind else max(0, lanes - len(active_tasks))
+    if unknown_blind:
+        log.append("HOLD every block: run %s has not shown its jobs yet" % ", ".join(str(i) for i in unknown_blind))
     ranked = sorted(owed_by_task, key=lambda t: (-len(owed_by_task[t]), t))
     # Jobs in flight per provider, read off every in-flight pair; what this poll
     # dispatches is added as it goes, so two blocks cannot share one cap's room.
     flight = Counter(provider_of(order[c][1]) for c, _ in in_flight)
 
-    dispatched = []
+    dispatched, sent_blocks = [], []
     for task in [t for t in ranked if t not in active_tasks]:
         if len(dispatched) >= free:
             break
@@ -605,10 +665,20 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
         log.append(("DRY " if dry_run else "") + cmd)
         if not dry_run:
             gh.dispatch_run(fields)
+            sent_blocks.append({"task": task, "pairs": [[c, r] for c in block.cells for r in block.reps]})
+    if sent_blocks:
+        sent_runs.update(_match_new_runs(gh, "run.yml", since, {r["id"] for r in runs}, sent_blocks, log))
 
-    assembled = []
+    assembled, sent_cells, asm_before = [], [], None
+    asm_runs = gh.run_list("assemble.yml", since=since) if sent_assembles else []
+    asm_open = {r["id"] for r in asm_runs if r["status"] != "completed"}
+    sent_assembles = {k: v for k, v in sent_assembles.items()
+                      if v in asm_open and int(k) not in published_cells}
     for cell, (task, model, arm) in order.items():
         if model in incomplete or cell in published_cells:
+            continue
+        if str(cell) in sent_assembles:
+            log.append("WAIT assemble cell %d: run %s not finished" % (cell, sent_assembles[str(cell)]))
             continue
         done = sum(1 for rep in range(1, reps_total + 1)
                    if pair_status.get((cell, rep)) == "valid" or (cell, rep) in acked_lost)
@@ -622,11 +692,18 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
         assembled.append(cmd)
         log.append(("DRY " if dry_run else "") + cmd)
         if not dry_run:
+            if asm_before is None:
+                asm_before = {r["id"] for r in gh.run_list("assemble.yml", since=since)}
             gh.dispatch_assemble(fields)
+            sent_cells.append(cell)
+    if sent_cells:
+        got = _match_new_runs(gh, "assemble.yml", since, asm_before, [{"cell": c} for c in sent_cells], log)
+        sent_assembles.update({str(v["cell"]): int(k) for k, v in got.items()})
 
     state = _state(wave, lanes, pair_status, acked_lost, owed, in_flight, dispatched, assembled,
                    [], log, job_cache, published_cells)
-    if dispatched or assembled or in_flight:
+    state["sent_runs"], state["sent_assembles"] = sent_runs, sent_assembles
+    if dispatched or assembled or in_flight or blind or sent_assembles:
         return 0, state
     if not owed:
         return 30, state
@@ -663,6 +740,7 @@ def main(argv=None):
     blocks = read_plan(a.plan, order)
     gh = Gh(a.repo)
     job_cache = load_job_cache(a.state_in)
+    sent_runs, sent_assembles = load_sent(a.state_in)
 
     provider_caps = {name: int(p["max_in_flight"]) for name, p in (sweep.get("providers") or {}).items()
                      if not name.startswith("_") and "max_in_flight" in p}
@@ -670,7 +748,8 @@ def main(argv=None):
     rc, state = poll(gh, a.repo, a.wave, order, blocks, wave_sweep, lanes,
                      since=a.since, results_dir=a.results, dry_run=a.dry_run,
                      snapshot=a.snapshot, capability=a.capability, job_cache=job_cache,
-                     provider_caps=provider_caps, arm_snapshots=arm_snapshots_of(sweep))
+                     provider_caps=provider_caps, arm_snapshots=arm_snapshots_of(sweep),
+                     sent_runs=sent_runs, sent_assembles=sent_assembles)
 
     declared = sum(1 for _, m, _ in order.values() if m not in wave_sweep["incomplete"])
     for line in state["log"]:
