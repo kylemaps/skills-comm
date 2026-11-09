@@ -2,7 +2,7 @@
 
   <task>             a task with one reference: structural-mni-registration
   <task>@<subject>   a task graded per subject, run for one subject of its list:
-                     structural-brain-extraction@sub-0004
+                     some-task@sub-01
 
 The run id stands wherever a task id did: run.yml's task input, sweep.json's wave
 tasks, run directories (<run id>__<model>__<arm>__r<n>), artifact names, the runs
