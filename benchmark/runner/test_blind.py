@@ -122,6 +122,34 @@ class HeaderBlanking(unittest.TestCase):
         self.assertEqual(z[4:8], b"\0\0\0\0")       # MTIME 0
 
 
+class CaseTable(unittest.TestCase):
+    def test_the_case_table_leaves_no_copy_behind(self):
+        """resolve() reads cases.json through a cache of its own and deletes it."""
+        import types
+        seen = {}
+
+        def fake_download(repo_id, repo_type, filename, revision, cache_dir):
+            seen["cache"] = cache_dir
+            p = os.path.join(cache_dir, "snap", filename)
+            os.makedirs(os.path.dirname(p))
+            json.dump({"cases": {"case-288": {"task": "t", "subject": "sub-0004"}}}, open(p, "w"))
+            return p
+
+        real = sys.modules.get("huggingface_hub")
+        sys.modules["huggingface_hub"] = types.SimpleNamespace(hf_hub_download=fake_download)
+        try:
+            got = fetch_input.resolve("org/data", "rev", "case-288")
+            self.assertEqual(got["subject"], "sub-0004")
+            self.assertFalse(os.path.exists(seen["cache"]))
+            with self.assertRaises(SystemExit):
+                fetch_input.resolve("org/data", "rev", "case-999")
+        finally:
+            if real is None:
+                sys.modules.pop("huggingface_hub", None)
+            else:
+                sys.modules["huggingface_hub"] = real
+
+
 class BlindCheck(unittest.TestCase):
     def run_check(self, work, env_extra=None, *args):
         env = dict(os.environ, BLIND_SUBJECT="sub-0008", BLIND_DATASET="ds002790", **(env_extra or {}))

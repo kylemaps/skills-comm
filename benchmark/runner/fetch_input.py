@@ -30,6 +30,7 @@ import json
 import os
 import struct
 import sys
+import tempfile
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,9 +42,16 @@ NIFTI2_TEXT = [(240, 80), (320, 24), (508, 16)]               # descrip, aux_fil
 
 
 def resolve(repo, revision, case):
+    """The case's entry in the gated cases.json. The table maps every case to its
+    subject, so it is read through a cache of its own, deleted before this returns: the
+    Hub's default cache (under HF_HOME or XDG_CACHE_HOME) would leave it on disk for
+    the agent that runs next."""
     from huggingface_hub import hf_hub_download
-    got = hf_hub_download(repo_id=repo, repo_type="dataset", filename="cases.json", revision=revision)
-    cases = json.load(open(got, encoding="utf-8"))["cases"]
+    with tempfile.TemporaryDirectory(prefix="cases-") as cache:
+        got = hf_hub_download(repo_id=repo, repo_type="dataset", filename="cases.json",
+                              revision=revision, cache_dir=cache)
+        with open(got, encoding="utf-8") as fh:
+            cases = json.load(fh)["cases"]
     if case not in cases:
         sys.exit("FAIL: %s is not a case of the reference dataset at %s" % (case, revision))
     return cases[case]
