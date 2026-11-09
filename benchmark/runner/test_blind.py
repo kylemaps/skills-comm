@@ -1,5 +1,5 @@
 """The blinded-run pieces, without the network: run ids, the prompt, the header
-blanking, the blind check."""
+blanking, the blind check. Case ids here are below case-100, which real cases never use."""
 import gzip
 import json
 import os
@@ -52,11 +52,11 @@ def nifti2(descrip=b""):
 
 class RunIds(unittest.TestCase):
     def test_a_case_is_recognised_and_splits_like_a_subject(self):
-        self.assertTrue(run_ids.is_case("case-288"))
-        for bad in ("sub-0008", "case-28", "case-2880", "case-abc", "", None):
+        self.assertTrue(run_ids.is_case("case-012"))
+        for bad in ("sub-0008", "case-28", "case-0120", "case-abc", "", None):
             self.assertFalse(run_ids.is_case(bad))
-        self.assertEqual(run_ids.split("structural-brain-extraction@case-288"), ("structural-brain-extraction", "case-288"))
-        self.assertEqual(run_ids.output_rel("t@case-288"), "submissions/t/case-288/output.nii.gz")
+        self.assertEqual(run_ids.split("structural-brain-extraction@case-012"), ("structural-brain-extraction", "case-012"))
+        self.assertEqual(run_ids.output_rel("t@case-012"), "submissions/t/case-012/output.nii.gz")
 
 
 class Prompt(unittest.TestCase):
@@ -69,11 +69,11 @@ class Prompt(unittest.TestCase):
         return r.returncode, r.stdout, r.stderr
 
     def test_a_case_gets_an_input_line_and_no_dataset_line(self):
-        rc, out, err = self.render("structural-brain-extraction@case-288")
+        rc, out, err = self.render("structural-brain-extraction@case-012")
         self.assertEqual(rc, 0, err)
-        self.assertIn("image of case-288", out)
-        self.assertIn("INPUT: a T1-weighted MRI of the head, already in your working directory at `input/case-288/anat/T1w.nii.gz`", out)
-        self.assertIn("submissions/structural-brain-extraction/case-288/output.nii.gz", out)
+        self.assertIn("image of case-012", out)
+        self.assertIn("INPUT: a T1-weighted MRI of the head, already in your working directory at `input/case-012/anat/T1w.nii.gz`", out)
+        self.assertIn("submissions/structural-brain-extraction/case-012/output.nii.gz", out)
         for s in ("DATASET", "ds002790", "sub-0004", "sub-0008", "openneuro", "Fetch it yourself"):
             self.assertNotIn(s, out)
 
@@ -89,7 +89,7 @@ class Prompt(unittest.TestCase):
         self.assertIn("not a subject", err)
 
     def test_a_case_of_a_task_without_an_input_spec_is_refused(self):
-        rc, _, err = self.render("diffusion-brain-mask@case-893")
+        rc, _, err = self.render("diffusion-brain-mask@case-013")
         self.assertEqual(rc, 1)
         self.assertIn("input_spec.json", err)
 
@@ -132,17 +132,17 @@ class CaseTable(unittest.TestCase):
             seen["cache"] = cache_dir
             p = os.path.join(cache_dir, "snap", filename)
             os.makedirs(os.path.dirname(p))
-            json.dump({"cases": {"case-288": {"task": "t", "subject": "sub-0004"}}}, open(p, "w"))
+            json.dump({"cases": {"case-012": {"task": "t", "subject": "sub-a"}}}, open(p, "w"))
             return p
 
         real = sys.modules.get("huggingface_hub")
         sys.modules["huggingface_hub"] = types.SimpleNamespace(hf_hub_download=fake_download)
         try:
-            got = fetch_input.resolve("org/data", "rev", "case-288")
-            self.assertEqual(got["subject"], "sub-0004")
+            got = fetch_input.resolve("org/data", "rev", "case-012")
+            self.assertEqual(got["subject"], "sub-a")
             self.assertFalse(os.path.exists(seen["cache"]))
             with self.assertRaises(SystemExit):
-                fetch_input.resolve("org/data", "rev", "case-999")
+                fetch_input.resolve("org/data", "rev", "case-099")
         finally:
             if real is None:
                 sys.modules.pop("huggingface_hub", None)
@@ -158,9 +158,9 @@ class BlindCheck(unittest.TestCase):
                            capture_output=True, text=True, env=env)
         return r.returncode, r.stdout
 
-    def make(self, work, descrip=b"", name="T1w.nii.gz", prompt="TASK: case-288\n"):
-        os.makedirs(os.path.join(work, "input", "case-288", "anat"))
-        with open(os.path.join(work, "input", "case-288", "anat", name), "wb") as f:
+    def make(self, work, descrip=b"", name="T1w.nii.gz", prompt="TASK: case-012\n"):
+        os.makedirs(os.path.join(work, "input", "case-012", "anat"))
+        with open(os.path.join(work, "input", "case-012", "anat", name), "wb") as f:
             f.write(fetch_input.neutral_gzip(nifti1(descrip=descrip)))
         open(os.path.join(work, "prompt.txt"), "w").write(prompt)
 
@@ -187,7 +187,7 @@ class BlindCheck(unittest.TestCase):
 
     def test_dataset_in_the_prompt_fails(self):
         with tempfile.TemporaryDirectory() as w:
-            self.make(w, prompt="TASK: case-288 from ds002790\n")
+            self.make(w, prompt="TASK: case-012 from ds002790\n")
             rc, out = self.run_check(w)
             self.assertEqual(rc, 1)
 
