@@ -971,7 +971,8 @@
       ],
       "incomplete": {
         "_comment": ["As in wave 8."],
-        "nrp/qwen3-small": "fingerprint changed during the wave (d33e6b4ca4c4, served on vllm-0.33.0-tp4, first seen 2026-11-05 02:03 UTC; its name reaches pods of two serving setups)"
+        "nrp/qwen3-small": "fingerprint changed during the wave (d33e6b4ca4c4, served on vllm-0.33.0-tp4, first seen 2026-11-05 02:03 UTC; its name reaches pods of two serving setups)",
+        "egi/kimi-k3": "fingerprint changed during the wave (c39a1173c038, served on vllm-0.1.dev24216+g266e88c05-tp8, first seen 2026-11-05 23:47 UTC)"
       },
       "model_fingerprints": {
         "_comment": [
