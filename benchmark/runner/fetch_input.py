@@ -2,8 +2,8 @@
 """Fetch a blinded run's input: the case's scan, handed over under a neutral name.
 
     HF_TOKEN=... python3 fetch_input.py --task TASK --case case-NNN --dest DIR \\
-        --cases-repo neurodeskorg/skills-comm-ground-truth --cases-revision REV \\
-        --dataset ds002790 --version 2.0.0 [--record FILE]
+        --cases-repo ORG/DATASET --cases-revision REV \\
+        --dataset DATASET_ID --version VERSION [--record FILE] [--export-env FILE]
 
 Resolves the case to its subject through the gated cases.json (the reference dataset,
 at the pinned revision), walks the subject's files in the dataset's pinned OpenNeuro
@@ -17,8 +17,8 @@ header carries the subject or the dataset. No JSON sidecar is shipped.
 
 Prints one line per shipped file (the neutral name, its size and sha256) and, with
 --record, writes the same as JSON. Nothing printed names the subject. The subject is
-exported for the blind check through BLIND_SUBJECT only if --export-env is given, as a
-line `BLIND_SUBJECT=...` on a file descriptor of the caller's choosing (see run.yml);
+handed to the blind check only through --export-env FILE: one line `BLIND_SUBJECT=...`
+in a file only the owner can read, which the caller sources and deletes (see run.yml);
 it is never printed to stdout.
 """
 import argparse
@@ -152,7 +152,7 @@ def main(argv=None):
     ap.add_argument("--version", required=True, help="the task's version pin, from tasks.json")
     ap.add_argument("--spec", default=os.path.join(HERE, "input_spec.json"))
     ap.add_argument("--record", help="write the shipped-file record here (JSON)")
-    ap.add_argument("--export-env", type=int, help="file descriptor to write BLIND_SUBJECT=<subject> to")
+    ap.add_argument("--export-env", help="write BLIND_SUBJECT=<subject> to this file (mode 600)")
     a = ap.parse_args(argv)
 
     spec = json.load(open(a.spec, encoding="utf-8")).get(a.task)
@@ -186,8 +186,9 @@ def main(argv=None):
     if a.record:
         with open(a.record, "w", encoding="utf-8") as fh:
             json.dump(record, fh, indent=1)
-    if a.export_env is not None:
-        with os.fdopen(a.export_env, "w") as fh:
+    if a.export_env:
+        fd = os.open(a.export_env, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
             fh.write("BLIND_SUBJECT=%s\n" % subject)
     return 0
 
