@@ -771,6 +771,20 @@ if rec["output_present"] and rec.get("start"):
 # A brain mask holds hundreds of thousands of voxels at the least; an output written
 # only to fill the path can hold one.
 rec["output_voxels"] = _nifti_voxels(out) if rec["output_present"] else None
+
+# A blinded run: what the harness handed over (fetch_input.py's record: the neutral
+# names, sizes and digests, no subject), and whether the agent ever named the subject
+# anyway, in the transcript or a script it wrote. The subject arrives through the
+# environment (BLIND_SUBJECT, set by the grading step, which knows it) and is never
+# written to the record; only the fact is.
+_inp = os.path.join(run_dir, "input.json")
+rec["input"] = json.load(open(_inp, encoding="utf-8")) if os.path.isfile(_inp) else None
+_blind = os.environ.get("BLIND_SUBJECT", "")
+if _blind:
+    _hay = (txt or "") + "\n".join(_script_lines[".sh"] + _script_lines[".py"])
+    rec["subject_named"] = _blind in _hay
+elif "subject_named" not in rec:
+    rec["subject_named"] = None
 _last = _final_text(run_dir)
 _ask = ASK_RE.search(_last or "")
 rec["final_ask"] = None if _last is None else (

@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "What a blinded run receives as its input, per task: which of the subject's files the",
+    "harness fetches from the dataset (a glob relative to the subject's directory; it must",
+    "match exactly one file), the neutral name it is handed over under (relative to",
+    "input/<case>/), and the one sentence the prompt says about the scan. No subject,",
+    "session or dataset name reaches the agent: the neutral names carry none, the NIfTI",
+    "header's descriptive fields are blanked and the JSON sidecar is not shipped."
+  ],
+  "structural-brain-extraction": {
+    "files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a T1-weighted MRI of the head"
+  },
+  "structural-brain-extraction-pediatric": {
+    "files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a T1-weighted MRI of a child's head"
+  },
+  "structural-brain-extraction-motion": {
+    "files": [{"match": "anat/{subject}_acq-headmotion2_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a T1-weighted MRI of the head, acquired while the head moved"
+  },
+  "structural-brain-extraction-7t": {
+    "files": [{"match": "ses-*/anat/{subject}_ses-*_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a 7T MP2RAGE T1-weighted (UNI) image of the head"
+  },
+  "structural-brain-extraction-7t-nodura": {
+    "files": [{"match": "ses-*/anat/{subject}_ses-*_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a 7T MP2RAGE T1-weighted (UNI) image of the head"
+  }
+}

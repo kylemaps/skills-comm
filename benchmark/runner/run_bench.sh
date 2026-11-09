@@ -184,6 +184,11 @@ mkdir -p "$BENCH_HOME/runs" "$BENCH_HOME/work"
 WORK=$(mktemp -d "$BENCH_HOME/work/run-XXXXXX") && WORK=$(cd "$WORK" && pwd -P) \
   && [ -n "$WORK" ] || {
   echo "FATAL: could not create a working directory under $BENCH_HOME/work" >&2; exit 1; }
+# A blinded run's input, staged by fetch_input.py before this script ran, moves into
+# the working directory under the case id, where the prompt says it is.
+if [ -d "$BENCH_HOME/input" ]; then
+  mv "$BENCH_HOME/input" "$WORK/input" || { echo "FATAL: could not stage the input" >&2; exit 1; }
+fi
 
 # The run record, prompt and transcript are kept outside the agent's working
 # directory while it runs, under the working directory's neutral name, and moved into
@@ -211,6 +216,7 @@ land() {
   [ -f "$RECORD" ] && mv -f "$RECORD" "$RUN/run.json"
   [ -f "$PROMPT" ] && mv -f "$PROMPT" "$RUN/prompt.txt"
   [ -f "$TRANSCRIPT" ] && mv -f "$TRANSCRIPT" "$RUN/transcript.txt"
+  [ -f "$META/input.json" ] && mv -f "$META/input.json" "$RUN/input.json"
   return 0
 }
 # Processes the agent left running are stopped, so nothing changes the output or

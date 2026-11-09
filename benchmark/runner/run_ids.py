@@ -15,12 +15,22 @@ at the first '@'.
 The output path follows the task pack's contract: submissions/<task>/output.nii.gz,
 and submissions/<task>/<subject>/output.nii.gz for a subject run.
 
+A blinded run names a case in the subject's place, <task>@case-NNN (is_case): the
+agent sees the case id everywhere the subject would have been, and the steps that hold
+the gated token map it to the subject (fetch_input.py, the grader).
+
     python run_ids.py <run id>      prints task=, subject= and output=
 """
+import re
 import sys
 
 SEP = "@"
 OUTPUT = "output.nii.gz"
+CASE = re.compile(r"^case-\d{3}$")
+
+
+def is_case(subject):
+    return bool(subject) and bool(CASE.match(subject))
 
 
 def split(run_id):

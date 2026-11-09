@@ -30,7 +30,16 @@ case "$TASK" in
          || { echo "FAIL: run id '$TASK' is not <task> or <task>@<subject>" >&2; exit 1; } ;;
   *)   TASK_BASE="$TASK"; SUBJECT="" ;;
 esac
-SUBJ=(); [ -n "$SUBJECT" ] && SUBJ=(--subject "$SUBJECT")
+# A blinded run names a case (run_ids.py is_case): the grader takes --case and maps it
+# to the subject through the gated cases.json; the agent wrote under the case id, so
+# the output directory is renamed to the subject before grading (below).
+SUBJ=(); CASE=""
+if [ -n "$SUBJECT" ]; then
+  case "$SUBJECT" in
+    case-[0-9][0-9][0-9]) CASE="$SUBJECT"; SUBJ=(--case "$SUBJECT") ;;
+    *) SUBJ=(--subject "$SUBJECT") ;;
+  esac
+fi
 OUT_REL="submissions/$TASK_BASE${SUBJECT:+/$SUBJECT}/output.nii.gz"
 
 cd "$HARNESS" || { echo "no harness at $HARNESS"; exit 1; }
@@ -58,10 +67,17 @@ fi
 # A subject run is graded with --subject. A wrapper without it would read the task's
 # flat path, find nothing, and score every run zero: the missing-reference shape
 # again. Refused before anything is graded.
-if [ -n "$SUBJECT" ] && ! python grade_wrapper.py grade --help 2>/dev/null | grep -q -- '--subject'; then
-  echo "ABORT: $HARNESS/grade_wrapper.py takes no --subject; $TASK cannot be graded per subject."
+if [ -n "$SUBJECT" ] && ! python grade_wrapper.py grade --help 2>/dev/null | grep -q -- "${SUBJ[0]}"; then
+  echo "ABORT: $HARNESS/grade_wrapper.py takes no ${SUBJ[0]}; $TASK cannot be graded per subject."
   echo "       Nothing has been graded."
   exit 1
+fi
+# The subject behind the case, from the reference fetch_reference.py just selected
+# (its marker file). Never printed: the job log is not the place for it.
+REAL=""
+if [ -n "$CASE" ]; then
+  REAL=$(cat "$(sed -n 's/^reference ready: //p' "$FETCH_LOG" | tail -1)/.subject" 2>/dev/null || true)
+  [ -n "$REAL" ] || { echo "ABORT: the reference fetch did not record the case's subject."; exit 1; }
 fi
 
 TOTAL=$(ls -d "$BENCH_HOME"/runs/"$TASK"__*/ 2>/dev/null | wc -l)
@@ -85,8 +101,15 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   COND=$(basename "$d" | awk -F'__' '{print $3}')
   MODEL=$(basename "$d" | awk -F'__' '{print $2}')
   # Backfill provenance for runs made before finalize_run.py grew a field. Cheap,
-  # idempotent, and it means old runs appear in the report with full detail.
-  python "$HERE/finalize_run.py" "$d" >/dev/null 2>&1
+  # idempotent, and it means old runs appear in the report with full detail. For a
+  # blinded run the subject is passed in the environment, so the record can say
+  # whether the agent ever named it (subject_named), without the record naming it.
+  BLIND_SUBJECT="$REAL" python "$HERE/finalize_run.py" "$d" >/dev/null 2>&1
+  # The agent wrote under the case id; grade_wrapper.py reads under the subject.
+  if [ -n "$CASE" ] && [ -d "$d/submissions/$TASK_BASE/$CASE" ] && [ ! -e "$d/submissions/$TASK_BASE/$REAL" ]; then
+    mv "$d/submissions/$TASK_BASE/$CASE" "$d/submissions/$TASK_BASE/$REAL"
+    ln -s "$REAL" "$d/submissions/$TASK_BASE/$CASE"
+  fi
 
   if [ ! -f "$d/$OUT_REL" ]; then
     # No output is a failed run, not a missing one. summarize.py scores it 0.
