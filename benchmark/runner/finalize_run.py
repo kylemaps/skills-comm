@@ -538,6 +538,11 @@ _KEY_SRC = re.compile(
     r"|skills-comm-ground-truth|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)"
     r"|" + _OSF_REFS, re.I)
 _KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)|" + _OSF_REFS, re.I)
+# A published brain mask of the task's own dataset (an OpenNeuro derivatives tree, by
+# URL, S3 path or API path) is an answer in all but name: fetching one counts as a
+# source. The dataset's raw images are the task's input and do not count.
+_REF_DERIV = re.compile(
+    r"openneuro[^\s'\"]*derivatives[/:][^\s'\"]*?(?:brain[_-]?mask|brainmask|desc-brain|aseg|aparc)", re.I)
 _LISTS = ("find", "ls", "locate", "which", "echo", "printf", "mkdir", "cd", "stat")
 
 
@@ -548,13 +553,13 @@ def _key_hits():
             if _KEY_FILE.search(l):
                 hits.append(l)
         elif l.startswith("% WebFetch "):
-            if _KEY_SRC.search(l):
+            if _KEY_SRC.search(l) or _REF_DERIV.search(l):
                 hits.append(l)
         elif l.startswith("◈ "):
             if _KEY_QUERY.search(l):
                 hits.append(l)
         elif l.startswith("$ "):
-            if _KEY_SRC.search(l):
+            if _KEY_SRC.search(l) or _REF_DERIV.search(l):
                 hits.append(l)
                 continue
             for seg in re.split(r"\|\|?|;|&&", l[2:]):
@@ -563,7 +568,7 @@ def _key_hits():
                     hits.append(l)
                     break
     for l in _script_lines[".sh"] + _script_lines[".py"]:
-        if _KEY_SRC.search(l) or _KEY_FILE.search(l):
+        if _KEY_SRC.search(l) or _KEY_FILE.search(l) or _REF_DERIV.search(l):
             hits.append("script: " + l.strip())
     return sorted({h[:160] for h in hits})
 
