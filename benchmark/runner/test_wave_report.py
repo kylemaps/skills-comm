@@ -116,6 +116,18 @@ class TestWaveReportSynthetic(unittest.TestCase):
         self.assertIn("| task-a | P.m2 | 3/3 (1 lost) | 3/3 |", out)
         self.assertIn("All 8 cells complete.", out)
 
+    def test_completeness_uses_a_tasks_own_reps(self):
+        # task-b declares 4 reps over the wave's 3: its three-run cells are short.
+        with open(self.sweep_path, encoding="utf-8") as fh:
+            sweep = json.load(fh)
+        sweep["waves"]["1"]["tasks"]["task-b"]["reps"] = 4
+        with open(self.sweep_path, "w", encoding="utf-8") as fh:
+            json.dump(sweep, fh)
+        out = self.report()
+        self.assertIn("| task-a | P.m1 | 3/3 | 3/3 |", out)
+        self.assertIn("| task-b | P.m1 | 3/4 | 3/4 |", out)
+        self.assertIn("NOT COMPLETE", out)
+
     def test_headline_row_below_min_n_reports_zero_not_invented_stats(self):
         # 3 valid runs per arm is below MIN_N_FOR_STATS (5): the honest output is
         # a count of zero comparable models, not a p-value built on noise.

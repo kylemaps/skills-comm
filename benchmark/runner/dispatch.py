@@ -155,16 +155,31 @@ def read_plan(path, order):
 
 def load_wave(sweep, wave):
     """incomplete models, acknowledged lost (task/model/arm/rep) keys, and the
-    rep count: the wave's own `reps`, else the sweep's. Both sweep dicts may
-    carry a "_comment" key."""
+    rep count: the wave's own `reps`, else the sweep's. A task may declare its own
+    `reps` over the wave's (`task_reps`; reps_of). Both sweep dicts may carry a
+    "_comment" key."""
     w = (sweep.get("waves") or {}).get(str(wave))
     if not isinstance(w, dict):
         raise SystemExit("wave %s is not declared in the sweep" % wave)
+    task_reps = {}
+    for t, td in (w.get("tasks") or {}).items():
+        if isinstance(td, dict) and "reps" in td:
+            r = td["reps"]
+            if isinstance(r, bool) or not isinstance(r, int) or r < 1:
+                raise SystemExit("wave %s task %s: reps must be a whole number of 1 or more, not %r"
+                                 % (wave, t, r))
+            task_reps[t] = r
     return {
         "incomplete": {k for k in (w.get("incomplete") or {}) if not k.startswith("_")},
         "lost": {k: v for k, v in (w.get("lost") or {}).items() if not k.startswith("_")},
         "reps": w.get("reps", sweep.get("reps", 10)),
+        "task_reps": task_reps,
     }
+
+
+def reps_of(wave_sweep, task):
+    """How many reps make a cell of `task` complete: the task's own, else the wave's."""
+    return (wave_sweep.get("task_reps") or {}).get(task, wave_sweep["reps"])
 
 
 # --- GitHub ---------------------------------------------------------------
@@ -434,18 +449,20 @@ def build_assemble_fields(wave, run_ids, task, model, arm):
     }
 
 
-def _published_cells(order, incomplete, published, lost, reps_total):
+def _published_cells(order, incomplete, published, lost, reps_for):
     """Cells already fully under results/ -- every rep's directory present, or
     acknowledged lost in sweep.json. Disk and sweep.json only: no job, no gh
-    call. Used to skip re-assembling a cell and to decide the wave is done."""
+    call. Used to skip re-assembling a cell and to decide the wave is done.
+    reps_for(task) is the task's rep count."""
     out = []
     for cell, (task, model, arm) in order.items():
         if model in incomplete:
             continue
+        n = reps_for(task)
         have = published[cell] | {
-            rep for rep in range(1, reps_total + 1)
+            rep for rep in range(1, n + 1)
             if "%s__%s__%s__r%d" % (task, model, arm, rep) in lost}
-        if len(have) >= reps_total:
+        if len(have) >= n:
             out.append(cell)
     return out
 
@@ -524,7 +541,8 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
     job_cache = dict(job_cache or {})
     incomplete = wave_sweep["incomplete"]
     lost = wave_sweep["lost"]
-    reps_total = wave_sweep["reps"]
+    def reps_for(task):
+        return reps_of(wave_sweep, task)
     rev = {(t, m, a): c for c, (t, m, a) in order.items()}
 
     # Read straight off disk first, before any gh call: a published rep needs
@@ -539,7 +557,7 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
         for rep in reps:
             pair_status[(cell, rep)] = "valid"
 
-    published_cells = _published_cells(order, incomplete, published, lost, reps_total)
+    published_cells = _published_cells(order, incomplete, published, lost, reps_for)
     declared_cells = [c for c, (_, m, _) in order.items() if m not in incomplete]
     if results_dir is not None and len(published_cells) >= len(declared_cells):
         # Nothing left to learn from GitHub: every declared cell is already
@@ -613,7 +631,7 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
     # In flight is read off every job seen, regardless of the plan: a run
     # dispatched out of band is still a reason not to dispatch another. Owed is
     # bounded to what the committed plan actually declares -- the dispatcher
-    # proposes nothing a human has not put in the plan; reps_total only decides
+    # proposes nothing a human has not put in the plan; reps_for only decides
     # when a cell is DONE (below), not what is dispatchable now.
     in_flight = {pair for pair, status in pair_status.items() if status == "in-flight"}
     plan_pairs = {(c, r) for b in blocks for c in b.cells for r in b.reps}
@@ -680,9 +698,10 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
         if str(cell) in sent_assembles:
             log.append("WAIT assemble cell %d: run %s not finished" % (cell, sent_assembles[str(cell)]))
             continue
-        done = sum(1 for rep in range(1, reps_total + 1)
+        n = reps_for(task)
+        done = sum(1 for rep in range(1, n + 1)
                    if pair_status.get((cell, rep)) == "valid" or (cell, rep) in acked_lost)
-        if done < reps_total:
+        if done < n:
             continue
         run_ids = task_run_ids.get(task)
         if not run_ids:

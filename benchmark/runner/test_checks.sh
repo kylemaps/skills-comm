@@ -390,12 +390,17 @@ T=$(mktemp -d); TASK=structural-brain-extraction-7t; SW="$T/sweep.json"
 cat > "$SW" <<J
 {"reps":3,"arms":{"env-only":{"skills_hash":null}},
  "waves":{"6":{"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}},
-          "7":{"reps":2,"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}}}}
+          "7":{"reps":2,"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"]}}},
+          "8":{"reps":2,"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"],"reps":3}}},
+          "9":{"reps":3,"tasks":{"$TASK":{"models":["kimi-k3"],"arms":["env-only"],"reps":2}}}}}
 J
 mklab 1 ',"label":"benchmark"'; mklab 2 ',"label":"benchmark"'
 asm() { "$PY" "$HERE/assemble_cell.py" --runs "$T/runs" --task "$TASK" --model kimi-k3 --arm env-only --sweep "$SW" --wave "$1" >"$T/o" 2>&1; }
 asm 7; expect 0 $? "a wave declaring reps 2: two runs make a complete cell"
 asm 6; expect 1 $? "a wave without reps takes the sweep's 3: two runs do not"
+grep -q "expected 3" "$T/o" && ok "  via the complete gate" || bad "  wrong gate"
+asm 9; expect 0 $? "a task declaring reps 2 in a wave of 3: two runs make a complete cell"
+asm 8; expect 1 $? "a task declaring reps 3 in a wave of 2: two runs do not"
 grep -q "expected 3" "$T/o" && ok "  via the complete gate" || bad "  wrong gate"
 rm -rf "$T"
 

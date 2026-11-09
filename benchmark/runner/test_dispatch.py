@@ -300,6 +300,47 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(rc2, 10)  # it was the only cell: the wave is complete
         self.assertEqual(state2["published_cells"], [1])
 
+    def test_a_tasks_own_reps_decide_when_its_cell_is_complete(self):
+        """Wave reps 10, taskA declares 5: five valid reps complete taskA's cell, while
+        taskB's five are half of its ten."""
+        order = d.read_order(self.order_path(["1 taskA EGI.kimi-k3 env-only",
+                                              "2 taskB EGI.kimi-k3 env-only"]))
+        blocks = d.read_plan(self.plan_path([]), order)
+        run1 = {"id": 211, "status": "completed", "conclusion": "success", "created_at": "2026-10-22T00:00:00Z"}
+        jobs, logs = [], {}
+        for task, base in (("taskA", 2100), ("taskB", 2200)):
+            for rep in range(1, 6):
+                jobs.append(job("rep %d %s neurodesk/EGI.kimi-k3 env-only" % (rep, task), base + rep))
+                logs[base + rep] = outcome_log("completed")
+        gh = FakeGh(runs=[run1], jobs_by_run={211: jobs}, logs_by_job=logs)
+        wave = dict(self.wave(reps=10), task_reps={"taskA": 5})
+        rc, state = d.poll(gh, "o/r", 6, order, blocks, wave, lanes=4, dry_run=True)
+        self.assertEqual(len(state["assembled"]), 1)
+        self.assertIn("-f task=taskA", state["assembled"][0])
+
+        # taskA published with its 5 reps: complete; the wave is not, taskB owes 5.
+        results = os.path.join(self.tmp, "results")
+        for rep in range(1, 6):
+            rundir = os.path.join(results, "wave6", "runs", "taskA",
+                                  "taskA__neurodesk-EGI.kimi-k3__env-only__r%d" % rep)
+            os.makedirs(rundir)
+            write(os.path.join(rundir, "run.json"), "{}")
+        rc2, state2 = d.poll(gh, "o/r", 6, order, blocks, wave, lanes=4,
+                            dry_run=True, results_dir=results)
+        self.assertEqual(state2["published_cells"], [1])
+        self.assertEqual(state2["assembled"], [])
+        self.assertNotEqual(rc2, 10)
+
+    def test_published_cells_count_each_tasks_own_reps(self):
+        order = {1: ("a", "m", "x"), 2: ("b", "m", "x"), 3: ("b", "m", "y")}
+        published = {1: {1, 2, 3}, 2: {1, 2, 3}, 3: {1, 2}}
+        lost = {"b__m__y__r3": "acknowledged"}
+        reps_for = {"a": 3}.get
+        got = d._published_cells(order, set(), published, lost, lambda t: reps_for(t, 3))
+        self.assertEqual(got, [1, 2, 3])  # cell 3: two published + one acknowledged lost
+        got = d._published_cells(order, set(), published, lost, lambda t: reps_for(t, 4))
+        self.assertEqual(got, [1])
+
     # (f) a newly fingerprint-changed job (model not yet declared incomplete)
     # stops the poll for a human.
     def test_fingerprint_changed_needs_a_human(self):
@@ -584,6 +625,20 @@ class DispatchTest(unittest.TestCase):
         sweep = {"reps": 10, "waves": {"6": {"tasks": {}}, "7": {"reps": 7, "tasks": {}}}}
         self.assertEqual(d.load_wave(sweep, 6)["reps"], 10)
         self.assertEqual(d.load_wave(sweep, 7)["reps"], 7)
+
+    def test_load_wave_takes_a_tasks_own_reps(self):
+        sweep = {"reps": 10, "waves": {"10": {"reps": 7, "tasks": {
+            "t1": {"reps": 5}, "7t": {"reps": 14}, "motion": {}, "_comment": ["x"]}}}}
+        w = d.load_wave(sweep, 10)
+        self.assertEqual(w["task_reps"], {"t1": 5, "7t": 14})
+        self.assertEqual([d.reps_of(w, t) for t in ("t1", "7t", "motion")], [5, 14, 7])
+        self.assertEqual(d.reps_of({"reps": 7}, "t1"), 7)  # a wave state without task_reps
+
+    def test_load_wave_refuses_a_bad_task_reps(self):
+        for bad in (0, -1, "5", 5.0, True, None):
+            sweep = {"reps": 7, "waves": {"10": {"tasks": {"t1": {"reps": bad}}}}}
+            with self.assertRaises(SystemExit, msg=repr(bad)):
+                d.load_wave(sweep, 10)
 
     # A dry-run smoke test against wave 6's real order and plan files, named by
     # WAVE6_ORDER and WAVE6_PLAN; skipped when they are not given.

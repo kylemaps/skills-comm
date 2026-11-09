@@ -17,7 +17,8 @@ this file:
                      first other arm in the list, unless `arms_compared.primary`
                      names a pair [skill, control] -- then that pair, as in
                      stratified_effect.py --control
-  reps               wave-level, falling back to the sweep's top-level `reps`
+  reps               wave-level, falling back to the sweep's top-level `reps`;
+                     tasks[t].reps is the task's own `reps` where it declares one
   pilot_runs         CI run ids to drop for the "pilot runs removed" sensitivity
                      row; the row is left out entirely when undeclared
   speed_baseline     model -> tokens/second, for the Speed section's comparison
@@ -102,7 +103,9 @@ def wave_config(sweep, wave):
                                             if c[0] in arms and c[1] in arms]
         tasks[t] = {"models": models, "arms": arms, "skill": skill, "control": control,
                     "family": td.get("family"), "subject": td.get("subject") or t,
-                    "comparisons": comparisons}
+                    "comparisons": comparisons,
+                    # A task's own repeat count, over the wave's.
+                    "reps": td.get("reps", reps)}
     pilot_runs = w.get("pilot_runs")
     return tasks, reps, pilot_runs, (w.get("speed_baseline") or {})
 
@@ -238,8 +241,8 @@ def main():
     with open(a.sweep, encoding="utf-8") as fh:
         sweep = json.load(fh)
     tasks, reps, pilot_runs, speed_baseline = wave_config(sweep, a.wave)
-    if reps is None:
-        raise SystemExit("wave %s declares no reps, and neither does the sweep" % a.wave)
+    if any(cfg["reps"] is None for cfg in tasks.values()):
+        raise SystemExit("wave %s declares no reps for every task, and neither does the sweep" % a.wave)
     task_order = list(tasks)
     rows = load(a.results, task_order)
     L = []
@@ -269,9 +272,9 @@ def main():
                     continue
                 rs = [r for r in rows[t] if r["model"] == m and r["arm"] == arm]
                 n, lost = len(rs), sum(1 for r in rs if r["lost"])
-                complete &= n == reps
+                complete &= n == cfg["reps"]
                 n_cells += 1
-                cells.append("%d/%d%s" % (n, reps, " (%d lost)" % lost if lost else ""))
+                cells.append("%d/%d%s" % (n, cfg["reps"], " (%d lost)" % lost if lost else ""))
             L.append("| %s | %s | %s |" % (t, m, " | ".join(cells)))
     L += ["", ("All %d cells complete." % n_cells) if complete
           else "NOT COMPLETE: numbers below are interim.", ""]

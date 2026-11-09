@@ -359,6 +359,8 @@ def main():
                                             " wave %s" % a.wave if a.wave else ""))
     if a.arm not in w["tasks"][a.task]["arms"]:
         raise SystemExit("REFUSED: arm %s is not declared for %s" % (a.arm, a.task))
+    if "reps" in w["tasks"][a.task]:
+        spec = dict(spec, reps=w["tasks"][a.task]["reps"])  # the task's own count, over the wave's
 
     model = a.model.replace("neurodesk/", "")
     declared = w["tasks"][a.task].get("models") or w.get("models")
