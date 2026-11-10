@@ -25,13 +25,57 @@ import argparse
 import fnmatch
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import os
 import struct
 import sys
 import tempfile
+import time
 import urllib.request
+
+TRIES = 4
+WAITS = (10, 30, 60)          # seconds before the 2nd, 3rd and 4th try
+TEMPFAIL = 75                 # exit code after the last try (EX_TEMPFAIL)
+
+
+def _status(e):
+    code = getattr(e, "code", None)
+    if not isinstance(code, int):
+        code = getattr(getattr(e, "response", None), "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _transient(e):
+    """A network failure worth another try: no answer, a timeout, a dropped connection, or
+    an HTTP 408, 429 or 5xx. Any other HTTP status is an answer, and final."""
+    code = _status(e)
+    if code is not None:
+        return code in (408, 429) or code >= 500
+    return isinstance(e, (OSError, http.client.HTTPException))
+
+
+def with_retries(what, fn, tries=TRIES, waits=WAITS, sleep=time.sleep):
+    """fn() with up to `tries` tries on a transient network failure. After the last, one
+    line that starts FETCH FAILED (the dispatcher re-runs the job on it) and exit 75. The
+    lines name what was fetched in general words and the error's type and status only:
+    never a subject, a dataset or a URL, since this step's log is on the pod before the
+    agent starts."""
+    for attempt in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 -- sorted by _transient; others re-raised
+            if not _transient(e):
+                raise
+            kind = type(e).__name__ + (" %d" % _status(e) if _status(e) is not None else "")
+            if attempt == tries:
+                print("FETCH FAILED: %s after %d tries (%s)" % (what, tries, kind), flush=True)
+                sys.exit(TEMPFAIL)
+            wait = waits[min(attempt - 1, len(waits) - 1)]
+            print("fetch_input: %s failed (%s), try %d of %d in %d s" % (what, kind, attempt + 1, tries, wait),
+                  flush=True)
+            sleep(wait)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GRAPHQL = "https://openneuro.org/crn/graphql"
@@ -48,8 +92,8 @@ def resolve(repo, revision, case):
     the agent that runs next."""
     from huggingface_hub import hf_hub_download
     with tempfile.TemporaryDirectory(prefix="cases-") as cache:
-        got = hf_hub_download(repo_id=repo, repo_type="dataset", filename="cases.json",
-                              revision=revision, cache_dir=cache)
+        got = with_retries("the case table", lambda: hf_hub_download(
+            repo_id=repo, repo_type="dataset", filename="cases.json", revision=revision, cache_dir=cache))
         with open(got, encoding="utf-8") as fh:
             cases = json.load(fh)["cases"]
     if case not in cases:
@@ -60,8 +104,12 @@ def resolve(repo, revision, case):
 def _gql(query):
     req = urllib.request.Request(GRAPHQL, data=json.dumps({"query": query}).encode(),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        out = json.load(r)
+
+    def post():
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.load(r)
+
+    out = with_retries("the snapshot's file list", post)
     if out.get("errors") or not (out.get("data") or {}).get("snapshot"):
         sys.exit("FAIL: the snapshot's file tree could not be read: %s"
                  % json.dumps(out.get("errors") or out)[:300])
@@ -101,8 +149,10 @@ def pick(files, subject, pattern):
 
 
 def download(url):
-    with urllib.request.urlopen(url, timeout=900) as r:
-        return r.read()
+    def get():
+        with urllib.request.urlopen(url, timeout=900) as r:
+            return r.read()
+    return with_retries("the scan", get)
 
 
 def blank_header(raw):

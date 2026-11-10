@@ -104,6 +104,85 @@ class RepCheck(unittest.TestCase):
         self.assertEqual(fail, {})
         self.assertEqual(note["subject_named, arm env-only"], ["true 1, false 0, unchecked 1"])
 
+    def test_calls_for_another_model_the_proxy_refused_are_a_note(self):
+        recs = self.good()
+        recs[0]["llm_proxy"]["calls"]["nrp/vision"] = 2
+        recs[0]["llm_proxy"]["mismatches"] = 2
+        fail, note = run(recs)
+        self.assertEqual(fail, {})
+        self.assertIn("calls for another model, refused by the proxy", note)
+
+    def test_more_calls_for_another_model_than_refusals_fail_g3(self):
+        recs = self.good()
+        recs[0]["llm_proxy"]["calls"]["nrp/vision"] = 3
+        recs[0]["llm_proxy"]["mismatches"] = 1
+        self.assertIn("G3 proxy summary", run(recs)[0])
+
+    def test_an_end_probe_without_an_answer_is_a_note_and_counts(self):
+        recs = self.good()
+        recs[1].update(model_fingerprint_end=None, model_changed=None, model_probe_error_end="HTTP 503")
+        fail, note = run(recs)
+        self.assertEqual(fail, {})
+        self.assertEqual(note["end probe not answered, run counted"], ["%s %s env-only r1 (run 1): HTTP 503" % (T, M2)])
+
+    def test_a_wrong_start_fingerprint_still_fails_without_an_end_answer(self):
+        recs = self.good()
+        recs[1].update(model_fingerprint="zzz", model_fingerprint_end=None, model_changed=None)
+        self.assertIn("G4 fingerprint", run(recs)[0])
+
+    def test_a_network_fetch_failure_is_a_note_not_g7(self):
+        fail, note = run(self.good(), fetch_failures=["rep 1 x (run 9)"])
+        self.assertEqual(fail, {})
+        self.assertIn("fetch failed on the network after its retries, re-run", note)
+
+    def test_the_gate_is_the_fail_lines_alone(self):
+        self.assertTrue(rep_check.gate_passes({}))
+        self.assertTrue(rep_check.gate_passes({"G3 proxy summary": []}))
+        self.assertFalse(rep_check.gate_passes({"G3 proxy summary": ["x"]}))
+
+    def test_download_lists_every_run_since_and_tells_a_fetch_failure_from_the_blind_check(self):
+        calls = []
+        step = {"name": rep_check.BLIND_STEP, "conclusion": "failure"}
+
+        def fake_gh_json(args):
+            calls.append(args)
+            if args[:2] == ["run", "list"]:
+                return [{"databaseId": 7, "createdAt": "2026-11-14T01:00:00Z", "status": "completed"},
+                        {"databaseId": 6, "createdAt": "2026-11-13T23:00:00Z", "status": "completed"}]
+            if args[1].endswith("/jobs?per_page=100"):
+                return {"jobs": [{"id": 71, "name": "rep 1 a", "steps": [step]},
+                                 {"id": 72, "name": "rep 1 b", "steps": [step]},
+                                 {"id": 73, "name": "rep 1 c", "steps": [{"name": "x", "conclusion": "success"}]}]}
+            return {"artifacts": [{"id": 1, "name": "cell-a", "expired": False},
+                                  {"id": 2, "name": "cell-b", "expired": False}]}
+
+        logs = {71: "2026-11-14T01:01:00Z FETCH FAILED: the scan after 4 tries (HTTPError 503)\n",
+                72: "2026-11-14T01:01:00Z FAIL: a blinded name appears in /x\n"}
+
+        class P:
+            def __init__(self, rc, out=""):
+                self.returncode, self.stdout = rc, out
+
+        def fake_run(args, **kw):
+            if args[:2] == ["gh", "api"] and args[2].endswith("/logs"):
+                return P(0, logs[int(args[2].split("/")[-2])])
+            return P(1 if "cell-b" in args else 0)
+
+        old = rep_check.gh_json, rep_check.subprocess.run
+        rep_check.gh_json, rep_check.subprocess.run = fake_gh_json, fake_run
+        try:
+            nruns, pending, n, blind, fetch_failed, failed = rep_check.download(
+                "o/r", "2026-11-14T00:00:00Z", "/nonexistent-work")
+        finally:
+            rep_check.gh_json, rep_check.subprocess.run = old
+        self.assertIn("--created", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--created") + 1], ">=2026-11-14T00:00:00Z")
+        self.assertEqual(calls[0][calls[0].index("--limit") + 1], "1000")
+        self.assertEqual(nruns, 1)                      # the older run is filtered out
+        self.assertEqual(fetch_failed, ["rep 1 a (run 7)"])
+        self.assertEqual(blind, ["rep 1 b (run 7)"])
+        self.assertEqual((n, failed), (1, ["cell-b (run 7)"]))
+
     def test_another_rep_or_wave_is_ignored(self):
         recs = self.good() + [rec(M1, "zzz", repeat=2), rec(M1, "zzz", wave="9")]
         self.assertEqual(run(recs)[0], {})

@@ -205,5 +205,58 @@ class BlindCheck(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class Retries(unittest.TestCase):
+    """fetch_input's network calls: a transient failure is tried again, the last failure says
+    FETCH FAILED and exits 75, an HTTP answer such as 404 is final, and no line names a URL."""
+
+    URL = "https://example.org/dataset-x/sub-x/anat/scan.nii.gz"
+
+    def call(self, failures, final=b"ok"):
+        import io
+        import urllib.error
+        from contextlib import redirect_stdout
+        seq = list(failures)
+        waits = []
+
+        def fn():
+            if seq:
+                code = seq.pop(0)
+                if code is None:
+                    raise urllib.error.URLError("no answer from %s" % self.URL)
+                raise urllib.error.HTTPError(self.URL, code, "x", {}, None)
+            return final
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            try:
+                got = fetch_input.with_retries("the scan", fn, sleep=waits.append)
+            except SystemExit as e:
+                got = ("exit", e.code)
+            except Exception as e:  # noqa: BLE001
+                got = ("raised", type(e).__name__)
+        return got, waits, out.getvalue()
+
+    def test_a_transient_failure_is_tried_again(self):
+        got, waits, out = self.call([None, 503])
+        self.assertEqual(got, b"ok")
+        self.assertEqual(waits, [10, 30])
+        self.assertIn("try 2 of 4", out)
+
+    def test_the_last_failure_says_fetch_failed_and_exits_75(self):
+        got, waits, out = self.call([503, 503, 429, 502])
+        self.assertEqual(got, ("exit", 75))
+        self.assertEqual(waits, [10, 30, 60])
+        self.assertIn("FETCH FAILED: the scan after 4 tries (HTTPError 502)", out)
+
+    def test_an_http_answer_is_final(self):
+        got, waits, _ = self.call([404])
+        self.assertEqual((got, waits), (("raised", "HTTPError"), []))
+
+    def test_no_line_names_a_url_a_dataset_or_a_subject(self):
+        _, _, out = self.call([None, 503, None, 500])
+        for needle in ("example.org", "dataset-x", "sub-x", "scan.nii.gz"):
+            self.assertNotIn(needle, out)
+
+
 if __name__ == "__main__":
     unittest.main()

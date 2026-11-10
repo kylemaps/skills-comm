@@ -670,5 +670,42 @@ class TestJobNames(unittest.TestCase):
                                       "nrp/qwen3-small", "env+skill-michele"))
 
 
+class TestFetchFailed(unittest.TestCase):
+    """A blinded run whose scan could not be fetched is the network's fault and is re-run;
+    a blind-check stop is not, and still stops the poll."""
+
+    def classify(self, log):
+        gh = FakeGh(runs=[], jobs_by_run={}, logs_by_job={3001: log})
+        return d.classify_job(gh, job("rep 1 taskA@case-012 nrp/x env-only", 3001, conclusion="failure"))
+
+    def test_a_fetch_that_failed_on_the_network_is_a_rerun(self):
+        log = "2026-11-14T01:00:00Z FETCH FAILED: the scan after 4 tries (HTTPError 503)\n"
+        self.assertEqual(self.classify(log), ("rerun", "fetch-failed"))
+
+    def test_a_blind_check_stop_still_stops_the_poll(self):
+        self.assertEqual(self.classify("2026-11-14T01:00:00Z FAIL: a blinded name appears in /x\n")[0], "unknown")
+
+
+class TestRunList(unittest.TestCase):
+    def test_every_run_since_the_wave_start_is_listed(self):
+        seen = []
+
+        class G(d.Gh):
+            def _run(self, args):
+                seen.append(args)
+                return json.dumps([{"databaseId": 1, "status": "completed", "conclusion": "success",
+                                    "createdAt": "2026-11-14T02:00:00Z"},
+                                   {"databaseId": 2, "status": "completed", "conclusion": "success",
+                                    "createdAt": "2026-11-13T02:00:00Z"}])
+
+        runs = G("o/r").run_list("run.yml", since="2026-11-14T00:00:00Z")
+        args = seen[0]
+        self.assertEqual(args[args.index("-L") + 1], "1000")
+        self.assertEqual(args[args.index("--created") + 1], ">=2026-11-14T00:00:00Z")
+        self.assertEqual([r["id"] for r in runs], [1])
+        G("o/r").run_list("run.yml")
+        self.assertNotIn("--created", seen[1])
+
+
 if __name__ == "__main__":
     unittest.main()

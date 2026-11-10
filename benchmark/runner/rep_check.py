@@ -14,14 +14,18 @@ run.json of the wave and rep.
   G2 no run stopped by the key proxy itself (proxy-lock-failed), and every started run has
      its proxy summary. A run stopped before the agent because its provider refused the
      probe (proxy-upstream-failed with 429, 5xx or no answer) is a harness fault, re-run.
-  G3 each summary: locked to the run's model, calls for that model only, none before the
-     lock, not sealed without a lock
-  G4 model_fingerprint and model_fingerprint_end are the declared fingerprint, and
-     model_changed is not true
+  G3 each summary: locked to the run's model, none before the lock, not sealed without a
+     lock; a call for another model only as one the proxy refused (no more such calls than
+     `mismatches`), reported as a note, as waves 8 and 9 flag it
+  G4 model_fingerprint is the declared fingerprint, model_fingerprint_end is too when the
+     provider answered the end probe, and model_changed is not true; an end probe without
+     an answer is a note and the run counts, as in waves 8 and 9
   G5 one prompt_hash per run id (task and case)
   G6 a run id that names a case: every record carries its input record, with the same file
      digests in every record of that run id
-  G7 no job stopped by the blind check (the "Fetch the input of a blinded run" step failed)
+  G7 no job stopped by the blind check (the "Fetch the input of a blinded run" step failed
+     and its log does not say FETCH FAILED; a fetch that failed on the network after its
+     retries is a note, re-run as an upload failure is)
   G8 pins and measured values as the wave declares (tasks_sha, image_version, the harness
      commit when --harness is given, measured resources)
   G9 the panel can still answer the primary question: every declared model has a started
@@ -29,7 +33,8 @@ run.json of the wave and rep.
 
 Reported, not part of the gate: subject_named per arm (true, false, unchecked), answer-key
 reads per arm, memory watch kills and errors, kernel OOM events, proxy flags, model limits,
-and key-shaped strings in the downloaded files (counts per file only).
+key-shaped strings in the downloaded files (counts per file only), and artifacts whose
+download failed (their records are then missing, which G1 sees).
 """
 import argparse
 import collections
@@ -45,6 +50,7 @@ KEY_SHAPES = [re.compile(rb"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}"),
               re.compile(rb"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")]
 UPSTREAM_RERUN = re.compile(r"HTTP (429|5\d\d)\b|timed out|no answer|URLError|Connection", re.I)
 BLIND_STEP = "Fetch the input of a blinded run"
+FETCH_FAILED = "FETCH FAILED:"   # fetch_input.py's line when the network failed after its retries
 GATES = ("G1 no started record", "G2 stopped by the proxy", "G2 no proxy summary", "G3 proxy summary",
          "G4 fingerprint", "G5 prompt_hash", "G6 input record", "G7 stopped by the blind check",
          "G8 pins and measured", "G9 panel")
@@ -55,20 +61,34 @@ def gh_json(args):
     return json.loads(out or "null")
 
 
+def job_log(repo, job_id):
+    """A job's log text, or None when it cannot be read."""
+    p = subprocess.run(["gh", "api", "repos/%s/actions/jobs/%d/logs" % (repo, job_id)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return p.stdout if p.returncode == 0 else None
+
+
 def download(repo, since, work):
-    """(runs seen, ids not completed, artifacts downloaded, jobs the blind check stopped)."""
-    runs = gh_json(["run", "list", "-R", repo, "--workflow", "run.yml", "--limit", "400",
-                    "--json", "databaseId,createdAt,status"])
+    """(runs seen, ids not completed, artifacts downloaded, jobs the blind check stopped,
+    jobs whose fetch failed on the network, artifacts whose download failed). Every run.yml
+    run created at or after `since` is listed, however many there are."""
+    runs = gh_json(["run", "list", "-R", repo, "--workflow", "run.yml", "--limit", "1000",
+                    "--created", ">=" + since, "--json", "databaseId,createdAt,status"])
     runs = [r for r in runs if r["createdAt"] >= since]
     pending = [r["databaseId"] for r in runs if r["status"] != "completed"]
-    n, blind = 0, []
+    n, blind, fetch_failed, failed = 0, [], [], []
     for r in runs:
         rid = r["databaseId"]
         jobs = gh_json(["api", "repos/%s/actions/runs/%d/jobs?per_page=100" % (repo, rid)])
         for j in (jobs or {}).get("jobs", []):
             if any(s.get("name") == BLIND_STEP and s.get("conclusion") == "failure"
                    for s in j.get("steps") or []):
-                blind.append("%s (run %d)" % (j.get("name"), rid))
+                tag = "%s (run %d)" % (j.get("name"), rid)
+                log = job_log(repo, j["id"])
+                if log is not None and FETCH_FAILED in log:
+                    fetch_failed.append(tag)
+                else:
+                    blind.append(tag + ("" if log is not None else ", log unreadable"))
         arts = gh_json(["api", "repos/%s/actions/runs/%d/artifacts?per_page=100" % (repo, rid)])
         for a in arts.get("artifacts", []):
             if a.get("expired"):
@@ -76,10 +96,13 @@ def download(repo, since, work):
             dest = os.path.join(work, "%d-%d" % (rid, a["id"]))
             if os.path.isdir(dest):
                 continue
-            subprocess.run(["gh", "run", "download", str(rid), "-R", repo, "-n", a["name"], "-D", dest],
-                           capture_output=True, check=True)
-            n += 1
-    return len(runs), pending, n, blind
+            p = subprocess.run(["gh", "run", "download", str(rid), "-R", repo, "-n", a["name"], "-D", dest],
+                               capture_output=True)
+            if p.returncode == 0:
+                n += 1
+            else:
+                failed.append("%s (run %d)" % (a["name"], rid))
+    return len(runs), pending, n, blind, fetch_failed, failed
 
 
 def records(work):
@@ -118,7 +141,7 @@ def read_order(path):
     return order
 
 
-def check(wave, wave_id, order, recs, rep, harness=None, blind_stops=()):
+def check(wave, wave_id, order, recs, rep, harness=None, blind_stops=(), fetch_failures=()):
     """(fail, note, started, reruns, outcomes) for the records of one wave and rep. `fail`
     maps a gate to its problems; `note` holds descriptive findings."""
     fps = {k: v for k, v in (wave.get("model_fingerprints") or {}).items() if not k.startswith("_")}
@@ -160,18 +183,25 @@ def check(wave, wave_id, order, recs, rep, harness=None, blind_stops=()):
             fail["G2 no proxy summary"].append("%s: %s" % (tag, px))
         else:
             calls = px.get("calls") or {}
-            if px.get("locked") != [m] or set(calls) != {m} or (px.get("unlocked_calls") or 0) \
+            other = {k: v for k, v in calls.items() if k != m}
+            n_other = sum(v if isinstance(v, int) else 1 for v in other.values())
+            refused = px.get("mismatches") or 0
+            if px.get("locked") != [m] or n_other > refused or (px.get("unlocked_calls") or 0) \
                     or px.get("sealed_without_lock"):
-                fail["G3 proxy summary"].append("%s: locked %s calls %s unlocked %s sealed %s" % (
-                    tag, px.get("locked"), calls, px.get("unlocked_calls"), px.get("sealed_without_lock")))
+                fail["G3 proxy summary"].append("%s: locked %s calls %s mismatches %s unlocked %s sealed %s" % (
+                    tag, px.get("locked"), calls, refused, px.get("unlocked_calls"), px.get("sealed_without_lock")))
+            elif other:
+                note["calls for another model, refused by the proxy"].append("%s: %s" % (tag, other))
             for k in ("denied", "mismatches", "calls_after_end", "relock_attempts"):
                 if px.get(k):
                     note["proxy flag " + k].append("%s: %s" % (tag, px.get(k)))
-        if not (r.get("model_fingerprint") == r.get("model_fingerprint_end") == fps.get(m)) \
-                or r.get("model_changed"):
+        start, end, declared = r.get("model_fingerprint"), r.get("model_fingerprint_end"), fps.get(m)
+        if start != declared or (end is not None and end != declared) or r.get("model_changed"):
             fail["G4 fingerprint"].append("%s: %s / %s, changed %s, declared %s" % (
-                tag, r.get("model_fingerprint"), r.get("model_fingerprint_end"),
-                r.get("model_changed"), fps.get(m)))
+                tag, start, end, r.get("model_changed"), declared))
+        elif end is None:
+            note["end probe not answered, run counted"].append("%s: %s" % (
+                tag, r.get("model_probe_error_end") or "no end fingerprint"))
         prompts[pair[0]].add(r.get("prompt_hash"))
         if re.search(r"@case-\d{3}$", str(pair[0])):
             inp = r.get("input")
@@ -225,6 +255,8 @@ def check(wave, wave_id, order, recs, rep, harness=None, blind_stops=()):
             fail["G6 input record"].append("%s: %d different inputs across its records" % (task, len(digests)))
     for x in blind_stops:
         fail["G7 stopped by the blind check"].append(x)
+    for x in fetch_failures:
+        note["fetch failed on the network after its retries, re-run"].append(x)
     fam = wave.get("primary_family")
     if fam:
         tasks = wave.get("tasks") or {}
@@ -255,19 +287,22 @@ def main():
         wave = json.load(fh)["waves"][str(a.wave)]
     order = read_order(a.order)
     os.makedirs(a.work, exist_ok=True)
-    blind = []
+    blind, fetch_failed, failed = [], [], []
     if not a.no_download:
         if not a.since:
             sys.exit("--since is required to download")
         if os.listdir(a.work):
             sys.exit("--work must be empty (or use --no-download)")
-        nruns, pending, nart, blind = download(a.repo, a.since, a.work)
+        nruns, pending, nart, blind, fetch_failed, failed = download(a.repo, a.since, a.work)
         print("downloaded %d artifacts from %d runs since %s; %d runs not completed: %s"
               % (nart, nruns, a.since, len(pending), pending))
+        print("downloads that failed (their records are missing; G1 sees a missing cell): %s"
+              % (failed or "none"))
     else:
         print("no download: G7 (jobs stopped by the blind check) is not checked")
 
-    fail, note, started, reruns, outcomes = check(wave, a.wave, order, records(a.work), a.rep, a.harness, blind)
+    fail, note, started, reruns, outcomes = check(wave, a.wave, order, records(a.work), a.rep, a.harness,
+                                                  blind, fetch_failed)
     incomplete = {k for k in (wave.get("incomplete") or {}) if not k.startswith("_")}
     gate_pairs = [p for p in order if p[1] not in incomplete]
     hits = key_shapes(a.work)
@@ -281,16 +316,21 @@ def main():
         print("NOTE %s (%d)" % (k, len(note[k])))
         for x in note[k][:12]:
             print("  " + x)
-    print("key-shaped strings: %s" % ("none" if not hits else "%d files (counts only): %s" % (len(hits), hits)))
+    print("key-shaped strings, reported (not part of the gate): %s"
+          % ("none" if not hits else "%d files (counts only): %s" % (len(hits), hits)))
     for g in GATES:
         if g in fail:
             print("FAIL %s (%d)" % (g, len(fail[g])))
             for x in fail[g][:12]:
                 print("  " + x)
-    ok = not fail and not hits
-    print("\nGATE: %s" % ("PASS" if ok else "NOT PASSED (see FAIL lines%s)"
-                         % (" and key-shaped strings" if hits else "")))
+    ok = gate_passes(fail)
+    print("\nGATE: %s" % ("PASS" if ok else "NOT PASSED (see FAIL lines)"))
     return 0 if ok else 1
+
+
+def gate_passes(fail):
+    """The gate is the FAIL lines alone; notes and key-shaped strings are reported."""
+    return not any(fail.values())
 
 
 if __name__ == "__main__":

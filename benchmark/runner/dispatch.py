@@ -68,6 +68,9 @@ ROSTER_MISSING = "is not resolvable after writing the config"
 ROSTER_UNREACHABLE_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?FAIL: could not reach https?://\S+/models: ", re.M)
 UPLOAD_EACCES = "EACCES: permission denied, scandir"
+# fetch_input.py's line when a blinded run's scan could not be fetched after its retries:
+# the network's fault, re-run as it stands. A blind-check stop prints "FAIL:" instead.
+FETCH_FAILED = "FETCH FAILED:"
 # run_bench.sh, when the key proxy refuses the lock, is not ready, or reaches no
 # provider (before the agent).
 PROXY_ABORT_RE = re.compile(r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?ABORT: the key proxy ", re.M)
@@ -196,9 +199,12 @@ class Gh:
                               check=True, encoding="utf-8", errors="replace").stdout
 
     def run_list(self, workflow, since=None):
+        # Every run of the wave, not the newest page: a wave with more runs than one
+        # listing would lose its oldest runs from view and send their blocks again.
         out = json.loads(self._run([
-            "run", "list", "-R", self.repo, "--workflow", workflow, "-L", "200",
-            "--json", "databaseId,status,conclusion,createdAt"]))
+            "run", "list", "-R", self.repo, "--workflow", workflow, "-L", "1000"]
+            + (["--created", ">=" + since] if since else [])
+            + ["--json", "databaseId,status,conclusion,createdAt"]))
         runs = [{"id": r["databaseId"], "status": r["status"],
                  "conclusion": r["conclusion"], "created_at": r["createdAt"]} for r in out]
         if since:
@@ -300,6 +306,8 @@ def classify_job(gh, job):
     # w6_watch.py read.
     if log is None:
         return "lost-candidate", "job log unreadable"
+    if FETCH_FAILED in log:
+        return "rerun", "fetch-failed"
     if FINGERPRINT_RE.search(log):
         return "fingerprint-changed", "fingerprint changed"
     if RATE_KILL in log:
