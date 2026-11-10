@@ -5,7 +5,7 @@ strata of model x subject.
 
     python3 permutation_effect.py --results results/wave8 --sweep ../ci/sweep.json --wave 8
         [--arm env+skill-michele] [--control env+skill] [--permutations 10000]
-        [--seed 20261103] [--timeout-min 90] [--json OUT]
+        [--seed 20261103] [--timeout-min 90] [--placements FILE] [--json OUT]
 
 The declaration (results/wave<N>/README.md) fixes what is computed; this is that text as
 code, so the numbers in the write-up come from one place that was written before the data.
@@ -17,6 +17,11 @@ code, so the numbers in the write-up come from one place that was written before
                                 that passed without a recorded time counts the wall too,
                                 and is counted (passed_without_time). An excluded run
                                 (not valid, not lost) is left out.
+                                With --placements (output_time.py's JSON), a passing run
+                                counts the later of that time and the last placement of
+                                its output that keeps an older mtime (placed_later); a
+                                passing run the file does not show as checked counts its
+                                recorded time and is counted (placement_unchecked).
                                 Statistic per stratum: median(B) - median(A).
   tokens per run                ln(tokens_total) for a valid run with a token record
                                 (tokens_total above 0); a run without one is left out and
@@ -53,10 +58,19 @@ def _num(x):
     return v if v == v else None
 
 
-def time_value(row, timeout_min):
+def run_key(row):
+    """One job of a wave: '<CI run id>|<model>|<arm>|<rep>' (output_time.py's keys)."""
+    ci = row.get("_ci_run") or str((row.get("_run") or {}).get("ci_run", "")).split("/")[0]
+    return "%s|%s|%s|%s" % (ci, row.get("model"), row.get("arm"), row.get("rep"))
+
+
+def time_value(row, timeout_min, placements=None):
     """Minutes to a passing output for one runs-CSV row (with its run.json as _run), or
     None when the row is left out. Returns (minutes, note) where note is
-    "passed_without_time" when a passing run had no seconds_to_output."""
+    "passed_without_time" when a passing run had no seconds_to_output, and with
+    placements (output_time.py's record per run_key) "placed_later" when the output was
+    put in place after its recorded time, "placement_unchecked" when the run was not
+    checked."""
     lost = bool(row.get("lost"))
     if row.get("valid") != "True" and not lost:
         return None, None
@@ -64,7 +78,15 @@ def time_value(row, timeout_min):
         s = _num((row.get("_run") or {}).get("seconds_to_output"))
         if s is None:
             return float(timeout_min), "passed_without_time"
-        return min(s / 60.0, float(timeout_min)), None
+        note = None
+        if placements is not None:
+            rec = placements.get(run_key(row)) or {}
+            p = _num(rec.get("placed_s")) if rec.get("checked") else None
+            if not rec.get("checked"):
+                note = "placement_unchecked"
+            elif p is not None and p > s:
+                s, note = p, "placed_later"
+        return min(s / 60.0, float(timeout_min)), note
     return float(timeout_min), None
 
 
@@ -130,24 +152,27 @@ def permutation_test(strata, arm, control, stat, permutations, seed):
     return obs, (1 + extreme) / (permutations + 1), permutations
 
 
-def analyse(rows, arm, control, permutations, seed, timeout_min):
+def analyse(rows, arm, control, permutations, seed, timeout_min, placements=None):
     """Both outcomes for one family's rows (each row carries _subject and _run)."""
     out = {"arm": arm, "control": control, "permutations": permutations, "seed": seed}
-    notes = {arm: 0, control: 0}
+    kinds = ("passed_without_time",) + (("placed_later", "placement_unchecked") if placements is not None else ())
+    notes = {k: {arm: 0, control: 0} for k in kinds}
+    counting = [True]
 
     def tv(r):
-        v, note = time_value(r, timeout_min)
-        if note and r["arm"] in notes:
-            notes[r["arm"]] += 1
+        v, note = time_value(r, timeout_min, placements)
+        if counting[0] and note and r["arm"] in notes[note]:
+            notes[note][r["arm"]] += 1
         return v
 
     used, skipped = build_strata(rows, arm, control, tv)
+    counting[0] = False
     obs, p, n = permutation_test(used, arm, control, statistics.median, permutations, seed)
     out["minutes_to_pass"] = {
         "effect_minutes": obs, "p": p, "strata": len(used),
         "strata_skipped": ["%s x %s" % k for k, _ in skipped],
-        "n": {a: sum(len(c[a]) for _, c in used) for a in (arm, control)},
-        "passed_without_time": dict(notes)}
+        "n": {a: sum(len(c[a]) for _, c in used) for a in (arm, control)}}
+    out["minutes_to_pass"].update(notes)
 
     no_tok = {arm: 0, control: 0}
     for r in rows:
@@ -192,12 +217,17 @@ def main():
     ap.add_argument("--permutations", type=int, default=10000)
     ap.add_argument("--seed", type=int, default=20261103)
     ap.add_argument("--timeout-min", type=float, default=90.0)
+    ap.add_argument("--placements", help="output_time.py's JSON: count the later of the two times")
     ap.add_argument("--json")
     a = ap.parse_args()
 
     sweep = json.load(open(a.sweep, encoding="utf-8"))
     tasks, _reps, _pilot, _speed = wave_config(sweep, a.wave)
     rows = load(a.results, tasks)
+    placements = None
+    if a.placements:
+        with open(a.placements, encoding="utf-8") as fh:
+            placements = json.load(fh)
     report = {}
     for fam, ts in sorted(families(tasks).items()):
         frows = []
@@ -205,11 +235,15 @@ def main():
             for r in rows.get(t, []):
                 r["_subject"] = tasks[t]["subject"]
                 frows.append(r)
-        report[fam] = analyse(frows, a.arm, a.control, a.permutations, a.seed, a.timeout_min)
+        report[fam] = analyse(frows, a.arm, a.control, a.permutations, a.seed, a.timeout_min,
+                              placements)
         m, k = report[fam]["minutes_to_pass"], report[fam]["log_tokens"]
         print("%s: %s vs %s" % (fam, a.arm, a.control))
         print("  minutes to a passing output: %+.1f min (p %.4f; %d strata, n %s)"
               % (m["effect_minutes"], m["p"], m["strata"], m["n"]))
+        if placements is not None:
+            print("  output placed later than recorded %s; placement not checked %s"
+                  % (m["placed_later"], m["placement_unchecked"]))
         s = report[fam]["minutes_to_pass_subject_named_removed"]
         if s["removed"]:
             print("  minutes, subject-named runs removed (%d): %+.1f min (p %.4f; %d strata)"

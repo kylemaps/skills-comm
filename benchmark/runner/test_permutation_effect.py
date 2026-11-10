@@ -54,6 +54,44 @@ class TimeValue(unittest.TestCase):
         self.assertEqual(pe.time_value(row(B, seconds=7200), 90), (90.0, None))
 
 
+class Placements(unittest.TestCase):
+    """output_time.py's records: the later of the two times counts; an unchecked run counts as
+    recorded and is noted."""
+
+    def r(self):
+        x = row(B, seconds=600)
+        x.update(_ci_run="9", rep="1")
+        return x
+
+    def test_a_later_placement_counts(self):
+        r = self.r()
+        self.assertEqual(pe.time_value(r, 90, {pe.run_key(r): {"checked": True, "placed_s": 3000}}),
+                         (50.0, "placed_later"))
+
+    def test_an_earlier_placement_changes_nothing(self):
+        r = self.r()
+        self.assertEqual(pe.time_value(r, 90, {pe.run_key(r): {"checked": True, "placed_s": 300}}), (10.0, None))
+        self.assertEqual(pe.time_value(r, 90, {pe.run_key(r): {"checked": True, "placed_s": None}}), (10.0, None))
+
+    def test_an_unchecked_run_counts_as_recorded_and_is_noted(self):
+        r = self.r()
+        self.assertEqual(pe.time_value(r, 90, {}), (10.0, "placement_unchecked"))
+        self.assertEqual(pe.time_value(r, 90, {pe.run_key(r): {"checked": False, "placed_s": 3000}}),
+                         (10.0, "placement_unchecked"))
+
+    def test_without_placements_nothing_changes(self):
+        self.assertEqual(pe.time_value(self.r(), 90), (10.0, None))
+
+    def test_a_failed_run_still_counts_the_wall(self):
+        r = self.r()
+        r["passed"] = "False"
+        self.assertEqual(pe.time_value(r, 90, {pe.run_key(r): {"checked": True, "placed_s": 60}}), (90.0, None))
+
+    def test_the_key_names_the_job(self):
+        r = self.r()
+        self.assertEqual(pe.run_key(r), "9|m1|%s|1" % B)
+
+
 class TokenValue(unittest.TestCase):
     def test_log_of_tokens(self):
         self.assertAlmostEqual(pe.token_value(row(B, tokens=1000)), math.log(1000))
