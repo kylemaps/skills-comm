@@ -1,3 +1,0 @@
-# Reference NIfTIs are hosted on OSF, fetched at grade time — never commit them.
-*.nii
-*.nii.gz
