@@ -586,6 +586,9 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # What the pod had (env_record.py `measured`); None when not recorded.
     r["measured"] = rec.get("measured")
     r["answer_key_reads"] = rec.get("answer_key_reads")
+    # Blinded runs only (collect_results.sh): True when the agent's transcript or scripts
+    # named the subject behind the case id; None when not computed.
+    r["subject_named"] = rec.get("subject_named")
     # Web use (finalize_run.py): fetch and search counts and the hosts named.
     # Descriptive; None when not recorded.
     r["web_fetches"] = rec.get("web_fetches")
@@ -1333,7 +1336,7 @@ def report(runs, task, rules=None):
 
 CSV_COLS = ["task", "model", "arm", "rep", "valid", "exclude_reason", "infra_error", "verdict",
             "score", "dice", "passed", "uptake", "skill_loads", "methods",
-            "tools_loaded", "skill_load_failures", "off_spec", "answer_key_reads",
+            "tools_loaded", "skill_load_failures", "off_spec", "answer_key_reads", "subject_named",
             "arm_seen", "flags", "behaviours", "timed_out", "lost", "dataset_pin", "not_found_claims",
             "exit_code",
             "decided_tools", "considered_tools", "astra_citations", "astra_findings",
@@ -1408,6 +1411,7 @@ def main():
             for k in ("off_spec", "answer_key_reads", "arm_seen", "web_hosts"):
                 v = row.get(k)
                 row[k] = "unchecked" if v is None else ";".join(v) if v else "none"
+            row["subject_named"] = "unchecked" if row.get("subject_named") is None else str(bool(row["subject_named"]))
             w.writerow(row)
 
     print("\nwrote %s" % sp)

@@ -153,6 +153,15 @@ def analyse(rows, arm, control, permutations, seed, timeout_min):
     for r in rows:
         if r["arm"] in no_tok and r.get("valid") == "True" and token_value(r) is None:
             no_tok[r["arm"]] += 1
+    # The one sensitivity row of the time test: runs whose transcript or scripts named
+    # the blinded subject (subject_named, blinded waves only) left out.
+    kept = [r for r in rows if str((r.get("_run") or {}).get("subject_named", r.get("subject_named"))) != "True"]
+    used_s, _ = build_strata(kept, arm, control, tv)
+    obs_s, p_s, _ = permutation_test(used_s, arm, control, statistics.median, permutations, seed)
+    out["minutes_to_pass_subject_named_removed"] = {
+        "effect_minutes": obs_s, "p": p_s, "strata": len(used_s),
+        "removed": len(rows) - len(kept)}
+
     used, skipped = build_strata(rows, arm, control, token_value)
     obs, p, n = permutation_test(used, arm, control, statistics.fmean, permutations, seed)
     out["log_tokens"] = {
@@ -201,6 +210,10 @@ def main():
         print("%s: %s vs %s" % (fam, a.arm, a.control))
         print("  minutes to a passing output: %+.1f min (p %.4f; %d strata, n %s)"
               % (m["effect_minutes"], m["p"], m["strata"], m["n"]))
+        s = report[fam]["minutes_to_pass_subject_named_removed"]
+        if s["removed"]:
+            print("  minutes, subject-named runs removed (%d): %+.1f min (p %.4f; %d strata)"
+                  % (s["removed"], s["effect_minutes"], s["p"], s["strata"]))
         print("  tokens per run: x%.2f (p %.4f; %d strata, n %s; without tokens %s)"
               % (k["ratio"], k["p"], k["strata"], k["n"], k["no_tokens"]))
         for key in ("minutes_to_pass", "log_tokens"):

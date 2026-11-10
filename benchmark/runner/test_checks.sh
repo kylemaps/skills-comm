@@ -1000,6 +1000,22 @@ grep -rqF "$K" "$T/r" && bad "  a copy survived next to a read-only file" \
 rm -rf "$T"
 
 echo
+echo "=== finalize_run subject_named: a blinded run that names its subject is flagged, the record never names it"
+T=$(mktemp -d)
+fs() { d="$T/$1"; mkdir -p "$d/src"; echo '{"task_id":"t@case-012"}' > "$d/run.json"
+  printf '%s
+' "$2" > "$d/transcript.txt"; printf '%s
+' "$3" > "$d/src/go.sh"
+  BLIND_SUBJECT="${4-sub-zz77}" "$PY" "$HERE/finalize_run.py" "$d" 0 >/dev/null 2>&1
+  "$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['subject_named'])" "$d/run.json" | tr -d '
+'; }
+o=$(fs a '$ ls input/case-012/anat' 'echo hi'); has "a run that never names the subject: False" "$o" "False"
+o=$(fs b 'the scan looks like sub-zz77 from the dataset' 'echo hi'); has "the subject in the transcript: True" "$o" "True"
+o=$(fs c '$ bash src/go.sh' 'cp /data/sub-zz77_T1w.nii.gz out.nii.gz'); has "the subject in a script: True" "$o" "True"
+o=$(fs d 'anything' 'echo hi' ""); has "no BLIND_SUBJECT given: None (unchecked)" "$o" "None"
+grep -q "sub-zz77" "$T/b/run.json" && bad "the record names the subject" || ok "  and the record never holds the subject string"
+rm -rf "$T"
+
 echo "=== finalize_run answer_key_reads: reads and fetches of grading material"
 T=$(mktemp -d)
 E=$(printf '\033')
@@ -1382,6 +1398,18 @@ wc_() { "$PY" "$HERE/wave_check.py" --sweep "$SW" "$@" >"$T/o" 2>&1; }
 wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
   --skills-hash 291f844a43ec image_version=ci-env2-x tasks_sha=e98e3b6
 expect 0 $? "a declared cell in the pinned environment passes"
+SW2="$T/sweep2.json"
+cat > "$SW2" <<'J'
+{"arms":{"env-only":{"skills_hash":null}},
+ "waves":{"10":{"pins":{"image_version":"ci-env2-x","tasks_sha":"e98e3b6"},
+  "tasks":{"t@case-012":{"family":"t","subject":"case-012","models":["qwen3"],"arms":["env-only"]},
+           "t@case-013":{"family":"t","models":["qwen3"],"arms":["env-only"]}}}}}
+J
+"$PY" "$HERE/wave_check.py" --sweep "$SW2" --wave 10 --label benchmark --task t@case-012 --model neurodesk/qwen3 --arm env-only --skills-hash "" image_version=ci-env2-x tasks_sha=e98e3b6 >"$T/o" 2>&1
+expect 0 $? "a task keyed by a case id, with family and subject declared, passes"
+"$PY" "$HERE/wave_check.py" --sweep "$SW2" --wave 10 --label benchmark --task t@case-013 --model neurodesk/qwen3 --arm env-only --skills-hash "" image_version=ci-env2-x tasks_sha=e98e3b6 >"$T/o" 2>&1
+expect 1 $? "  one whose entry lacks the subject field is stopped"
+grep -q "subject is None; the key says case-013" "$T/o" && ok "  and says which field" || bad "  wrong reason: $(cat "$T/o")"
 wc_ --wave 1 --label benchmark --task diffusion-brain-mask --model neurodesk/qwen3 --arm env+skill \
   --skills-hash 5ba66f0c7ddf image_version=ci-env2-x tasks_sha=e98e3b6
 expect 1 $? "a skill arm dispatched with another snapshot is stopped"

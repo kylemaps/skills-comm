@@ -259,7 +259,7 @@ def main():
         L += ["## Completeness", "", "| task | model | no skill | with skill |", "|---|---|---|---|"]
     else:
         L += ["## Completeness", "", "| task | model | %s |" % " | ".join(cols),
-              "|---|---|%s" % "---|" * len(cols)]
+              "|---|---|" + "---|" * len(cols)]
     complete, n_cells = True, 0
     for t in task_order:
         cfg = tasks[t]
@@ -280,7 +280,7 @@ def main():
           else "NOT COMPLETE: numbers below are interim.", ""]
 
     # -- headline + per model --------------------------------------------
-    L += ["## Headline (per task, models stratified)", "", ROW_HEADER, ROW_RULE]
+    L += ["## Per task, pass rate (each task alone, models stratified)", "", ROW_HEADER, ROW_RULE]
     ps = []
     for t in task_order:
         cfg = tasks[t]
@@ -311,7 +311,7 @@ def main():
                     fam_ps.append((fam, se.exact_stratified_p(st)))
         if len(fam_ps) > 1:
             holm, bh = se.holm([p for _, p in fam_ps]), se.bh([p for _, p in fam_ps])
-            L += ["", "Primary, adjusted across %d families (Holm / BH): " % len(fam_ps) + "; ".join(
+            L += ["", "Pass rate, first comparison, adjusted across %d families (Holm / BH): " % len(fam_ps) + "; ".join(
                 "%s %s / %s" % (f, fp(h), fp(b)) for (f, _), h, b in zip(fam_ps, holm, bh))]
     L += ["", "## Per model per task", ""]
     for t in task_order:

@@ -31,6 +31,10 @@ the primary analysis and each sensitivity analysis:
   lost removed         valid runs without the declared lost runs (sweep.json `lost`)
   lost as pass         valid runs, each declared lost run counted as a pass
   timeouts removed     valid runs without those where timed_out == True
+  subject named removed   valid runs without those whose transcript or scripts named
+                       the blinded subject (subject_named == True)
+  answer-key read removed   valid runs without those with an answer_key_reads entry
+  rep 1 removed        valid runs without repeat 1 (the pilot, by rep number)
 A model with fewer than 5 runs in either arm is left out (MIN_N_FOR_STATS).
 
 Both tables (--runs and --summaries) also print a heterogeneity test across strata:
@@ -68,7 +72,8 @@ def strata_of(summary, arm):
 
 
 SCENARIOS = ["primary", "exclusions as fail", "exclusions as pass", "flagged removed",
-             "on-spec only", "lost removed", "lost as pass", "timeouts removed"]
+             "on-spec only", "lost removed", "lost as pass", "timeouts removed",
+             "subject named removed", "answer-key read removed", "rep 1 removed"]
 
 
 def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS, control=CONTROL):
@@ -99,6 +104,13 @@ def strata_from_runs(rows, arm, scenario, min_n=MIN_N_FOR_STATS, control=CONTROL
         elif scenario == "lost as pass" and r.get("lost"):
             passed = True
         elif scenario == "timeouts removed" and r.get("timed_out") == "True":
+            continue
+        elif scenario == "subject named removed" and r.get("subject_named") == "True":
+            continue  # a blinded run whose transcript or scripts named its subject
+        elif (scenario == "answer-key read removed"
+              and (r.get("answer_key_reads") or "unchecked") not in ("none", "unchecked")):
+            continue
+        elif scenario == "rep 1 removed" and str(r.get("rep")) == "1":
             continue
         c = cells.setdefault(r["model"], {control: [0, 0], arm: [0, 0]})
         c[r["arm"]][0] += passed
