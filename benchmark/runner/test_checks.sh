@@ -1048,7 +1048,7 @@ $ ls')
 [ "$o" = "[]" ] && ok "prose naming tasks.json is not a read" || bad "prose was flagged: $o"
 o=$(fa k answer_key_reads '$ cat /home/jovyan/skills-comm/plugins/brain-extraction/brain-extraction/SKILL.md')
 [ "$o" = "[]" ] && ok "a local skill path containing skills-comm is not a fetch" || bad "local path flagged: $o"
-o=$(fa l answer_key_reads '$ curl -sO https://s3.amazonaws.com/openneuro.org/ds003642/sub-025/anat/x.nii.gz')
+o=$(fa l answer_key_reads '$ curl -sO https://s3.amazonaws.com/openneuro.org/ds003642/sub-901/anat/x.nii.gz')
 [ "$o" = "[]" ] && ok "fetching the task's input dataset is not flagged" || bad "input data flagged: $o"
 W=/home/runner/_work/skills-benchmark/skills-benchmark
 o=$(fa l2 answer_key_reads "→ Read $W/bench/r1/work/run-x/data/ds002790/README.md
@@ -1058,14 +1058,14 @@ o=$(fa l2 answer_key_reads "→ Read $W/bench/r1/work/run-x/data/ds002790/README
 [ "$o" = "[]" ] && ok "paths through a directory named skills-benchmark are not flagged" || bad "honest paths flagged: $o"
 o=$(fa l3 answer_key_reads '→ Read /ws/graders/benchmark/graders/diffusion-brain-mask/PROVENANCE.md')
 has   "  but a grader's PROVENANCE.md still is" "$o" "PROVENANCE.md"
-o=$(fa l5 answer_key_reads '$ aws s3 cp --no-sign-request s3://openneuro.org/ds002790/derivatives/fmriprep/sub-0008/anat/sub-0008_desc-brain_mask.nii.gz .')
+o=$(fa l5 answer_key_reads '$ aws s3 cp --no-sign-request s3://openneuro.org/ds002790/derivatives/fmriprep/sub-9902/anat/sub-9902_desc-brain_mask.nii.gz .')
 has   "fetching the dataset's own derivative brain mask is flagged" "$o" "desc-brain_mask"
-o=$(fa l6 answer_key_reads '% WebFetch https://openneuro.org/crn/datasets/ds002790/snapshots/1.0.1/files/derivatives:fmriprep:sub-0008:anat:sub-0008_space-MNI_brainmask.nii.gz')
+o=$(fa l6 answer_key_reads '% WebFetch https://openneuro.org/crn/datasets/ds002790/snapshots/1.0.1/files/derivatives:fmriprep:sub-9902:anat:sub-9902_space-MNI_brainmask.nii.gz')
 has   "  by the OpenNeuro API path too" "$o" "brainmask"
-mkdir -p "$T/l7"; printf 'import urllib.request\nurllib.request.urlretrieve("https://s3.amazonaws.com/openneuro.org/ds002790/derivatives/freesurfer/sub-0008/mri/aseg.mgz", "aseg.mgz")\n' > "$T/l7/get.py"
+mkdir -p "$T/l7"; printf 'import urllib.request\nurllib.request.urlretrieve("https://s3.amazonaws.com/openneuro.org/ds002790/derivatives/freesurfer/sub-9902/mri/aseg.mgz", "aseg.mgz")\n' > "$T/l7/get.py"
 o=$(fa l7 answer_key_reads '$ python3 get.py')
 has   "  and from a script the agent wrote" "$o" "script:"
-o=$(fa l8 answer_key_reads '$ aws s3 sync --no-sign-request s3://openneuro.org/ds002790/sub-0008/anat/ data/ && ls derivatives/')
+o=$(fa l8 answer_key_reads '$ aws s3 sync --no-sign-request s3://openneuro.org/ds002790/sub-9902/anat/ data/ && ls derivatives/')
 [ "$o" = "[]" ] && ok "the raw images, and a local derivatives/ directory, are not flagged" || bad "raw data flagged: $o"
 mkdir -p "$T/l4/venv/lib/site-packages/pkg"
 printf 'URL = "https://huggingface.co/datasets/neurodeskorg/skills-comm-ground-truth"\n' > "$T/l4/venv/lib/site-packages/pkg/x.py"
@@ -2802,16 +2802,16 @@ echo
 echo "=== subject runs: one run is one task and one subject (<task>@<subject>)"
 T=$(mktemp -d)
 # run_ids: the one rule for the id. (mknii from the block above.)
-"$PY" "$HERE/run_ids.py" structural-brain-extraction@sub-0004 > "$T/o" 2>&1
+"$PY" "$HERE/run_ids.py" structural-brain-extraction@sub-9901 > "$T/o" 2>&1
 expect 0 $? "run_ids splits <task>@<subject>"
 ids_=$(tr -d '\r' < "$T/o")
 has   "  into the task" "$ids_" "task=structural-brain-extraction"
-has   "  and the subject" "$ids_" "subject=sub-0004"
-has   "  with the output one level deeper" "$ids_" "output=submissions/structural-brain-extraction/sub-0004/output.nii.gz"
+has   "  and the subject" "$ids_" "subject=sub-9901"
+has   "  with the output one level deeper" "$ids_" "output=submissions/structural-brain-extraction/sub-9901/output.nii.gz"
 ids_=$("$PY" "$HERE/run_ids.py" structural-mni-registration | tr -d '\r')
 [ "$(printf '%s\n' "$ids_" | sed -n 's/^subject=//p')" = "" ] && ok "a bare task id has no subject" || bad "bare id: $ids_"
 has   "  and the flat output path" "$ids_" "output=submissions/structural-mni-registration/output.nii.gz"
-for bad_ in @sub-0004 task@ a@b@c 't-s@sub-01 ' 't-s@sub 01' t-s@sub/01 t-s@sub__01 't-s '; do
+for bad_ in @sub-9901 task@ a@b@c 't-s@sub-01 ' 't-s@sub 01' t-s@sub/01 t-s@sub__01 't-s '; do
   "$PY" "$HERE/run_ids.py" "$bad_" >/dev/null 2>&1; expect 2 $? "half an id, whitespace, '/' or '__' is refused: '$bad_'"
 done
 # mkprompt: the subject's prompt, and only the subject's.

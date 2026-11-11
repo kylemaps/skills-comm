@@ -309,7 +309,7 @@ the consensus margin.
 
 ## 5. Standing caveats that must travel with any result
 
-1. **Every number is one subject** -- `ds003642 sub-025 ses-003` for both 7T
+1. **Every number is one subject** -- one session of one ds003642 subject for both 7T
    tasks. Nothing here speaks to generalisation across subjects. This is the
    benchmark's biggest weakness.
 2. **Runs replicate outputs.** The 81 accepted 7T runs are **13 distinct masks**,
