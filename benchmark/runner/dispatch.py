@@ -89,6 +89,7 @@ UPLOAD_PATH_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[error\]The path for one of the files in artifact is not valid", re.M)
 OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
 LOG_UNREADABLE = "job log unreadable"
+UPLOAD_STEP = "Upload"   # run.yml's step that uploads a run's record as an artifact
 # Among completed jobs with no "Agent outcome" line, the worst classification
 # any single attempt reached wins (see _merge).
 _BAD_RANK = {"rerun": 1, "lost-candidate": 2, "fingerprint-changed": 3, "unknown": 4}
@@ -218,7 +219,9 @@ class Gh:
             "api", "--paginate",
             "repos/%s/actions/runs/%s/jobs?per_page=100" % (self.repo, run_id)]))
         return [{"id": j["id"], "name": j["name"], "status": j["status"],
-                 "conclusion": j["conclusion"], "runner_name": j.get("runner_name") or ""}
+                 "conclusion": j["conclusion"], "runner_name": j.get("runner_name") or "",
+                 "failed_steps": [s.get("name") for s in j.get("steps") or []
+                                  if s.get("conclusion") == "failure"]}
                 for j in data["jobs"]]
 
     def job_log(self, job_id):
@@ -277,6 +280,12 @@ def clean_log(text):
     return "\n".join(x for x in text.splitlines() if "[36;1m" not in x)
 
 
+def upload_failed(job):
+    """run.yml's Upload step failed: whatever the cause, the run's record is not an
+    artifact, so there is nothing to assemble."""
+    return UPLOAD_STEP in (job.get("failed_steps") or ())
+
+
 def classify_job(gh, job):
     """(kind, detail) for a job that has finished: valid, rerun (infra -- re-run
     the same pair), lost-candidate (OOM or no log -- needs a human),
@@ -296,6 +305,8 @@ def classify_job(gh, job):
             return "rerun", "upload-eacces"
         if UPLOAD_PATH_RE.search(log):
             return "rerun", "upload-path"
+        if upload_failed(job):
+            return "rerun", "upload-failed"
         if PROXY_INVALID_RE.search(log):
             return "rerun", "proxy-summary"
         return "valid", outcome
@@ -616,7 +627,8 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
                 continue
             jid = job["id"]
             cached = job_cache.get(jid)
-            if cached is not None and cached[1] != LOG_UNREADABLE:
+            if (cached is not None and cached[1] != LOG_UNREADABLE
+                    and not (cached[0] == "valid" and upload_failed(job))):
                 kind = cached[0]  # a finished job's log never changes
             else:
                 # A log that could not be read is read again every poll, never

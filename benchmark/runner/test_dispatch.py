@@ -556,6 +556,35 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(state2["pairs"]["1:1"], "valid")
         self.assertEqual(state2["job_cache"]["7001"], ["valid", "completed"])
 
+    # A finished agent whose Upload step failed has no artifact: the pair is owed
+    # again, whatever the upload's error was, and a state that calls it valid is
+    # corrected.
+    def test_failed_upload_step_is_rerun_even_if_remembered_valid(self):
+        order = d.read_order(self.order_path(["1 taskA EGI.kimi-k3 env-only"]))
+        blocks = d.read_plan(self.plan_path(["taskA reps=1 cells=1"]), order)
+        run1 = {"id": 701, "status": "completed", "conclusion": "failure", "created_at": "2026-10-22T00:00:00Z"}
+        j1 = job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 7001, conclusion="failure")
+        j1["failed_steps"] = ["Upload"]
+        log = outcome_log("completed", "##[error]Failed to CreateArtifact: Failed to make request after 5 attempts\n")
+        gh = FakeGh(runs=[run1], jobs_by_run={701: [j1]}, logs_by_job={7001: log})
+        rc, state = d.poll(gh, "o/r", 6, order, blocks, self.wave(reps=1), lanes=4, dry_run=True)
+        self.assertEqual(state["job_cache"]["7001"], ["rerun", "upload-failed"])
+        self.assertEqual(state["pairs"]["1:1"], "rerun")
+        self.assertEqual(len(state["dispatched"]), 1)
+
+        gh2 = FakeGh(runs=[run1], jobs_by_run={701: [j1]}, logs_by_job={7001: log})
+        rc2, state2 = d.poll(gh2, "o/r", 6, order, blocks, self.wave(reps=1), lanes=4,
+                             dry_run=True, job_cache={7001: ("valid", "completed")})
+        self.assertEqual(gh2.log_reads, [7001])
+        self.assertEqual(state2["pairs"]["1:1"], "rerun")
+
+        # Another step failing after the agent leaves the record uploaded: still valid.
+        j2 = job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 7002, conclusion="failure")
+        j2["failed_steps"] = ["Post Run actions/checkout@v5"]
+        gh3 = FakeGh(runs=[run1], jobs_by_run={701: [j2]}, logs_by_job={7002: outcome_log("completed")})
+        rc3, state3 = d.poll(gh3, "o/r", 6, order, blocks, self.wave(reps=1), lanes=4, dry_run=True)
+        self.assertEqual(state3["pairs"]["1:1"], "valid")
+
     # A direct provider's model keeps its prefix in the order file, the dispatched
     # cells, the job name and the run directory; a gateway model keeps neurodesk/.
     def test_direct_provider_model_ids(self):
@@ -747,6 +776,18 @@ class TestJobLog(unittest.TestCase):
         g = self.gh(lambda a: "")
         self.assertIsNone(g.job_log(7))
         self.assertEqual(g.log_errors[7], "empty")
+
+    def test_jobs_carry_their_failed_steps(self):
+        listing = {"jobs": [
+            {"id": 1, "name": "rep 1 t m a", "status": "completed", "conclusion": "failure", "runner_name": "r",
+             "steps": [{"name": "Run", "conclusion": "success"}, {"name": "Upload", "conclusion": "failure"}]},
+            {"id": 2, "name": "plan", "status": "completed", "conclusion": "success"}]}
+        g = self.gh(lambda a: json.dumps(listing))
+        jobs = g.jobs(9)
+        self.assertEqual(jobs[0]["failed_steps"], ["Upload"])
+        self.assertEqual(jobs[1]["failed_steps"], [])
+        self.assertTrue(d.upload_failed(jobs[0]))
+        self.assertFalse(d.upload_failed(jobs[1]))
 
 
 class TestRunList(unittest.TestCase):
