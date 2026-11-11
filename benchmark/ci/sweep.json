@@ -1120,6 +1120,239 @@
         "subjects x 4 models x 3 arms x 7 reps = 504 runs; the same subjects, cell order and held-out",
         "subjects (sub-0004, sub-0025) as waves 7 and 8."
       ]
+    },
+    "10": {
+      "environment": "ci-env8 (ENVIRONMENT.md version 8 in skills-benchmark)",
+      "pins": {
+        "image_version": "ci-env8-apptainer1.4.5-lmod8.7.25-uv0.12.24-astra0.2.18-fsl6.0.7.22-opencode1.18.32",
+        "tasks_sha": "34bdb6f"
+      },
+      "measured": {
+        "cpus": 7,
+        "memory_limit_gib": 28,
+        "work_volume_gib_min": 55,
+        "tmp_on_work_volume": true,
+        "no_new_privs": true,
+        "sudo": false
+      },
+      "models": [
+        "nrp/minimax-m2",
+        "nrp/deepseek-v4-flash"
+      ],
+      "model_fingerprints": {
+        "_comment": [
+          "From the preflight probe through the key proxy of 2026-11-11 00:48Z (preflight",
+          "42934086428). Served: MiniMax-M3.1-Flash and DeepSeek-V4.1-Flash-1017 on",
+          "vllm-0.33.0rc1.dev711+gdd4e40142 (NRP), the builds wave 9 declared."
+        ],
+        "nrp/minimax-m2": "c51dbbd045fe",
+        "nrp/deepseek-v4-flash": "19d1ce27d8bf"
+      },
+      "arms_compared": {
+        "_comment": [
+          "Primary outcome (results/wave10/README.md): minutes to a passing output on",
+          "structural-brain-extraction-7t-nodura, env+skill-michele against env+skill, permutation test",
+          "within strata of model x case. Pass rates, each skill against env-only and B against A, are",
+          "secondary, strata model x case (wave_report.py)."
+        ],
+        "primary": [
+          "env+skill-michele",
+          "env+skill"
+        ],
+        "secondary": [
+          [
+            "env+skill",
+            "env-only"
+          ],
+          [
+            "env+skill-michele",
+            "env-only"
+          ]
+        ]
+      },
+      "primary_family": "structural-brain-extraction-7t-nodura",
+      "rules": {
+        "_comment": [
+          "As in wave 9. A run names a case, never a subject (task v2): the scan is fetched before the",
+          "agent starts and handed over under the case id. A run whose transcript or scripts name its",
+          "subject is flagged (subject_named), kept, and reported in a sensitivity row."
+        ],
+        "timeout": "fail",
+        "infra_errors_from": "opencode",
+        "control_skill_reads": "keep",
+        "lost": "fail"
+      },
+      "tasks": {
+        "structural-brain-extraction-7t-nodura@case-513": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "case-513",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 14
+        },
+        "structural-brain-extraction-7t-nodura@case-798": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "case-798",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 14
+        },
+        "structural-brain-extraction-7t-nodura@case-873": {
+          "family": "structural-brain-extraction-7t-nodura",
+          "subject": "case-873",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 14
+        },
+        "structural-brain-extraction@case-532": {
+          "family": "structural-brain-extraction",
+          "subject": "case-532",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 5
+        },
+        "structural-brain-extraction@case-899": {
+          "family": "structural-brain-extraction",
+          "subject": "case-899",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 5
+        },
+        "structural-brain-extraction@case-950": {
+          "family": "structural-brain-extraction",
+          "subject": "case-950",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ],
+          "reps": 5
+        },
+        "structural-brain-extraction-motion@case-307": {
+          "family": "structural-brain-extraction-motion",
+          "subject": "case-307",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-motion@case-352": {
+          "family": "structural-brain-extraction-motion",
+          "subject": "case-352",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-motion@case-882": {
+          "family": "structural-brain-extraction-motion",
+          "subject": "case-882",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-pediatric@case-347": {
+          "family": "structural-brain-extraction-pediatric",
+          "subject": "case-347",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-pediatric@case-538": {
+          "family": "structural-brain-extraction-pediatric",
+          "subject": "case-538",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        },
+        "structural-brain-extraction-pediatric@case-933": {
+          "family": "structural-brain-extraction-pediatric",
+          "subject": "case-933",
+          "models": [
+            "nrp/minimax-m2",
+            "nrp/deepseek-v4-flash"
+          ],
+          "arms": [
+            "env-only",
+            "env+skill",
+            "env+skill-michele"
+          ]
+        }
+      },
+      "reps": 7,
+      "_comment_design": [
+        "Blinded runs (task v2): 4 tasks x 3 cases x 2 models x 3 arms. Reps: 5 for",
+        "structural-brain-extraction, 14 for structural-brain-extraction-7t-nodura, 7 for motion and",
+        "pediatric: 594 runs. For motion and pediatric, 3 of each task's 5 cases drawn with seed",
+        "20261110 (random.Random(seed).sample over the sorted case ids); the other 2 held out."
+      ]
     }
   }
 }
