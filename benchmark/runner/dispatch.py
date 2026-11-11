@@ -88,6 +88,7 @@ UPLOAD_EACCES_RE = re.compile(
 UPLOAD_PATH_RE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT[\d:.]+Z )?##\[error\]The path for one of the files in artifact is not valid", re.M)
 OOM_RE = re.compile(r"OOMKilled|Out of memory|oom-kill|Killed process", re.I)
+LOG_UNREADABLE = "job log unreadable"
 # Among completed jobs with no "Agent outcome" line, the worst classification
 # any single attempt reached wins (see _merge).
 _BAD_RANK = {"rerun": 1, "lost-candidate": 2, "fingerprint-changed": 3, "unknown": 4}
@@ -193,6 +194,7 @@ class Gh:
 
     def __init__(self, repo):
         self.repo = repo
+        self.log_errors = {}  # job id -> why its log could not be read
 
     def _run(self, args):
         return subprocess.run(["gh"] + args, capture_output=True, text=True,
@@ -222,11 +224,22 @@ class Gh:
     def job_log(self, job_id):
         """The job's log, or None when it cannot be read. Called only when a
         record field (the Agent outcome step line) is not enough on its own."""
-        try:
-            out = self._run(["api", "repos/%s/actions/jobs/%s/logs" % (self.repo, job_id)])
-        except subprocess.CalledProcessError:
-            return None
-        return out or None
+        path = "repos/%s/actions/jobs/%s/logs" % (self.repo, job_id)
+        # A job log carries colour codes. A newer gh prints a response with terminal
+        # escape sequences only when told to; an older gh does not know the option.
+        for extra in (["--allow-escape-sequences"], []):
+            try:
+                out = self._run(["api", path] + extra)
+            except subprocess.CalledProcessError as e:
+                # gh's first line, without any address (it can be a signed one).
+                first = ((e.stderr or "").strip().splitlines() or ["gh exit %d" % e.returncode])[0]
+                self.log_errors[job_id] = re.sub(r"https?://\S+", "<address>", first)[:100]
+                continue
+            if out:
+                self.log_errors.pop(job_id, None)
+                return out
+            self.log_errors[job_id] = "empty"
+        return None
 
     def dispatch_run(self, fields):
         self._run(["workflow", "run", "run.yml", "-R", self.repo] + _f_args(fields))
@@ -305,7 +318,7 @@ def classify_job(gh, job):
     # written. Fall back to the job conclusion and the legacy log patterns
     # w6_watch.py read.
     if log is None:
-        return "lost-candidate", "job log unreadable"
+        return "lost-candidate", LOG_UNREADABLE
     if FETCH_FAILED in log:
         return "rerun", "fetch-failed"
     if FINGERPRINT_RE.search(log):
@@ -602,10 +615,16 @@ def poll(gh, repo, wave, order, blocks, wave_sweep, lanes, since=None,
                 pair_status[pair] = _merge(pair_status.get(pair), "in-flight")
                 continue
             jid = job["id"]
-            if jid in job_cache:
-                kind, _ = job_cache[jid]  # a finished job's log never changes
+            cached = job_cache.get(jid)
+            if cached is not None and cached[1] != LOG_UNREADABLE:
+                kind = cached[0]  # a finished job's log never changes
             else:
+                # A log that could not be read is read again every poll, never
+                # trusted from an earlier one: the read itself can be what failed.
                 kind, detail = classify_job(gh, job)
+                if detail == LOG_UNREADABLE:
+                    log.append("LOG job %d not readable: %s" % (
+                        jid, getattr(gh, "log_errors", {}).get(jid, "no reason given")))
                 job_cache[jid] = (kind, detail)
             pair_status[pair] = _merge(pair_status.get(pair), kind)
 

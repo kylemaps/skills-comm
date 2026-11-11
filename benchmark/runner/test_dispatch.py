@@ -535,6 +535,27 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(gh2.log_reads, [])  # reused from the cache, not re-read
         self.assertEqual(state2["pairs"]["1:1"], "valid")
 
+    # An unreadable log needs a human, and a state that remembers one is read
+    # again instead of trusted.
+    def test_unreadable_log_stops_and_is_read_again(self):
+        order = d.read_order(self.order_path(["1 taskA EGI.kimi-k3 env-only"]))
+        blocks = d.read_plan(self.plan_path(["taskA reps=1 cells=1"]), order)
+        run1 = {"id": 701, "status": "completed", "conclusion": "failure", "created_at": "2026-10-22T00:00:00Z"}
+        j1 = job("rep 1 taskA neurodesk/EGI.kimi-k3 env-only", 7001, conclusion="failure")
+        gh = FakeGh(runs=[run1], jobs_by_run={701: [j1]}, logs_by_job={})
+        rc, state = d.poll(gh, "o/r", 6, order, blocks, self.wave(reps=1), lanes=4, dry_run=True)
+        self.assertEqual(rc, 20)
+        self.assertEqual(state["pairs"]["1:1"], "lost-candidate")
+
+        cache = {int(jid): tuple(v) for jid, v in state["job_cache"].items()}
+        self.assertEqual(cache[7001], ("lost-candidate", d.LOG_UNREADABLE))
+        gh2 = FakeGh(runs=[run1], jobs_by_run={701: [j1]}, logs_by_job={7001: outcome_log("completed")})
+        rc2, state2 = d.poll(gh2, "o/r", 6, order, blocks, self.wave(reps=1), lanes=4,
+                             dry_run=True, job_cache=cache)
+        self.assertEqual(gh2.log_reads, [7001])
+        self.assertEqual(state2["pairs"]["1:1"], "valid")
+        self.assertEqual(state2["job_cache"]["7001"], ["valid", "completed"])
+
     # A direct provider's model keeps its prefix in the order file, the dispatched
     # cells, the job name and the run directory; a gateway model keeps neurodesk/.
     def test_direct_provider_model_ids(self):
@@ -684,6 +705,48 @@ class TestFetchFailed(unittest.TestCase):
 
     def test_a_blind_check_stop_still_stops_the_poll(self):
         self.assertEqual(self.classify("2026-11-14T01:00:00Z FAIL: a blinded name appears in /x\n")[0], "unknown")
+
+
+class TestJobLog(unittest.TestCase):
+    """Gh.job_log against a gh that refuses escape sequences without the option, and
+    one that does not know the option."""
+
+    def gh(self, respond):
+        g = d.Gh("o/r")
+        g.calls = []
+
+        def run(args):
+            g.calls.append(args)
+            return respond(args)
+        g._run = run
+        return g
+
+    def fail(self, message):
+        raise d.subprocess.CalledProcessError(1, "gh", stderr=message)
+
+    def test_newer_gh_gets_the_option(self):
+        g = self.gh(lambda a: "\x1b[36mlog\x1b[0m" if "--allow-escape-sequences" in a
+                    else self.fail("the response contains terminal escape sequences"))
+        self.assertEqual(g.job_log(7), "\x1b[36mlog\x1b[0m")
+        self.assertEqual(len(g.calls), 1)
+        self.assertEqual(g.log_errors, {})
+
+    def test_older_gh_is_asked_again_without_it(self):
+        g = self.gh(lambda a: self.fail("unknown flag: --allow-escape-sequences")
+                    if "--allow-escape-sequences" in a else "log")
+        self.assertEqual(g.job_log(7), "log")
+        self.assertEqual(len(g.calls), 2)
+        self.assertEqual(g.log_errors, {})
+
+    def test_a_failed_read_keeps_its_reason_without_an_address(self):
+        g = self.gh(lambda a: self.fail("gh: Not Found (HTTP 404) https://host.example/a?sig=abc\nmore"))
+        self.assertIsNone(g.job_log(7))
+        self.assertEqual(g.log_errors[7], "gh: Not Found (HTTP 404) <address>")
+
+    def test_an_empty_log_is_unreadable(self):
+        g = self.gh(lambda a: "")
+        self.assertIsNone(g.job_log(7))
+        self.assertEqual(g.log_errors[7], "empty")
 
 
 class TestRunList(unittest.TestCase):
