@@ -299,7 +299,7 @@ def main():
     if families:
         L += ["", "## Families (subject tasks pooled, strata = model x subject)", "",
               FAMILY_HEADER, ROW_RULE]
-        fam_ps = []
+        fam_ps, secondary_ps = [], []
         for fam, members in families.items():
             frows = [dict(r, _subject=tasks[t]["subject"]) for t in members for r in rows[t]]
             models = sorted({m for t in members for m in tasks[t]["models"]})
@@ -309,10 +309,19 @@ def main():
                 L.append(fmt_row(row_dict("%s: %s vs %s" % (fam, arm, control), st)))
                 if i == 0 and st:
                     fam_ps.append((fam, se.exact_stratified_p(st)))
+                elif st:
+                    secondary_ps.append(("%s: %s vs %s" % (fam, arm, control), se.exact_stratified_p(st)))
         if len(fam_ps) > 1:
             holm, bh = se.holm([p for _, p in fam_ps]), se.bh([p for _, p in fam_ps])
             L += ["", "Pass rate, first comparison, adjusted across %d families (Holm / BH): " % len(fam_ps) + "; ".join(
                 "%s %s / %s" % (f, fp(h), fp(b)) for (f, _), h, b in zip(fam_ps, holm, bh))]
+        # The declared secondary pairs (each skill against no skill) are one family of their
+        # own: every family's tests of every secondary pair, adjusted together.
+        if len(secondary_ps) > 1:
+            holm, bh = se.holm([p for _, p in secondary_ps]), se.bh([p for _, p in secondary_ps])
+            L += ["", "Pass rate, the secondary comparisons, adjusted across %d tests (Holm / BH): "
+                  % len(secondary_ps) + "; ".join(
+                      "%s %s / %s" % (n, fp(h), fp(b)) for (n, _), h, b in zip(secondary_ps, holm, bh))]
     L += ["", "## Per model per task", ""]
     for t in task_order:
         cfg = tasks[t]

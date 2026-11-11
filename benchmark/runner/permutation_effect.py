@@ -28,6 +28,10 @@ code, so the numbers in the write-up come from one place that was written before
                                 counted per arm (no_tokens). Statistic per stratum:
                                 mean(B) - mean(A).
 
+A wave that declares waves.<n>.primary_family also gets Holm-adjusted p values across
+families (p_holm): minutes over every family but the primary one, whose single test is not
+adjusted, and tokens over every family.
+
 The effect is the mean of the per-stratum statistics weighted by the stratum's run count.
 A stratum with fewer than two runs in either arm contributes nothing and is listed. The p
 value is two-sided: the arm labels are permuted within each stratum (--permutations times,
@@ -198,6 +202,21 @@ def analyse(rows, arm, control, permutations, seed, timeout_min, placements=None
     return out
 
 
+def adjust_families(report, primary):
+    """Holm across the families of each outcome, for a wave that declares a primary family:
+    minutes to a passing output over every family but the primary (its one test is not
+    adjusted), log tokens over every family. Adds p_holm beside each p; a family without a p
+    (no strata) is left out of its adjustment."""
+    import stratified_effect as se
+    for key, fams in (("minutes_to_pass", [f for f in sorted(report) if f != primary]),
+                      ("log_tokens", sorted(report))):
+        ps = [(f, report[f][key]["p"]) for f in fams if report[f][key]["p"] == report[f][key]["p"]]
+        for (f, _), h in zip(ps, se.holm([p for _, p in ps])):
+            report[f][key]["p_holm"] = h
+    if primary in report:
+        report[primary]["minutes_to_pass"]["primary"] = True
+
+
 def families(tasks):
     """{family: [task ids]} from wave_config's tasks."""
     fam = {}
@@ -253,6 +272,16 @@ def main():
         for key in ("minutes_to_pass", "log_tokens"):
             if report[fam][key]["strata_skipped"]:
                 print("  %s: strata skipped: %s" % (key, ", ".join(report[fam][key]["strata_skipped"])))
+    primary = (sweep.get("waves", {}).get(str(a.wave)) or {}).get("primary_family")
+    if primary:
+        adjust_families(report, primary)
+        print("Holm across families (the primary family's minutes test is not adjusted):")
+        for fam in sorted(report):
+            m, k = report[fam]["minutes_to_pass"], report[fam]["log_tokens"]
+            print("  %s: minutes p %.4f %s; tokens p %.4f, Holm %s" % (
+                fam, m["p"], "(primary)" if m.get("primary") else "Holm %s" % (
+                    "%.4f" % m["p_holm"] if "p_holm" in m else "-"),
+                k["p"], "%.4f" % k["p_holm"] if "p_holm" in k else "-"))
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=1, sort_keys=True)

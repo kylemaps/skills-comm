@@ -264,6 +264,14 @@ class TestFamilies(unittest.TestCase):
         self.assertEqual(rows["fam: env+skill vs env-only"], ["4", "0/20", "12/20"])
         self.assertEqual(rows["fam: env+skill-b vs env-only"], ["4", "0/20", "20/20"])
 
+    def test_the_secondary_comparisons_are_adjusted_together(self):
+        out = self.report()
+        line = [l for l in out.splitlines() if l.startswith("Pass rate, the secondary comparisons")]
+        self.assertEqual(len(line), 1)
+        self.assertIn("adjusted across 2 tests (Holm / BH)", line[0])
+        self.assertIn("fam: env+skill vs env-only", line[0])
+        self.assertIn("fam: env+skill-b vs env-only", line[0])
+
     def test_completeness_counts_every_declared_arm(self):
         out = self.report()
         self.assertIn("| task | model | env+skill | env+skill-b | env-only |", out)

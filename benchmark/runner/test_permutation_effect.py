@@ -189,6 +189,28 @@ class Analyse(unittest.TestCase):
         self.assertAlmostEqual(k["ratio"], 1000 / (4000 ** 4 * 2000) ** (1 / 5.0), places=6)
 
 
+class AdjustFamilies(unittest.TestCase):
+    def report(self, **ps):
+        return {f: {"minutes_to_pass": {"p": p[0]}, "log_tokens": {"p": p[1]}} for f, p in ps.items()}
+
+    def test_the_primary_is_not_adjusted_and_the_rest_are_holm(self):
+        rep = self.report(prim=(0.01, 0.04), a=(0.01, 0.03), b=(0.04, 0.02), c=(0.30, 0.01))
+        pe.adjust_families(rep, "prim")
+        self.assertTrue(rep["prim"]["minutes_to_pass"]["primary"])
+        self.assertNotIn("p_holm", rep["prim"]["minutes_to_pass"])
+        # minutes over a, b, c: 0.01*3, max(0.03, 0.04*2), max(0.08, 0.30*1)
+        self.assertEqual([round(rep[f]["minutes_to_pass"]["p_holm"], 6) for f in "abc"], [0.03, 0.08, 0.3])
+        # tokens over all four: c 0.01*4, b 0.02*3, a 0.03*2, prim max(0.06, 0.04)
+        self.assertEqual([round(rep[f]["log_tokens"]["p_holm"], 6) for f in ("a", "b", "c", "prim")],
+                         [0.06, 0.06, 0.04, 0.06])
+
+    def test_a_family_without_a_p_is_left_out(self):
+        rep = self.report(prim=(0.01, 0.01), a=(float("nan"), 0.02), b=(0.02, 0.02))
+        pe.adjust_families(rep, "prim")
+        self.assertNotIn("p_holm", rep["a"]["minutes_to_pass"])
+        self.assertAlmostEqual(rep["b"]["minutes_to_pass"]["p_holm"], 0.02)   # a family of one
+
+
 class EndToEnd(unittest.TestCase):
     """A results directory as assemble writes it, a sweep with the wave, the script."""
 
