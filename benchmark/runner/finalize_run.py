@@ -528,22 +528,28 @@ _KEY_FILE = re.compile(
     r"|grade_wrapper\.py|fetch_reference\.py|run_manifest\.json)\b"
     r"|(?<![\w.-])(?:graders|benchmark)/\S*(?:PROVENANCE|README)\.md"
     r"|(?<![\w.-])graders/\S")
-# The OSF projects that hold reference outputs (the task pack's datasets_catalog names
-# them as ground-truth sources: zjqey main, y2dq4 MRtrix diffusion, q7v8c QSIPrep)
-# count as sources too. ru43c holds a task's DATA on OSF and is not one of them.
-_OSF_REFS = r"(?<![\w])(?:zjqey|y2dq4|q7v8c)(?![\w])"
+# The gated reference dataset and the OSF projects that hold reference outputs count as
+# sources too. They are matched by a salted hash of their names (key_sources.py), so
+# nothing on disk during a run names them.
 _KEY_SRC = re.compile(
     r"(?:github\.com|githubusercontent\.com|github\.io|huggingface\.co|hf\.co)"
     r"[^\s'\"]*skills[-_](?:comm|benchmark)"
-    r"|skills-comm-ground-truth|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)"
-    r"|" + _OSF_REFS, re.I)
-_KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)|" + _OSF_REFS, re.I)
+    r"|(?<![/\w.-])[\w.-]+/skills-(?:comm|benchmark)\b(?!/)", re.I)
+_KEY_QUERY = re.compile(r"skills[-_ ]?(?:comm|benchmark)", re.I)
 # A published brain mask of the task's own dataset (an OpenNeuro derivatives tree, by
 # URL, S3 path or API path) is an answer in all but name: fetching one counts as a
 # source. The dataset's raw images are the task's input and do not count.
 _REF_DERIV = re.compile(
     r"openneuro[^\s'\"]*derivatives[/:][^\s'\"]*?(?:brain[_-]?mask|brainmask|desc-brain|aseg|aparc)", re.I)
 _LISTS = ("find", "ls", "locate", "which", "echo", "printf", "mkdir", "cd", "stat")
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from key_sources import named_source  # noqa: E402
+
+
+def _key_src(l):
+    return bool(_KEY_SRC.search(l) or _REF_DERIV.search(l) or named_source(l))
 
 
 def _key_hits():
@@ -553,13 +559,13 @@ def _key_hits():
             if _KEY_FILE.search(l):
                 hits.append(l)
         elif l.startswith("% WebFetch "):
-            if _KEY_SRC.search(l) or _REF_DERIV.search(l):
+            if _key_src(l):
                 hits.append(l)
         elif l.startswith("◈ "):
-            if _KEY_QUERY.search(l):
+            if _KEY_QUERY.search(l) or named_source(l):
                 hits.append(l)
         elif l.startswith("$ "):
-            if _KEY_SRC.search(l) or _REF_DERIV.search(l):
+            if _key_src(l):
                 hits.append(l)
                 continue
             for seg in re.split(r"\|\|?|;|&&", l[2:]):
@@ -568,7 +574,7 @@ def _key_hits():
                     hits.append(l)
                     break
     for l in _script_lines[".sh"] + _script_lines[".py"]:
-        if _KEY_SRC.search(l) or _KEY_FILE.search(l) or _REF_DERIV.search(l):
+        if _key_src(l) or _KEY_FILE.search(l):
             hits.append("script: " + l.strip())
     return sorted({h[:160] for h in hits})
 
