@@ -1,11 +1,14 @@
 {
   "_comment": [
     "What a blinded run receives as its input, per task: which of the subject's files the",
-    "harness fetches from the dataset (a glob relative to the subject's directory; it must",
-    "match exactly one file), the neutral name it is handed over under (relative to",
-    "input/<case>/), and the one sentence the prompt says about the scan. No subject,",
-    "session or dataset name reaches the agent: the neutral names carry none, the NIfTI",
-    "header's descriptive fields are blanked and the JSON sidecar is not shipped."
+    "harness fetches from the dataset (a glob relative to the subject's directory, or from",
+    "the dataset's root when it starts with '/'; it must match exactly one file) or a fixed",
+    "`url` for a file that is not the dataset's (a template), the neutral name it is handed",
+    "over under (relative to input/<case>/), and the one sentence the prompt says about the",
+    "input. No subject, session or dataset name reaches the agent: the neutral names carry",
+    "none, the NIfTI header's descriptive fields are blanked and the JSON sidecar is not",
+    "shipped. Before the agent starts, the run keeps only its own task's neutral names and",
+    "sentence."
   ],
   "structural-brain-extraction": {
     "files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
@@ -26,5 +29,16 @@
   "structural-brain-extraction-7t-nodura": {
     "files": [{"match": "ses-*/anat/{subject}_ses-*_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
     "scan": "a 7T MP2RAGE T1-weighted (UNI) image of the head"
+  },
+  "structural-tissue-segmentation-7t": {
+    "files": [{"match": "ses-*/anat/{subject}_ses-*_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+    "scan": "a 7T MP2RAGE T1-weighted (UNI) image of the head"
+  },
+  "structural-mni-registration": {
+    "files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"},
+              {"match": "/derivatives/fmriprep/{subject}/anat/{subject}_dseg.nii.gz", "as": "anat/dseg.nii.gz"},
+              {"url": "https://templateflow.s3.amazonaws.com/tpl-MNI152NLin2009cAsym/tpl-MNI152NLin2009cAsym_res-01_T1w.nii.gz",
+               "as": "template/T1w.nii.gz"}],
+    "scan": "a T1-weighted MRI of the head, a tissue segmentation of it (1 = grey matter, 2 = white matter, 3 = CSF) and the MNI152NLin2009cAsym template at 1 mm"
   }
 }

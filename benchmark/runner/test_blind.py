@@ -122,6 +122,71 @@ class HeaderBlanking(unittest.TestCase):
         self.assertEqual(z[4:8], b"\0\0\0\0")       # MTIME 0
 
 
+class InputKinds(unittest.TestCase):
+    """fetch_input's three kinds of input file: under the subject's directory, from the
+    dataset's root (a derivative of the subject) and at a fixed address (a template)."""
+
+    TREE = {
+        None: [{"id": "d1", "filename": "derivatives", "directory": True},
+               {"id": "s1", "filename": "sub-9901", "directory": True}],
+        "d1": [{"id": "d2", "filename": "fmriprep", "directory": True}],
+        "d2": [{"id": "d3", "filename": "sub-9901", "directory": True}],
+        "d3": [{"id": "d4", "filename": "anat", "directory": True}],
+        "d4": [{"id": "f1", "filename": "sub-9901_dseg.nii.gz", "directory": False, "urls": ["https://x/dseg"]},
+               {"id": "f2", "filename": "sub-9901_dseg.json", "directory": False, "urls": ["https://x/json"]}],
+    }
+
+    def setUp(self):
+        self.real = (fetch_input._tree, fetch_input.download, fetch_input.resolve, fetch_input.snapshot_files)
+        fetch_input._tree = lambda ds, ver, tree=None: self.TREE[tree]
+
+    def tearDown(self):
+        (fetch_input._tree, fetch_input.download, fetch_input.resolve, fetch_input.snapshot_files) = self.real
+
+    def test_a_root_pattern_walks_its_directories(self):
+        got = fetch_input.dataset_file("ds000000", "1.0.0", "sub-9901",
+                                       "/derivatives/fmriprep/{subject}/anat/{subject}_dseg.nii.gz")
+        self.assertEqual(got, ("derivatives/fmriprep/sub-9901/anat/sub-9901_dseg.nii.gz", "https://x/dseg"))
+
+    def test_a_root_pattern_must_find_one_file(self):
+        with self.assertRaises(SystemExit):     # two files match
+            fetch_input.dataset_file("ds000000", "1.0.0", "sub-9901", "/derivatives/fmriprep/{subject}/anat/*")
+        with self.assertRaises(SystemExit):     # a directory on the path is missing
+            fetch_input.dataset_file("ds000000", "1.0.0", "sub-9901", "/derivatives/qsiprep/{subject}/anat/x.nii.gz")
+
+    def test_all_three_kinds_are_shipped_under_neutral_names(self):
+        spec = {"t": {"files": [
+            {"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"},
+            {"match": "/derivatives/fmriprep/{subject}/anat/{subject}_dseg.nii.gz", "as": "anat/dseg.nii.gz"},
+            {"url": "https://templates.example/tpl_T1w.nii.gz", "as": "template/T1w.nii.gz"}], "scan": "x"}}
+        fetch_input.resolve = lambda repo, rev, case: {"task": "t", "subject": "sub-9901", "dataset": "ds000000"}
+        fetch_input.snapshot_files = lambda ds, ver, s: [("anat/sub-9901_T1w.nii.gz", "https://x/t1")]
+        fetched = []
+
+        def download(url):
+            fetched.append(url)
+            return gzip.compress(nifti1(descrip=b"sub-9901"))
+        fetch_input.download = download
+        with tempfile.TemporaryDirectory() as d:
+            sp = os.path.join(d, "spec.json")
+            with open(sp, "w") as fh:
+                json.dump(spec, fh)
+            rec = os.path.join(d, "record.json")
+            fetch_input.main(["--task", "t", "--case", "case-012", "--dest", d, "--cases-repo", "o/r",
+                              "--cases-revision", "v", "--dataset", "ds000000", "--version", "1.0.0",
+                              "--spec", sp, "--record", rec])
+            root = os.path.join(d, "input", "case-012")
+            names = sorted(os.path.relpath(os.path.join(dp, f), root).replace(os.sep, "/")
+                           for dp, _, fs in os.walk(root) for f in fs)
+            self.assertEqual(names, ["anat/T1w.nii.gz", "anat/dseg.nii.gz", "template/T1w.nii.gz"])
+            self.assertEqual(fetched, ["https://x/t1", "https://x/dseg", "https://templates.example/tpl_T1w.nii.gz"])
+            for n in names:
+                with open(os.path.join(root, n), "rb") as fh:
+                    self.assertNotIn(b"sub-9901", gzip.decompress(fh.read()))
+            with open(rec) as fh:
+                self.assertEqual(len(json.load(fh)["files"]), 3)
+
+
 class CaseTable(unittest.TestCase):
     def test_the_case_table_leaves_no_copy_behind(self):
         """resolve() reads cases.json through a cache of its own and deletes it."""

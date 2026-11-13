@@ -8,9 +8,12 @@
 Resolves the case to its subject through the gated cases.json (the reference dataset,
 at the pinned revision), walks the subject's files in the dataset's pinned OpenNeuro
 snapshot (its GraphQL file tree, which names a versioned object per file), picks the
-ones input_spec.json names for the task (each glob must match exactly one file),
-downloads those versioned objects, and writes them under DIR/input/<case>/ as the
-spec's neutral names. On the way every NIfTI descriptive header field is blanked
+ones input_spec.json names for the task (each glob must match exactly one file; a
+pattern that starts with '/' is taken from the dataset's root, as for a derivative of
+the subject; an entry with a `url` is a file that is not the dataset's, such as a
+template, fetched from that fixed address), downloads them, and writes them under
+DIR/input/<case>/ as the spec's neutral names. On the way every NIfTI descriptive
+header field is blanked
 (db_name, descrip, aux_file, intent_name, and the payload of every header extension),
 and the gzip wrapper is rewritten without a file name, so neither the file nor its
 header carries the subject or the dataset. No JSON sidecar is shipped.
@@ -148,6 +151,24 @@ def pick(files, subject, pattern):
     return hits[0]
 
 
+def dataset_file(dataset, version, subject, pattern):
+    """(path, versioned url) of the one file at a path from the dataset's root (a pattern
+    that starts with '/', as for a derivative of the subject). The directories are
+    literal; the file name may be a glob."""
+    *dirs, name = pattern.lstrip("/").replace("{subject}", subject).split("/")
+    tree = None
+    for d in dirs:
+        hit = [f for f in _tree(dataset, version, tree) if f["filename"] == d and f["directory"]]
+        if not hit:
+            sys.exit("FAIL: input pattern %r: a directory on its path is not in the snapshot" % pattern)
+        tree = hit[0]["id"]
+    hits = [("/".join(dirs + [f["filename"]]), f["urls"][0]) for f in _tree(dataset, version, tree)
+            if not f["directory"] and f.get("urls") and fnmatch.fnmatchcase(f["filename"], name)]
+    if len(hits) != 1:
+        sys.exit("FAIL: input pattern %r matches %d files of the dataset, not 1" % (pattern, len(hits)))
+    return hits[0]
+
+
 def download(url):
     def get():
         with urllib.request.urlopen(url, timeout=900) as r:
@@ -221,7 +242,12 @@ def main(argv=None):
     # the case, the task and the version, not the dataset or the subject.
     record = {"case": a.case, "task": a.task, "version": a.version, "files": []}
     for f in spec["files"]:
-        rel, url = pick(files, subject, f["match"])
+        if f.get("url"):                      # not the dataset's: a template at a fixed address
+            rel, url = f["url"], f["url"]
+        elif f["match"].startswith("/"):      # from the dataset's root, e.g. a derivative
+            rel, url = dataset_file(a.dataset, a.version, subject, f["match"])
+        else:
+            rel, url = pick(files, subject, f["match"])
         raw = download(url)
         if rel.endswith(".gz"):
             raw = gzip.decompress(raw)
