@@ -8,7 +8,11 @@
     "input. No subject, session or dataset name reaches the agent: the neutral names carry",
     "none, the NIfTI header's descriptive fields are blanked and the JSON sidecar is not",
     "shipped. Before the agent starts, the run keeps only its own task's neutral names and",
-    "sentence."
+    "sentence.",
+    "A task with a `tree` instead of `files` runs unblinded and gets its dataset's whole file",
+    "tree at the pinned snapshot, under input/<as>/: every file whose name matches an",
+    "`empty` glob as an empty file, every other one with its contents. Its sentence follows",
+    "the prompt's DATASET line."
   ],
   "structural-brain-extraction": {
     "files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
@@ -40,5 +44,9 @@
               {"url": "https://templateflow.s3.amazonaws.com/tpl-MNI152NLin2009cAsym/tpl-MNI152NLin2009cAsym_res-01_T1w.nii.gz",
                "as": "template/T1w.nii.gz"}],
     "scan": "a T1-weighted MRI of the head, a tissue segmentation of it (1 = grey matter, 2 = white matter, 3 = CSF) and the MNI152NLin2009cAsym template at 1 mm"
+  },
+  "data-handling-nipoppy-fmriprep": {
+    "tree": {"as": "ds003653", "empty": ["*.nii", "*.nii.gz"]},
+    "scan": "its BIDS tree with every file in place, the images as empty files and every other file as published"
   }
 }

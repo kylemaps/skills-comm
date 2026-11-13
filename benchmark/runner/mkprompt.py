@@ -22,6 +22,10 @@ harness put the scan (input_spec.json: the neutral file name and one sentence
 about the scan). The subject list is not consulted; the case's subject is known
 only to the steps that hold the gated token.
 
+A task whose whole dataset tree is staged for it (a `tree` entry in input_spec.json)
+runs unblinded: its DATASET line says where the tree is and what it holds instead of
+asking the agent to fetch it.
+
 --prompts-only writes a copy of the task pack holding only each task's `prompt`
 block. The run uses that copy, so the solution blocks, grading settings and
 descriptions are not on disk while the agent works.
@@ -42,10 +46,28 @@ def input_line(task, case):
     spec = json.load(open(INPUT_SPEC, encoding="utf-8")).get(task)
     if not spec:
         sys.exit("task %s has no entry in input_spec.json, so it cannot run blinded" % task)
+    if "files" not in spec:
+        sys.exit("task %s stages its whole dataset tree, so it runs unblinded, not as a case" % task)
     paths = ["input/%s/%s" % (case, f["as"]) for f in spec["files"]]
     return ("INPUT: %s, already in your working directory at %s. "
             "Use it as it is; do not fetch anything else for it.\n\n"
             % (spec["scan"], " and ".join("`%s`" % p for p in paths)))
+
+
+def tree_spec(task):
+    """The task's input_spec.json entry when it stages a dataset tree, else None."""
+    if not os.path.exists(INPUT_SPEC):
+        return None
+    spec = json.load(open(INPUT_SPEC, encoding="utf-8")).get(task) or {}
+    return spec if spec.get("tree") else None
+
+
+def tree_line(ds, spec):
+    """The DATASET line of an unblinded run whose dataset tree is staged for it."""
+    return ("DATASET: %s %s (version %s), already in your working directory at `input/%s/`: %s. "
+            "Use it as it is; do not download the dataset.\n\n"
+            % (ds.get("source", ""), ds.get("id", ""), ds.get("version_pin", ""),
+               spec["tree"]["as"], spec["scan"]))
 
 
 def prompts_only(data):
@@ -112,6 +134,8 @@ for _cat, body in data.get("categories", {}).items():
         goal, ds, subs, required = render(spec.get("prompt", {}), tid, subject)
         if subject and is_case(subject):
             source = input_line(tid, subject)
+        elif tree_spec(tid):
+            source = tree_line(ds, tree_spec(tid))
         else:
             source = "DATASET: {} {} (version {}), subject(s) {}. Fetch it yourself.\n\n".format(
                 ds.get("source", ""), ds.get("id", ""), ds.get("version_pin", ""), subs)

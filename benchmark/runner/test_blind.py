@@ -1,6 +1,7 @@
 """The blinded-run pieces, without the network: run ids, the prompt, the header
 blanking, the blind check. Case ids here are below case-100, which real cases never use."""
 import gzip
+import hashlib
 import json
 import os
 import struct
@@ -24,7 +25,11 @@ TASKS = {"categories": {"structural": {"tasks": {
     "diffusion-brain-mask": {"prompt": {
         "goal": "Mask the diffusion image of {subject}.",
         "dataset": {"source": "openneuro", "id": "ds001226", "version_pin": "5.0.1", "subjects": ["sub-CON99"]},
-        "required_output": "A mask at submissions/diffusion-brain-mask/{subject}/output.nii.gz."}}}}}}
+        "required_output": "A mask at submissions/diffusion-brain-mask/{subject}/output.nii.gz."}},
+    "data-handling-nipoppy-fmriprep": {"prompt": {
+        "goal": "Prepare a Nipoppy study of every participant-session of the dataset.",
+        "dataset": {"source": "openneuro", "id": "ds003653", "version_pin": "1.0.0"},
+        "required_output": "The study at submissions/data-handling-nipoppy-fmriprep/nipoppy_dataset/."}}}}}}
 
 
 def nifti1(descrip=b"", db_name=b"", ext=b""):
@@ -92,6 +97,19 @@ class Prompt(unittest.TestCase):
         rc, _, err = self.render("diffusion-brain-mask@case-013")
         self.assertEqual(rc, 1)
         self.assertIn("input_spec.json", err)
+
+    def test_a_staged_tree_gets_a_dataset_line_that_says_where_it_is(self):
+        rc, out, err = self.render("data-handling-nipoppy-fmriprep")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("DATASET: openneuro ds003653 (version 1.0.0), already in your working directory at "
+                      "`input/ds003653/`: its BIDS tree with every file in place, the images as empty files and "
+                      "every other file as published. Use it as it is; do not download the dataset.", out)
+        self.assertNotIn("Fetch it yourself", out)
+        self.assertNotIn("INPUT:", out)
+
+    def test_a_staged_tree_task_takes_no_case(self):
+        rc, _, _ = self.render("data-handling-nipoppy-fmriprep@case-012")
+        self.assertEqual(rc, 1)
 
 
 class HeaderBlanking(unittest.TestCase):
@@ -185,6 +203,113 @@ class InputKinds(unittest.TestCase):
                     self.assertNotIn(b"sub-9901", gzip.decompress(fh.read()))
             with open(rec) as fh:
                 self.assertEqual(len(json.load(fh)["files"]), 3)
+
+
+def git_url(data, name):
+    oid = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    return "https://openneuro.org/crn/datasets/ds000000/objects/%s?filename=%s" % (oid, name)
+
+
+class TreeStaging(unittest.TestCase):
+    """fetch_input --tree: an unblinded run's whole dataset, images empty, every other
+    file with its bytes, checked against the listing."""
+
+    DESC = b'{"Name": "x", "BIDSVersion": "1.8.0"}'
+    SIDE = b'{"RepetitionTime": 2.3}'
+    SCRIPT = b"#!/bin/sh\n"
+
+    def listing(self, side=None):
+        side = self.SIDE if side is None else side
+        return [("dataset_description.json", len(self.DESC), git_url(self.DESC, "dataset_description.json")),
+                ("sub-9901/ses-01/anat/sub-9901_ses-01_T1w.nii.gz", 5000, "https://s3.example/t1?versionId=1"),
+                ("sub-9901/ses-01/anat/sub-9901_ses-01_T1w.json", len(side), git_url(side, "x.json")),
+                ("code/fix.sh", len(self.SCRIPT), "https://s3.example/fix?versionId=2")]
+
+    def setUp(self):
+        self.real = (fetch_input.snapshot_listing, fetch_input.download)
+        self.fetched = []
+        self.served = {}
+
+        def download(url, what="the scan"):
+            self.fetched.append(url)
+            return self.served[url]
+        fetch_input.download = download
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self.tmp.name, "input", "ds000000")
+
+    def tearDown(self):
+        (fetch_input.snapshot_listing, fetch_input.download) = self.real
+        self.tmp.cleanup()
+
+    def serve(self, listing, side=None):
+        fetch_input.snapshot_listing = lambda ds, ver: listing
+        self.served = {listing[0][2]: self.DESC, listing[2][2]: self.SIDE if side is None else side,
+                       listing[3][2]: self.SCRIPT}
+
+    def test_images_are_empty_and_every_other_file_has_its_bytes(self):
+        lst = self.listing()
+        self.serve(lst)
+        rec = fetch_input.stage_tree("ds000000", "1.0.0", self.root, ["*.nii", "*.nii.gz"])
+        read = lambda rel: open(os.path.join(self.root, *rel.split("/")), "rb").read()  # noqa: E731
+        self.assertEqual(read("dataset_description.json"), self.DESC)
+        self.assertEqual(read("sub-9901/ses-01/anat/sub-9901_ses-01_T1w.json"), self.SIDE)
+        self.assertEqual(read("code/fix.sh"), self.SCRIPT)
+        self.assertEqual(read("sub-9901/ses-01/anat/sub-9901_ses-01_T1w.nii.gz"), b"")
+        self.assertNotIn("https://s3.example/t1?versionId=1", self.fetched)
+        self.assertEqual((rec["files"], rec["with_content"], rec["empty"]), (4, 3, 1))
+        self.assertEqual(rec["bytes"], len(self.DESC) + len(self.SIDE) + len(self.SCRIPT))
+        self.assertEqual(len(rec["listing_sha256"]), 64)
+
+    def test_a_file_that_is_not_its_git_object_is_refused(self):
+        lst = self.listing()
+        self.serve(lst, side=b'{"RepetitionTime": 9.9}')      # same length, other bytes
+        with self.assertRaises(SystemExit) as e:
+            fetch_input.stage_tree("ds000000", "1.0.0", self.root, ["*.nii.gz"])
+        self.assertIn("git object", str(e.exception))
+
+    def test_a_file_of_another_size_is_refused(self):
+        lst = self.listing()
+        lst[3] = (lst[3][0], lst[3][1] + 1, lst[3][2])
+        self.serve(lst)
+        with self.assertRaises(SystemExit) as e:
+            fetch_input.stage_tree("ds000000", "1.0.0", self.root, ["*.nii.gz"])
+        self.assertIn("bytes", str(e.exception))
+
+    def test_a_path_out_of_the_dataset_is_refused_before_any_download(self):
+        lst = self.listing() + [("../escape.json", 2, "https://s3.example/e?versionId=3")]
+        self.serve(lst)
+        with self.assertRaises(SystemExit):
+            fetch_input.stage_tree("ds000000", "1.0.0", self.root, ["*.nii.gz"])
+        self.assertEqual(self.fetched, [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "input", "escape.json")))
+
+    def test_a_tree_is_staged_once(self):
+        os.makedirs(self.root)
+        self.serve(self.listing())
+        with self.assertRaises(SystemExit):
+            fetch_input.stage_tree("ds000000", "1.0.0", self.root, ["*.nii.gz"])
+
+    def test_main_stages_the_tree_entry_and_keeps_the_two_modes_apart(self):
+        self.serve(self.listing())
+        sp = os.path.join(self.tmp.name, "spec.json")
+        with open(sp, "w") as fh:
+            json.dump({"t": {"tree": {"as": "ds000000", "empty": ["*.nii.gz"]}, "scan": "x"},
+                       "c": {"files": [{"match": "anat/{subject}_T1w.nii.gz", "as": "anat/T1w.nii.gz"}],
+                             "scan": "y"}}, fh)
+        rec = os.path.join(self.tmp.name, "record.json")
+        base = ["--dest", self.tmp.name, "--dataset", "ds000000", "--version", "1.0.0", "--spec", sp]
+        self.assertEqual(fetch_input.main(["--tree", "--task", "t", "--record", rec] + base), 0)
+        with open(rec) as fh:
+            r = json.load(fh)
+        self.assertEqual((r["task"], r["dataset"], r["tree"]["as"], r["tree"]["files"], r["tree"]["empty"]),
+                         ("t", "ds000000", "ds000000", 4, 1))
+        self.assertNotIn("files", r)            # a blinded run's file list is a different record
+        with self.assertRaises(SystemExit):     # a tree task is not a case
+            fetch_input.main(["--tree", "--task", "t", "--case", "case-012"] + base)
+        with self.assertRaises(SystemExit):     # a case task has no tree
+            fetch_input.main(["--tree", "--task", "c"] + base)
+        with self.assertRaises(SystemExit):     # a tree task run as a case
+            fetch_input.main(["--task", "t", "--case", "case-012", "--cases-repo", "o/r", "--cases-revision", "v"] + base)
 
 
 class CaseTable(unittest.TestCase):

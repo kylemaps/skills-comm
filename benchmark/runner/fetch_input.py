@@ -23,8 +23,18 @@ Prints one line per shipped file (the neutral name, its size and sha256) and, wi
 handed to the blind check only through --export-env FILE: one line `BLIND_SUBJECT=...`
 in a file only the owner can read, which the caller sources and deletes (see run.yml);
 it is never printed to stdout.
+
+    python3 fetch_input.py --tree --task TASK --dest DIR \\
+        --dataset DATASET_ID --version VERSION [--record FILE]
+
+Stages an unblinded run's dataset: the whole file tree of the pinned snapshot (one
+recursive listing), under DIR/input/<as>/ as the task's `tree` entry names it. A file
+whose name matches one of the entry's `empty` globs is written empty; every other file
+is downloaded and checked against the listing's size and, for a file kept in git (its
+url names a git object), against that object's hash.
 """
 import argparse
+import concurrent.futures
 import fnmatch
 import gzip
 import hashlib
@@ -32,6 +42,7 @@ import http.client
 import io
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -169,11 +180,80 @@ def dataset_file(dataset, version, subject, pattern):
     return hits[0]
 
 
-def download(url):
+def download(url, what="the scan"):
     def get():
         with urllib.request.urlopen(url, timeout=900) as r:
             return r.read()
-    return with_retries("the scan", get)
+    return with_retries(what, get)
+
+
+def snapshot_listing(dataset, version):
+    """[(path from the dataset's root, size, url)] for every file of the pinned snapshot,
+    in one request (the file tree's recursive form). Each url names one version of the
+    file: an S3 object version for an annexed file, a git object for one kept in git."""
+    files = _gql('{ snapshot(datasetId:"%s", tag:"%s") { files(recursive:true) { filename directory size urls } } }'
+                 % (dataset, version))
+    return [(f["filename"], f.get("size"), (f.get("urls") or [None])[0]) for f in files if not f.get("directory")]
+
+
+_GIT_OBJECT = re.compile(r"/objects/([0-9a-f]{40})(?:[?#]|$)")
+
+
+def git_object_ok(url, data):
+    """For a file kept in git, whether its bytes hash to the object its url names. None
+    when the url names no git object."""
+    m = _GIT_OBJECT.search(url)
+    if not m:
+        return None
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() == m.group(1)
+
+
+def tree_path(root, rel):
+    """root/rel, refused when rel would leave root."""
+    parts = rel.split("/")
+    if rel.startswith("/") or "\\" in rel or any(p in ("", ".", "..") for p in parts):
+        sys.exit("FAIL: the snapshot lists a path outside the dataset: %r" % rel)
+    return os.path.join(root, *parts)
+
+
+def stage_tree(dataset, version, root, empty, workers=8):
+    """Every file of the snapshot under root: a file whose name matches an `empty` glob
+    as an empty file, every other one with its bytes. Returns the counts for the record
+    and the sha256 of the listing (path and size per file)."""
+    if os.path.exists(root):
+        sys.exit("FAIL: %s already exists; a tree is staged once, into a new directory" % root)
+    files = sorted(snapshot_listing(dataset, version), key=lambda f: f[0])
+    if not files:
+        sys.exit("FAIL: the snapshot lists no files")
+    paths = {rel: tree_path(root, rel) for rel, _, _ in files}
+
+    def is_empty(rel):
+        return any(fnmatch.fnmatchcase(rel.rsplit("/", 1)[-1], g) for g in empty)
+
+    full = [(rel, size, url) for rel, size, url in files if not is_empty(rel)]
+    for rel, _, url in full:
+        if not url:
+            sys.exit("FAIL: %s has no download address in the snapshot" % rel)
+
+    def get(item):
+        rel, size, url = item
+        data = download(url, "a file of the dataset")
+        if size is not None and len(data) != size:
+            sys.exit("FAIL: %s: %d bytes, the snapshot lists %d" % (rel, len(data), size))
+        if git_object_ok(url, data) is False:
+            sys.exit("FAIL: %s does not hash to the git object the snapshot names" % rel)
+        return data
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        contents = dict(zip((f[0] for f in full), ex.map(get, full)))
+    for rel, _, _ in files:
+        os.makedirs(os.path.dirname(paths[rel]), exist_ok=True)
+        with open(paths[rel], "wb") as fh:
+            fh.write(contents.get(rel, b""))
+    listing = "".join("%s\t%s\n" % (rel, size) for rel, size, _ in files)
+    return {"files": len(files), "with_content": len(full), "empty": len(files) - len(full),
+            "bytes": sum(len(b) for b in contents.values()),
+            "listing_sha256": hashlib.sha256(listing.encode()).hexdigest()}
 
 
 def blank_header(raw):
@@ -215,10 +295,12 @@ def neutral_gzip(data):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--task", required=True)
-    ap.add_argument("--case", required=True)
+    ap.add_argument("--case", help="the blinded run's case id")
+    ap.add_argument("--tree", action="store_true",
+                    help="stage the task's whole dataset tree, for an unblinded run")
     ap.add_argument("--dest", required=True, help="the agent's working directory")
-    ap.add_argument("--cases-repo", required=True)
-    ap.add_argument("--cases-revision", required=True)
+    ap.add_argument("--cases-repo")
+    ap.add_argument("--cases-revision")
     ap.add_argument("--dataset", required=True, help="the task's dataset id, from tasks.json")
     ap.add_argument("--version", required=True, help="the task's version pin, from tasks.json")
     ap.add_argument("--spec", default=os.path.join(HERE, "input_spec.json"))
@@ -229,6 +311,27 @@ def main(argv=None):
     spec = json.load(open(a.spec, encoding="utf-8")).get(a.task)
     if not spec:
         sys.exit("FAIL: %s has no entry in %s" % (a.task, a.spec))
+    if a.tree:
+        if a.case or a.export_env:
+            sys.exit("FAIL: --tree stages an unblinded run's dataset; it takes no case")
+        tree = spec.get("tree")
+        if not tree:
+            sys.exit("FAIL: %s stages no dataset tree in %s" % (a.task, a.spec))
+        staged = {"as": tree["as"]}
+        staged.update(stage_tree(a.dataset, a.version, os.path.join(a.dest, "input", tree["as"]),
+                                 tree.get("empty", [])))
+        record = {"task": a.task, "dataset": a.dataset, "version": a.version, "tree": staged}
+        print("input: tree %s  %d files, %d with contents (%d bytes), %d empty  listing sha256 %s"
+              % (staged["as"], staged["files"], staged["with_content"], staged["bytes"], staged["empty"],
+                 staged["listing_sha256"][:12]))
+        if a.record:
+            with open(a.record, "w", encoding="utf-8") as fh:
+                json.dump(record, fh, indent=1)
+        return 0
+    if not (a.case and a.cases_repo and a.cases_revision):
+        sys.exit("FAIL: a blinded run needs --case, --cases-repo and --cases-revision")
+    if "files" not in spec:
+        sys.exit("FAIL: %s stages its whole dataset tree; it runs unblinded (--tree)" % a.task)
     c = resolve(a.cases_repo, a.cases_revision, a.case)
     if c["task"] != a.task:
         sys.exit("FAIL: %s is a case of another task" % a.case)

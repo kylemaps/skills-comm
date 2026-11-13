@@ -2953,6 +2953,28 @@ env BENCH_HOME="$T" HARNESS_DIR="$T/harness" bash "$HERE/collect_results.sh" t-s
 expect 1 $? "a grader without --subject stops a subject run id before grading"
 has   "  and says so" "$(cat "$T/o")" "takes no --subject"
 [ ! -f "$T/runs/t-s@sub-01__neurodesk-m__env-only__r1/envelope.json" ] && ok "  nothing graded" || bad "  graded anyway"
+# collect_results: a task that submits a directory (a dataset) at its manifest's path.
+mkdir -p "$T/harness-d"
+cp "$T/harness/fetch_reference.py" "$T/harness-d/"
+cat > "$T/harness-d/grade_wrapper.py" <<'EOF'
+import json, sys
+a = sys.argv[1:]
+open(sys.argv[0] + ".log", "a").write(" ".join(a) + "\n")
+json.dump({"task_id": a[a.index("--task") + 1], "verdict": "complete", "score": 100.0, "valid": True},
+          open(a[a.index("--out") + 1], "w"))
+EOF
+cat > "$T/harness-d/run_manifest.json" <<'EOF'
+{"defaults": {"submission_output_path": "submissions/{task_id}/output.nii.gz",
+              "submission_path": "submissions/{task_id}/{subject}/output.nii.gz"},
+ "tasks": {"t-d": {"submission_output_path": "submissions/{task_id}/study"}}}
+EOF
+rm -rf "$T/runs"
+sr t-d 1 submissions/t-d/study; mv "$d/submissions/t-d/study/output.nii.gz" "$d/submissions/t-d/study/global_config.json"
+sr t-d 2 submissions/t-d
+env BENCH_HOME="$T" HARNESS_DIR="$T/harness-d" bash "$HERE/collect_results.sh" t-d > "$T/o" 2>&1
+expect 0 $? "collect_results grades a task whose submission is a directory"
+[ -f "$T/runs/t-d__neurodesk-m__env-only__r1/envelope.json" ] && ok "  the submission at the manifest's path is graded" || bad "  not graded: $(cat "$T/o")"
+has   "  an image at the default path is no output for that task" "$(cat "$T/o")" "no output  t-d__neurodesk-m__env-only__r2"
 # wave_check: a subject key and its entry must agree.
 cat > "$T/sweep.json" <<'EOF'
 {"arms":{"env-only":{"skills_hash":null}},

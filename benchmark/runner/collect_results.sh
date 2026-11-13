@@ -40,9 +40,22 @@ if [ -n "$SUBJECT" ]; then
     *) SUBJ=(--subject "$SUBJECT") ;;
   esac
 fi
-OUT_REL="submissions/$TASK_BASE${SUBJECT:+/$SUBJECT}/output.nii.gz"
-
 cd "$HARNESS" || { echo "no harness at $HARNESS"; exit 1; }
+# The submission's contracted path, read as grade_wrapper.py reads it: the task's own in
+# run_manifest.json, else the default for a task graded per subject or for one with a
+# single reference. A file for most tasks, a directory for a task that submits a
+# dataset. Without a manifest, the image at the default place.
+OUT_REL=$(python - "$TASK_BASE" "$SUBJECT" <<'PY' 2>/dev/null
+import json, sys
+task, subject = sys.argv[1], sys.argv[2]
+m = json.load(open("run_manifest.json", encoding="utf-8"))
+d = m.get("defaults", {})
+tpl = m.get("tasks", {}).get(task, {}).get("submission_output_path") \
+    or d["submission_path" if subject else "submission_output_path"]
+print(tpl.format(task_id=task, subject=subject))
+PY
+) || OUT_REL=""
+[ -n "$OUT_REL" ] || OUT_REL="submissions/$TASK_BASE${SUBJECT:+/$SUBJECT}/output.nii.gz"
 # The grading plane's one external dependency, and its output and exit code were
 # both being discarded. A failed fetch then graded every run against a missing or
 # stale reference, which floors a whole task at zero and reads as a bad model --
@@ -111,7 +124,7 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
     ln -s "$REAL" "$d/submissions/$TASK_BASE/$CASE"
   fi
 
-  if [ ! -f "$d/$OUT_REL" ]; then
+  if [ ! -e "$d/$OUT_REL" ]; then
     # No output is a failed run, not a missing one. summarize.py scores it 0.
     NOOUT=$((NOOUT + 1))
     printf '[%3d/%3d] no output  %s\n' "$I" "$TOTAL" "$(basename "$d")"
