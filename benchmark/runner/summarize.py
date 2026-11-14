@@ -493,6 +493,7 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
         "skills_available": rec.get("skills_available"),
         "skill_files_read": rec.get("skill_files_read") or [],
         "skills_installed": rec.get("skills_installed", ""),
+        "env_skills": rec.get("env_skills") or "",
         "tools_loaded": rec.get("tools_loaded") or [],
         "dataset_pin": rec.get("dataset_pin") or [],
         "start": rec.get("start", ""),
@@ -636,8 +637,15 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     # --- validity (see module docstring) ---
     installed = r["skills_installed"] or ""
     seen = set(r["skills_seen"])
-    has_skill_installed = any(s in installed for s in SKILL_NAMES)
-    has_skill_seen = any(s in seen for s in SKILL_NAMES)
+    # The skills under test: for a skill arm, what was installed besides the
+    # environment's own (env_skills); otherwise, or when nothing else was installed, the
+    # brain-extraction pair.
+    env_sk = set(r["env_skills"].split())
+    arm_names = ([s for s in installed.split() if s not in env_sk]
+                 if r["arm"].startswith("env+skill") else [])
+    names = arm_names or list(SKILL_NAMES)
+    has_skill_installed = any(s in installed for s in names)
+    has_skill_seen = any(s in seen for s in names)
 
     # What opencode reported offering the agent: skills_offered, from `opencode debug
     # skill` before the run; otherwise skills_available, from a failed skill call's
@@ -646,12 +654,12 @@ def load_run(run_dir, task, tokens_available=False, rules=None):
     avail = r["skills_offered"]
     if avail is None:
         avail = r["skills_available"]
-    any_offered = avail is not None and any(s in avail for s in SKILL_NAMES)
-    all_offered = avail is not None and all(s in avail for s in SKILL_NAMES)
+    any_offered = avail is not None and any(s in avail for s in names)
+    all_offered = avail is not None and all(s in avail for s in names)
     # Only reads of the benchmark's own skills count; other skills and datasets have
     # SKILL.md and references/ files too.
     own_reads = [p for p in r["skill_files_read"]
-                 if any("/%s/" % s in p for s in SKILL_NAMES)]
+                 if any("/%s/" % s in p for s in names)]
 
     # Uptake: the agent loaded the skill, or opened its files directly.
     r["uptake"] = has_skill_seen or (r["arm"].startswith("env+skill") and bool(own_reads))

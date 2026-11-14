@@ -544,6 +544,14 @@ echo '{"task_id":"t","workdir":"sess-k3"}' > "$d/run.json"; printf '$ echo "sudo
 "$PY" "$HERE/finalize_run.py" "$d" 0
 o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['off_spec'])" "$d/run.json" | tr -d '\r')
 [ "$o" = "[]" ] && ok "  database commands get the same prose/quote rules" || bad "  quoted word flagged from db: $o"
+d="$T/od"; mkdir -p "$d/submissions/t/study"; echo '{}' > "$d/submissions/t/study/global_config.json"
+echo '{"task_id":"t","start":"2026-11-14T00:00:00Z"}' > "$d/run.json"; printf '$ ls\n' > "$d/transcript.txt"
+"$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['output_present'])" "$d/run.json" | tr -d '\r')
+[ "$o" = False ] && ok "a submitted directory is not the default image path" || bad "  without OUTPUT_REL: $o"
+OUTPUT_REL=submissions/t/study "$PY" "$HERE/finalize_run.py" "$d" 0
+o=$("$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); print(r['output_present'], r['output_voxels'], r['seconds_to_output'] is not None)" "$d/run.json" | tr -d '\r')
+[ "$o" = "True None True" ] && ok "  but counts once the grading step names it (OUTPUT_REL), with no voxel count and a time" || bad "  with OUTPUT_REL: $o"
 
 echo
 echo "=== finalize_run off_spec: external-download and tool_routes"
@@ -679,6 +687,8 @@ sk env+skill 1 '"skills_installed":"brain-extraction brain-extraction-qc ","skil
 sk env+skill 2 '"skills_installed":"brain-extraction brain-extraction-qc ","skills_offered":["brain-extraction","brain-extraction-qc"]'
 sk env+skill 3 '"skills_installed":"brain-extraction brain-extraction-qc "'
 sk env+skill 4 '"skills_installed":"brain-extraction brain-extraction-qc ","skills_offered":["brain-extraction-qc"]'
+sk env+skill 5 '"skills_installed":"astra registration registration-qc ","env_skills":"astra","skills_offered":["astra","registration","registration-qc"]'
+sk env+skill 6 '"skills_installed":"astra ","env_skills":"astra","skills_offered":["astra"]'
 sk env-only 1 '"skills_installed":"","skill_files_read":["/w/skills/brain-extraction/SKILL.md"]'
 sk env-only 4 '"skills_installed":"","skill_files_read":["/w/.agents/skills/hf-cli/SKILL.md"]'
 sk env-only 2 '"skills_installed":"","skills_available":["brain-extraction"]'
@@ -692,6 +702,8 @@ has "skill installed but not offered by opencode: excluded" "$(why env+skill 1)"
 [ "$(why env+skill 2)" = VALID ] && ok "skill offered, not used: kept (intent to treat)" || bad "offered skill excluded: $(why env+skill 2)"
 [ "$(why env+skill 3)" = VALID ] && ok "no offered list recorded (runs before the field): kept" || bad "unrecorded list excluded: $(why env+skill 3)"
 has "only part of the skill offered: excluded" "$(why env+skill 4)" "not offered"
+[ "$(why env+skill 5)" = VALID ] && ok "another capability's skills, installed and offered: kept" || bad "registration arm excluded: $(why env+skill 5)"
+has "a skill arm with only the environment's skill: excluded" "$(why env+skill 6)" "skill absent"
 [ "$(why env-only 4)" = VALID ] && ok "a control run that read some other skill's file: kept" || bad "other skill counted: $(why env-only 4)"
 has "control arm that read skill files: excluded" "$(why env-only 1)" "read skill files"
 has "control arm where opencode offered the skill: excluded" "$(why env-only 2)" "misassigned"
@@ -704,6 +716,9 @@ echo "=== run_bench: what the agent can see while it runs"
 # prints FAKE_CONFIG; `run` records the working directory and environment into the
 # transcript, the way the real agent would see them.
 T=$(mktemp -d)
+mkdir -p "$T/src/brain-extraction" "$T/src/brain-extraction-qc"
+printf -- '---\nname: brain-extraction\n---\n' > "$T/src/brain-extraction/SKILL.md"
+printf -- '---\nname: brain-extraction-qc\n---\n' > "$T/src/brain-extraction-qc/SKILL.md"
 cat > "$T/opencode" <<'EOF'
 #!/bin/bash
 [ "$1" = --version ] && { echo 1.18.32; exit 0; }
@@ -749,8 +764,15 @@ rb env+skill SKILLS_SRC="$T/src" FAKE_OFFER="brain-extraction,brain-extraction-q
 expect 0 $? "the skill arm goes ahead when opencode offers exactly its skills"
 [ -z "$(ls "$T/bench/.meta" 2>/dev/null)" ] && ok "  opencode's debug output (it holds the key) is deleted" \
                                            || bad "  left in .meta: $(ls "$T/bench/.meta")"
-[ -z "$(ls -A "$T/skills" 2>/dev/null)" ] && ok "  and the skills directory is empty again" \
-                                          || bad "  skill links left behind: $(ls -A "$T/skills")"
+# Only where ln makes real links: Git Bash on Windows copies the directory instead.
+ln -s "$T/src" "$T/.lprobe" 2>/dev/null
+if [ -L "$T/.lprobe" ]; then
+  [ -z "$(ls -A "$T/skills" 2>/dev/null)" ] && ok "  and the skills directory is empty again" \
+                                            || bad "  skill links left behind: $(ls -A "$T/skills")"
+else
+  echo "  skip  skills directory cleanup (no symlinks on this system)"
+fi
+rm -rf "$T/.lprobe"
 rb env-only FAKE_OFFER="stray"
 expect 3 $? "a control run offered any skill stops"
 rb env-only FAKE_CONFIG='{"instructions":["/opt/AGENTS.md"]}'
@@ -1869,7 +1891,8 @@ rm -rf "$T"
 echo
 echo "=== machine_facts: the agent is told its machine, measured, the same in every arm"
 T=$(mktemp -d)
-mkdir -p "$T/cg" "$T/cg-nomem"
+mkdir -p "$T/cg" "$T/cg-nomem" "$T/src/brain-extraction"
+printf -- '---\nname: brain-extraction\n---\n' > "$T/src/brain-extraction/SKILL.md"
 echo "700000 100000" > "$T/cg/cpu.max"; echo $((28 * 1073741824)) > "$T/cg/memory.max"
 echo "max 100000" > "$T/cg-nomem/cpu.max"
 mf() { "$PY" "$HERE/machine_facts.py" "$HERE/machine.txt" --timeout 5400 --work "$T" "$@" 2>/dev/null | tr -d '\r'; }
@@ -1918,7 +1941,7 @@ R1="$T/bench/runs/t-x__neurodesk-m__env-only__r1"
 has "  the prompt ends with them" "$(tail -1 "$R1/prompt.txt" 2>/dev/null)" "MACHINE: you have 7 CPUs and 28 GiB of memory"
 has "  the agent does not get the template's path" "$(cat "$R1/transcript.txt" 2>/dev/null)" "LEAK=unset"
 h1=$(ph "$R1/run.json")
-ARM_=env+skill; rbf2 BENCH_CGROUP="$T/cg"
+ARM_=env+skill; rbf2 BENCH_CGROUP="$T/cg" SKILLS_SRC="$T/src"
 h2=$(ph "$T/bench/runs/t-x__neurodesk-m__env+skill__r1/run.json")
 [ -n "$h1" ] && [ "$h1" = "$h2" ] && ok "  and the prompt is byte-identical across arms (prompt_hash $h1)" || bad "  prompt_hash $h1 vs $h2"
 rm -rf "$T/bench"; ARM_=env-only; rbf2 BENCH_CGROUP="$T/cg-empty"; rc=$?
@@ -2322,6 +2345,19 @@ else
   echo "  skip  link cleanup (no symlinks on this system)"
 fi
 rm -rf "$T/.lprobe"
+mkdir -p "$T/regsrc/registration/references" "$T/regsrc/registration-qc" "$T/regsrc/notes"
+printf -- '---\nname: registration\n---\n' > "$T/regsrc/registration/SKILL.md"
+printf -- '---\nname: registration-qc\n---\n' > "$T/regsrc/registration-qc/SKILL.md"
+rbe env+skill SKILLS_SRC="$T/regsrc"; rc=$?
+R="$T/bench/runs/t-x__neurodesk-m__env+skill__r1"
+expect 0 $rc "a skill arm of another capability goes ahead under its own skills' names"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1]))
+assert r['skills_offered']==['astra','registration','registration-qc'], r['skills_offered']" "$R/run.json" 2>/dev/null \
+  && ok "  opencode offered astra, registration and registration-qc" || bad "  record: $(head -c 400 "$R/run.json" 2>/dev/null)"
+rbe env+skill SKILLS_SRC="$T/regsrc/notes"
+expect 1 $? "a skill arm whose source holds no skill stops before the agent"
+rbe env+skill SKILLS_SRC=
+expect 1 $? "a skill arm without a skill source stops before the agent"
 rbe env-only FAKE_DROP=astra
 expect 3 $? "a run where opencode does not offer the environment's skill stops before the agent"
 rbe env+skill SKILLS_SRC="$T/src" FAKE_INSTR=/opt/AGENTS.md

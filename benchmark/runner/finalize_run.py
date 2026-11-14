@@ -752,14 +752,25 @@ _speed = _generation_speed(run_dir)
 rec["tokens_output_per_s"], rec["generation_s"] = _speed if _speed else (None, None)
 
 # The run id's own output (run_ids.py): submissions/<task>/output.nii.gz, one level
-# deeper for a subject run. An output anywhere else is not this run's.
+# deeper for a subject run, unless the grading step names the task's contracted path
+# (OUTPUT_REL, read from the grader's manifest by collect_results.sh: a directory for a
+# task that submits a dataset). An output anywhere else is not this run's.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_ids import output_rel  # noqa: E402
 try:
-    out = os.path.join(run_dir, *output_rel(rec.get("task_id", "")).split("/"))
+    _rel = os.environ.get("OUTPUT_REL") or output_rel(rec.get("task_id", ""))
+    out = os.path.join(run_dir, *_rel.split("/"))
 except ValueError:          # half a run id names no path
     out = None
 rec["output_present"] = bool(out) and os.path.exists(out)
+
+
+def _written_at(path):
+    """When an output was last written: a file's mtime, or the newest file in a directory."""
+    if not os.path.isdir(path):
+        return os.path.getmtime(path)
+    times = [os.path.getmtime(os.path.join(dp, f)) for dp, _, fs in os.walk(path) for f in fs]
+    return max(times) if times else os.path.getmtime(path)
 
 # Time to a usable result, which is not the same as run duration. A run that
 # produced its mask in 5 minutes and then spent 40 more trying to repair a batch
@@ -771,12 +782,12 @@ if rec["output_present"] and rec.get("start"):
     try:
         t0 = datetime.strptime(rec["start"], "%Y-%m-%dT%H:%M:%SZ")
         t0 = t0.replace(tzinfo=timezone.utc).timestamp()
-        rec["seconds_to_output"] = max(0, int(os.path.getmtime(out) - t0))
+        rec["seconds_to_output"] = max(0, int(_written_at(out) - t0))
     except Exception:
         pass
 # A brain mask holds hundreds of thousands of voxels at the least; an output written
 # only to fill the path can hold one.
-rec["output_voxels"] = _nifti_voxels(out) if rec["output_present"] else None
+rec["output_voxels"] = _nifti_voxels(out) if rec["output_present"] and os.path.isfile(out) else None
 
 # A blinded run: what the harness handed over (fetch_input.py's record: the neutral
 # names, sizes and digests, no subject), and whether the agent ever named the subject

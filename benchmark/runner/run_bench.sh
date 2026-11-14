@@ -70,6 +70,20 @@ if [ -n "$ENV_SKILLSRC" ]; then
   ENV_SKILL_NAMES="${ENV_SKILL_NAMES# }"
   [ -n "$ENV_SKILL_NAMES" ] || { echo "FATAL: ENV_SKILLS_SRC $ENV_SKILLSRC holds no skill" >&2; exit 1; }
 fi
+# The arm's skills, for an env+skill* arm: each subdirectory of SKILLS_SRC holding a
+# SKILL.md, read from the source as the environment's are, so every capability installs
+# and is checked under its own names.
+ARM_SKILL_NAMES=""
+case "$COND" in
+  env+skill*)
+    [ -n "$SKILLSRC" ] && [ -d "$SKILLSRC" ] || { echo "FATAL: $COND needs a skill source (SKILLS_SRC)" >&2; exit 1; }
+    for d in "$SKILLSRC"/*/; do
+      [ -f "$d/SKILL.md" ] && ARM_SKILL_NAMES="$ARM_SKILL_NAMES $(basename "$d")"
+    done
+    ARM_SKILL_NAMES="${ARM_SKILL_NAMES# }"
+    [ -n "$ARM_SKILL_NAMES" ] || { echo "FATAL: SKILLS_SRC $SKILLSRC holds no skill" >&2; exit 1; }
+    ;;
+esac
 if [ -n "$ENV_INSTR" ]; then
   # Only into the agent's own config: never edit the runner's.
   [ -n "${AGENT_HOME:-}" ] || { echo "FATAL: ENV_INSTRUCTIONS needs AGENT_HOME" >&2; exit 1; }
@@ -159,14 +173,11 @@ RUN="$BENCH_HOME/runs/$NAME"
 # two skills against one shared baseline is impossible to express.
 # Avoid ':' as the separator -- tar and rsync read `foo:bar` as a remote path.
 rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
-for s in $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done
-case "$COND" in
-  env+skill*)
-    mkdir -p "$SKILLDST"
-    ln -sfn "$SKILLSRC/brain-extraction"    "$SKILLDST/brain-extraction"
-    ln -sfn "$SKILLSRC/brain-extraction-qc" "$SKILLDST/brain-extraction-qc"
-    ;;
-esac
+for s in $ARM_SKILL_NAMES $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done
+for s in $ARM_SKILL_NAMES; do
+  mkdir -p "$SKILLDST"
+  ln -sfn "$SKILLSRC/$s" "$SKILLDST/$s"
+done
 for s in $ENV_SKILL_NAMES; do
   mkdir -p "$SKILLDST"
   ln -sfn "$ENV_SKILLSRC/$s" "$SKILLDST/$s"
@@ -245,7 +256,7 @@ trap 'stop_agent
       land
       rm -f "$META/$ID.skills.json" "$META/$ID.config.json" "$META/$ID.bash_env.sh" "$META/$ID.memwatch.json"
       rm -f "$SKILLDST/brain-extraction" "$SKILLDST/brain-extraction-qc"
-      for s in $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done' EXIT
+      for s in $ARM_SKILL_NAMES $ENV_SKILL_NAMES; do rm -f "$SKILLDST/$s"; done' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -473,11 +484,8 @@ fi
 # skill paths or references in its config. Recorded as skills_offered. With
 # AGENT_VIEW_CHECK=1 the run stops here, before any tokens are spent, unless the
 # skills offered are exactly the arm's and none of those config keys are set.
-case "$COND" in
-  env+skill*) EXPECT="brain-extraction,brain-extraction-qc" ;;
-  *)          EXPECT="" ;;
-esac
-for s in $ENV_SKILL_NAMES; do EXPECT="${EXPECT:+$EXPECT,}$s"; done
+EXPECT=""
+for s in $ARM_SKILL_NAMES $ENV_SKILL_NAMES; do EXPECT="${EXPECT:+$EXPECT,}$s"; done
 EXPECT_INSTR=""; [ -n "$ENV_INSTR" ] && EXPECT_INSTR="$INSTR_COPY"
 (cd "$WORK" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug skill)  > "$META/$ID.skills.json" 2>/dev/null
 (cd "$WORK" && "${AGENT_ENV[@]}" "$OPENCODE_BIN" debug config) > "$META/$ID.config.json" 2>/dev/null

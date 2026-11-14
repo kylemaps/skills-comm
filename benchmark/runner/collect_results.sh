@@ -117,7 +117,7 @@ for d in "$BENCH_HOME"/runs/"$TASK"__*/; do
   # idempotent, and it means old runs appear in the report with full detail. For a
   # blinded run the subject is passed in the environment, so the record can say
   # whether the agent ever named it (subject_named), without the record naming it.
-  BLIND_SUBJECT="$REAL" python "$HERE/finalize_run.py" "$d" >/dev/null 2>&1
+  BLIND_SUBJECT="$REAL" OUTPUT_REL="$OUT_REL" python "$HERE/finalize_run.py" "$d" >/dev/null 2>&1
   # The agent wrote under the case id; grade_wrapper.py reads under the subject.
   if [ -n "$CASE" ] && [ -d "$d/submissions/$TASK_BASE/$CASE" ] && [ ! -e "$d/submissions/$TASK_BASE/$REAL" ]; then
     mv "$d/submissions/$TASK_BASE/$CASE" "$d/submissions/$TASK_BASE/$REAL"
